@@ -1,0 +1,6 @@
+-- No-op safety migration.
+--
+-- This migration was generated before the final shift expense schema existed and
+-- referenced expense_categories before that table was created. Keeping it empty
+-- lets Prisma replay the migration history cleanly on a shadow database; the
+-- actual shift expense schema changes are applied in 20260626090000_shift_expenses.

@@ -1,0 +1,590 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String        @id @default(cuid())
+  name         String
+  username     String        @unique
+  passwordHash String        @map("password_hash")
+  role         Role
+  status       Status        @default(ACTIVE)
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+  sessions     CashSession[]
+  auditLogs    AuditLog[]
+  couponUsages CouponUsage[]
+  expenses     Expense[]
+  printerLogs  PrinterLog[]
+  sales        Sale[]
+  outlets      UserOutlet[]
+
+  @@map("users")
+}
+
+model Outlet {
+  id             String                @id @default(cuid())
+  code           String                @unique
+  name           String
+  address        String?
+  phone          String?
+  status         Status                @default(ACTIVE)
+  createdAt      DateTime              @default(now()) @map("created_at")
+  updatedAt      DateTime              @updatedAt @map("updated_at")
+  sessions       CashSession[]
+  couponOutlets  CouponOutlet[]
+  couponUsages   CouponUsage[]
+  expenses        Expense[]
+  products       ProductOutlet[]
+  printers       Printer[]
+  printerLogs    PrinterLog[]
+  sales          Sale[]
+  saleItems      SaleItem[]
+  users          UserOutlet[]
+  variantOptions VariantOptionOutlet[]
+
+  @@map("outlets")
+}
+
+model UserOutlet {
+  id       String @id @default(cuid())
+  userId   String @map("user_id")
+  outletId String @map("outlet_id")
+  outlet   Outlet @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, outletId])
+  @@map("user_outlets")
+}
+
+model Product {
+  id             String                @id @default(cuid())
+  name           String
+  category       String
+  categoryId     String?               @map("category_id")
+  basePrice      Decimal               @default(0) @map("base_price") @db.Decimal(14, 2)
+  baseHpp        Decimal               @default(0) @map("base_hpp") @db.Decimal(14, 2)
+  description    String?
+  imageUrl       String?               @map("image_url")
+  status         Status                @default(ACTIVE)
+  createdAt      DateTime              @default(now()) @map("created_at")
+  updatedAt      DateTime              @updatedAt @map("updated_at")
+  categoryRef    Category?             @relation(fields: [categoryId], references: [id])
+  couponProducts CouponProduct[]
+  addons         ProductAddon[]
+  outlets        ProductOutlet[]
+  variantGroups  ProductVariantGroup[]
+  variants       ProductVariant[]
+  saleItems      SaleItem[]
+
+  @@map("products")
+}
+
+model Category {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  sortOrder   Int       @default(0) @map("sort_order")
+  status      Status    @default(ACTIVE)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  products    Product[]
+
+  @@map("categories")
+}
+
+model VariantGroup {
+  id          String                @id @default(cuid())
+  name        String
+  description String?
+  minSelect   Int                   @default(0) @map("min_select")
+  maxSelect   Int                   @default(1) @map("max_select")
+  required    Boolean               @default(false)
+  status      Status                @default(ACTIVE)
+  createdAt   DateTime              @default(now()) @map("created_at")
+  updatedAt   DateTime              @updatedAt @map("updated_at")
+  options     VariantOption[]
+  products    ProductVariantGroup[]
+
+  @@map("variant_groups")
+}
+
+model VariantOption {
+  id              String                @id @default(cuid())
+  variantGroupId  String                @map("variant_group_id")
+  name            String
+  additionalPrice Decimal               @default(0) @map("additional_price") @db.Decimal(14, 2)
+  hpp             Decimal               @default(0) @db.Decimal(14, 2)
+  sortOrder       Int                   @default(0) @map("sort_order")
+  status          Status                @default(ACTIVE)
+  createdAt       DateTime              @default(now()) @map("created_at")
+  updatedAt       DateTime              @updatedAt @map("updated_at")
+  group           VariantGroup          @relation(fields: [variantGroupId], references: [id], onDelete: Cascade)
+  outlets         VariantOptionOutlet[]
+
+  @@map("variant_options")
+}
+
+model VariantOptionOutlet {
+  id              String        @id @default(cuid())
+  variantOptionId String        @map("variant_option_id")
+  outletId        String        @map("outlet_id")
+  additionalPrice Decimal?      @map("additional_price") @db.Decimal(14, 2)
+  hpp             Decimal?      @db.Decimal(14, 2)
+  status          Status        @default(ACTIVE)
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  option          VariantOption @relation(fields: [variantOptionId], references: [id], onDelete: Cascade)
+  outlet          Outlet        @relation(fields: [outletId], references: [id], onDelete: Cascade)
+
+  @@unique([variantOptionId, outletId])
+  @@map("variant_option_outlets")
+}
+
+model ProductVariantGroup {
+  id             String       @id @default(cuid())
+  productId      String       @map("product_id")
+  variantGroupId String       @map("variant_group_id")
+  sortOrder      Int          @default(0) @map("sort_order")
+  product        Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  group          VariantGroup @relation(fields: [variantGroupId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, variantGroupId])
+  @@map("product_variant_groups")
+}
+
+model ProductVariant {
+  id           String       @id @default(cuid())
+  productId    String       @map("product_id")
+  variantName  String       @map("variant_name")
+  sellingPrice Decimal      @map("selling_price") @db.Decimal(14, 2)
+  hpp          Decimal      @db.Decimal(14, 2)
+  status       Status       @default(ACTIVE)
+  bundleItems  BundleItem[]
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  saleItems    SaleItem[]
+
+  @@map("product_variants")
+}
+
+model ProductAddon {
+  id             String          @id @default(cuid())
+  productId      String          @map("product_id")
+  addonName      String          @map("addon_name")
+  price          Decimal         @db.Decimal(14, 2)
+  hpp            Decimal         @db.Decimal(14, 2)
+  status         Status          @default(ACTIVE)
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  saleItemAddons SaleItemAddon[]
+
+  @@map("product_addons")
+}
+
+model ProductOutlet {
+  id          String   @id @default(cuid())
+  productId   String   @map("product_id")
+  outletId    String   @map("outlet_id")
+  isActive    Boolean  @default(true) @map("is_active")
+  isAvailable Boolean  @default(true) @map("is_available")
+  outletPrice Decimal? @map("outlet_price") @db.Decimal(14, 2)
+  outletHpp   Decimal? @map("outlet_hpp") @db.Decimal(14, 2)
+  status      Status   @default(ACTIVE)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  outlet      Outlet   @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, outletId])
+  @@map("product_outlets")
+}
+
+model Bundle {
+  id           String       @id @default(cuid())
+  bundleName   String       @map("bundle_name")
+  sellingPrice Decimal      @map("selling_price") @db.Decimal(14, 2)
+  hpp          Decimal      @db.Decimal(14, 2)
+  status       Status       @default(ACTIVE)
+  items        BundleItem[]
+
+  @@map("bundles")
+}
+
+model BundleItem {
+  id               String         @id @default(cuid())
+  bundleId         String         @map("bundle_id")
+  productVariantId String         @map("product_variant_id")
+  qty              Int
+  bundle           Bundle         @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  variant          ProductVariant @relation(fields: [productVariantId], references: [id])
+
+  @@map("bundle_items")
+}
+
+model CashSession {
+  id                String        @id @default(cuid())
+  outletId          String        @map("outlet_id")
+  cashierId         String        @map("cashier_id")
+  openingCash       Decimal       @map("opening_cash") @db.Decimal(14, 2)
+  closingCashActual Decimal?      @map("closing_cash_actual") @db.Decimal(14, 2)
+  expectedCash      Decimal?      @map("expected_cash") @db.Decimal(14, 2)
+  variance          Decimal?      @db.Decimal(14, 2)
+  openedAt          DateTime      @default(now()) @map("opened_at")
+  closedAt          DateTime?     @map("closed_at")
+  status            SessionStatus @default(OPEN)
+  cashier           User          @relation(fields: [cashierId], references: [id])
+  outlet            Outlet        @relation(fields: [outletId], references: [id])
+  expenses          Expense[]
+  sales             Sale[]
+
+  @@map("cash_sessions")
+}
+
+model Sale {
+  id                        String        @id @default(cuid())
+  orderNumber               String?       @unique @map("order_number")
+  transactionNumber         String?       @unique @map("transaction_number")
+  outletId                  String        @map("outlet_id")
+  cashierId                 String        @map("cashier_id")
+  cashSessionId             String?       @map("cash_session_id")
+  customerName              String        @default("Walk In") @map("customer_name")
+  subtotal                  Decimal       @db.Decimal(14, 2)
+  discountAmount            Decimal       @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  totalAmount               Decimal       @map("total_amount") @db.Decimal(14, 2)
+  subtotalBeforeDiscount    Decimal       @map("subtotal_before_discount") @db.Decimal(14, 2)
+  productDiscountTotal      Decimal       @default(0) @map("product_discount_total") @db.Decimal(14, 2)
+  transactionDiscountAmount Decimal       @default(0) @map("transaction_discount_amount") @db.Decimal(14, 2)
+  couponCode                String?       @map("coupon_code")
+  couponDiscountAmount      Decimal       @default(0) @map("coupon_discount_amount") @db.Decimal(14, 2)
+  grandTotal                Decimal       @map("grand_total") @db.Decimal(14, 2)
+  totalHpp                  Decimal       @map("total_hpp") @db.Decimal(14, 2)
+  grossProfit               Decimal       @map("gross_profit") @db.Decimal(14, 2)
+  paymentMethod             PaymentMethod? @map("payment_method")
+  cashReceived              Decimal?      @map("cash_received") @db.Decimal(14, 2)
+  changeAmount              Decimal?      @map("change_amount") @db.Decimal(14, 2)
+  status                    SaleStatus    @default(PAID)
+  voidReason                String?       @map("void_reason")
+  savedAt                   DateTime      @default(now()) @map("saved_at")
+  paidAt                    DateTime?     @map("paid_at")
+  cancelledAt               DateTime?     @map("cancelled_at")
+  voidedAt                  DateTime?     @map("voided_at")
+  cancelReason              String?       @map("cancel_reason")
+  createdAt                 DateTime      @default(now()) @map("created_at")
+  couponUsage               CouponUsage?
+  items                     SaleItem[]
+  printerLogs               PrinterLog[]
+  cashSession               CashSession?  @relation(fields: [cashSessionId], references: [id])
+  cashier                   User          @relation(fields: [cashierId], references: [id])
+  outlet                    Outlet        @relation(fields: [outletId], references: [id])
+
+  @@index([outletId, createdAt])
+  @@map("sales")
+}
+
+model Printer {
+  id                String         @id @default(cuid())
+  outletId          String         @map("outlet_id")
+  printerName       String         @map("printer_name")
+  printerType       PrinterType    @default(THERMAL) @map("printer_type")
+  connectionType    ConnectionType @map("connection_type")
+  paperSize         PaperSize      @default(MM58) @map("paper_size")
+  ipAddress         String?        @map("ip_address")
+  port              Int?
+  bluetoothAddress  String?        @map("bluetooth_address")
+  usbVendorId       String?        @map("usb_vendor_id")
+  usbProductId      String?        @map("usb_product_id")
+  isCustomerReceipt Boolean        @default(false) @map("is_customer_receipt")
+  isKitchenPrinter  Boolean        @default(false) @map("is_kitchen_printer")
+  status            Status         @default(ACTIVE)
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+  outlet            Outlet         @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  logs              PrinterLog[]
+
+  @@map("printers")
+}
+
+model PrinterLog {
+  id           String      @id @default(cuid())
+  outletId     String      @map("outlet_id")
+  saleId       String      @map("sale_id")
+  printerId    String?     @map("printer_id")
+  printType    PrintType   @map("print_type")
+  status       PrintStatus
+  errorMessage String?     @map("error_message")
+  printedBy    String      @map("printed_by")
+  printedAt    DateTime    @default(now()) @map("printed_at")
+  outlet       Outlet      @relation(fields: [outletId], references: [id])
+  printer      Printer?    @relation(fields: [printerId], references: [id])
+  sale         Sale        @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  user         User        @relation(fields: [printedBy], references: [id])
+
+  @@index([saleId, printType])
+  @@map("printer_logs")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  action     String
+  oldValue   Json?    @map("old_value")
+  newValue   Json?    @map("new_value")
+  changedBy  String   @map("changed_by")
+  changedAt  DateTime @default(now()) @map("changed_at")
+  user       User     @relation(fields: [changedBy], references: [id])
+
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+model IdempotencyKey {
+  id         String   @id @default(cuid())
+  key        String   @unique
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  payloadHash String?  @map("payload_hash")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([entityType, entityId])
+  @@map("idempotency_keys")
+}
+
+model SaleItem {
+  id                    String          @id @default(cuid())
+  saleId                String          @map("sale_id")
+  outletId              String          @map("outlet_id")
+  productId             String          @map("product_id")
+  productVariantId      String?         @map("product_variant_id")
+  productName           String          @map("product_name")
+  variantName           String          @map("variant_name")
+  itemNote              String?         @map("item_note") @db.VarChar(255)
+  qty                   Int
+  sellingPrice          Decimal         @map("selling_price") @db.Decimal(14, 2)
+  hpp                   Decimal         @db.Decimal(14, 2)
+  subtotal              Decimal         @db.Decimal(14, 2)
+  totalHpp              Decimal         @map("total_hpp") @db.Decimal(14, 2)
+  grossProfit           Decimal         @map("gross_profit") @db.Decimal(14, 2)
+  priceBeforeDiscount   Decimal         @map("price_before_discount") @db.Decimal(14, 2)
+  discountType          DiscountType?
+  discountValue         Decimal?        @map("discount_value") @db.Decimal(14, 2)
+  discountAmount        Decimal         @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  subtotalAfterDiscount Decimal         @map("subtotal_after_discount") @db.Decimal(14, 2)
+  selectedVariantsJson  Json?           @map("selected_variants_json")
+  basePrice             Decimal         @default(0) @map("base_price") @db.Decimal(14, 2)
+  outletPrice           Decimal?        @map("outlet_price") @db.Decimal(14, 2)
+  variantPriceTotal     Decimal         @default(0) @map("variant_price_total") @db.Decimal(14, 2)
+  finalUnitPrice        Decimal         @default(0) @map("final_unit_price") @db.Decimal(14, 2)
+  baseHpp               Decimal         @default(0) @map("base_hpp") @db.Decimal(14, 2)
+  outletHpp             Decimal?        @map("outlet_hpp") @db.Decimal(14, 2)
+  variantHppTotal       Decimal         @default(0) @map("variant_hpp_total") @db.Decimal(14, 2)
+  finalUnitHpp          Decimal         @default(0) @map("final_unit_hpp") @db.Decimal(14, 2)
+  addons                SaleItemAddon[]
+  outlet                Outlet          @relation(fields: [outletId], references: [id])
+  product               Product         @relation(fields: [productId], references: [id])
+  variant               ProductVariant? @relation(fields: [productVariantId], references: [id])
+  sale                  Sale            @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@map("sale_items")
+}
+
+model SaleItemAddon {
+  id         String       @id @default(cuid())
+  saleItemId String       @map("sale_item_id")
+  addonId    String       @map("addon_id")
+  addonName  String       @map("addon_name")
+  price      Decimal      @db.Decimal(14, 2)
+  hpp        Decimal      @db.Decimal(14, 2)
+  addon      ProductAddon @relation(fields: [addonId], references: [id])
+  saleItem   SaleItem     @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
+
+  @@map("sale_item_addons")
+}
+
+model Expense {
+  id              String           @id @default(cuid())
+  outletId        String           @map("outlet_id")
+  cashSessionId   String           @map("cash_session_id")
+  cashierId       String           @map("cashier_id")
+  categoryId      String?          @map("category_id")
+  categoryName    String           @map("category_name")
+  description     String
+  amount          Decimal          @db.Decimal(14, 2)
+  paymentSource   PaymentSource    @default(CASH_DRAWER) @map("payment_source")
+  note            String?
+  receiptImageUrl String?          @map("receipt_image_url")
+  status          ExpenseStatus    @default(ACTIVE)
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  cashSession     CashSession      @relation(fields: [cashSessionId], references: [id])
+  categoryRef     ExpenseCategory? @relation(fields: [categoryId], references: [id])
+  cashier         User             @relation(fields: [cashierId], references: [id])
+  outlet          Outlet           @relation(fields: [outletId], references: [id])
+
+  @@map("expenses")
+}
+
+model ExpenseCategory {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  status      Status    @default(ACTIVE)
+  sortOrder   Int       @default(0) @map("sort_order")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  expenses    Expense[]
+
+  @@map("expense_categories")
+}
+
+model Coupon {
+  id                       String           @id @default(cuid())
+  couponCode               String           @unique @map("coupon_code")
+  couponName               String           @map("coupon_name")
+  discountType             DiscountType     @map("discount_type")
+  discountValue            Decimal          @map("discount_value") @db.Decimal(14, 2)
+  maxDiscountAmount        Decimal?         @map("max_discount_amount") @db.Decimal(14, 2)
+  minimumTransactionAmount Decimal          @default(0) @map("minimum_transaction_amount") @db.Decimal(14, 2)
+  startDate                DateTime         @map("start_date")
+  endDate                  DateTime         @map("end_date")
+  usageLimit               Int?             @map("usage_limit")
+  usagePerCustomer         Int?             @map("usage_per_customer")
+  usedCount                Int              @default(0) @map("used_count")
+  status                   Status           @default(ACTIVE)
+  createdAt                DateTime         @default(now()) @map("created_at")
+  updatedAt                DateTime         @updatedAt @map("updated_at")
+  categories               CouponCategory[]
+  outlets                  CouponOutlet[]
+  products                 CouponProduct[]
+  usages                   CouponUsage[]
+
+  @@map("coupons")
+}
+
+model CouponOutlet {
+  id       String @id @default(cuid())
+  couponId String @map("coupon_id")
+  outletId String @map("outlet_id")
+  coupon   Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  outlet   Outlet @relation(fields: [outletId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, outletId])
+  @@map("coupon_outlets")
+}
+
+model CouponProduct {
+  id        String  @id @default(cuid())
+  couponId  String  @map("coupon_id")
+  productId String  @map("product_id")
+  coupon    Coupon  @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, productId])
+  @@map("coupon_products")
+}
+
+model CouponCategory {
+  id       String @id @default(cuid())
+  couponId String @map("coupon_id")
+  category String
+  coupon   Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, category])
+  @@map("coupon_categories")
+}
+
+model CouponUsage {
+  id        String   @id @default(cuid())
+  couponId  String   @map("coupon_id")
+  saleId    String   @unique @map("sale_id")
+  outletId  String   @map("outlet_id")
+  cashierId String   @map("cashier_id")
+  usedAt    DateTime @default(now()) @map("used_at")
+  cashier   User     @relation(fields: [cashierId], references: [id])
+  coupon    Coupon   @relation(fields: [couponId], references: [id])
+  outlet    Outlet   @relation(fields: [outletId], references: [id])
+  sale      Sale     @relation(fields: [saleId], references: [id])
+
+  @@map("coupon_usages")
+}
+
+enum Role {
+  OWNER
+  SUPERVISOR
+  CASHIER
+}
+
+enum Status {
+  ACTIVE
+  INACTIVE
+}
+
+enum DiscountType {
+  NOMINAL
+  PERCENTAGE
+}
+
+enum PaymentMethod {
+  CASH
+  QRIS
+  GOFOOD
+  GRABFOOD
+  SHOPEEFOOD
+  VOUCHER
+}
+
+enum SaleStatus {
+  DRAFT
+  PENDING_PAYMENT
+  PAID
+  CANCELLED
+  COMPLETED
+  VOID
+}
+
+enum SessionStatus {
+  OPEN
+  CLOSED
+}
+
+enum PrinterType {
+  THERMAL
+}
+
+enum ConnectionType {
+  BLUETOOTH
+  USB
+  NETWORK
+  BROWSER
+}
+
+enum PaperSize {
+  MM58
+  MM80
+}
+
+enum PrintType {
+  CUSTOMER_ITEM_LIST
+  CUSTOMER_RECEIPT
+  KITCHEN_TICKET
+}
+
+enum PrintStatus {
+  SUCCESS
+  FAILED
+}
+
+enum PaymentSource {
+  CASH_DRAWER
+  NON_CASH
+  OWNER_TRANSFER
+}
+
+enum ExpenseStatus {
+  ACTIVE
+  CANCELLED
+}
