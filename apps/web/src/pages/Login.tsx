@@ -1,8 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { ArrowRight, LockKeyhole } from 'lucide-react';
 import { api, type User } from '../api';
-import { downloadMasterData, recordLocalAudit } from '../sync';
-import { getCachedText, initLocalDb, setLocalText } from '../localDb';
 
 export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
   const [busy, setBusy] = useState(false);
@@ -13,7 +11,6 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
     setBusy(true);
     setError('');
     const fd = new FormData(e.currentTarget);
-    const username = String(fd.get('username') || '');
 
     try {
       const r = await api<{ token: string; user: User }>('/auth/login', {
@@ -22,21 +19,11 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
       });
       localStorage.setItem('token', r.token);
       localStorage.setItem('user', JSON.stringify(r.user));
-      await setLocalText('foru:last_login_username', username);
-      await downloadMasterData('LOGIN');
-      recordLocalAudit('LOGIN', 'USER', r.user.id, { username, mode: 'ONLINE' });
+      if (r.user.outletIds.length === 1) localStorage.setItem('outletId', r.user.outletIds[0]);
+      if (r.user.outletIds.length > 1 && !r.user.outletIds.includes(localStorage.getItem('outletId') || '')) localStorage.removeItem('outletId');
       onLogin(r.user);
     } catch (e) {
-      await initLocalDb();
-      const cachedUser = JSON.parse(localStorage.getItem('user') || 'null');
-      const cachedUsername = getCachedText('foru:last_login_username');
-      const hasMaster = !!getCachedText('foru:master_data');
-      if (!navigator.onLine && cachedUser && cachedUsername === username && hasMaster) {
-        recordLocalAudit('LOGIN', 'USER', cachedUser.id, { username, mode: 'OFFLINE' });
-        onLogin(cachedUser);
-        return;
-      }
-      setError(!navigator.onLine ? 'Offline: login offline hanya bisa jika user pernah login online dan master data sudah tersimpan.' : (e as Error).message);
+      setError((e as Error).message);
     } finally {
       setBusy(false);
     }

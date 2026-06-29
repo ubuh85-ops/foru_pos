@@ -19,7 +19,7 @@ export async function priceCart(items:CartLine[],outletId:string):Promise<Priced
     const itemNote=line.itemNote?.trim();
     if(itemNote&&itemNote.length>255) throw new ApiError(400,'Catatan item maksimal 255 karakter');
     const product=await prisma.product.findFirst({
-      where:{id:line.productId,status:'ACTIVE',outlets:{some:{outletId,isAvailable:true,status:'ACTIVE'}}},
+      where:{id:line.productId,status:'ACTIVE',OR:[{outlets:{some:{outletId,isAvailable:true,status:'ACTIVE'}}},{outlets:{none:{outletId}}}]},
       include:{
         categoryRef:true,
         addons:true,
@@ -33,12 +33,12 @@ export async function priceCart(items:CartLine[],outletId:string):Promise<Priced
     });
     if(!product) throw new ApiError(400,'Produk tidak tersedia di outlet ini');
     const productOutlet=product.outlets[0];
-    if(!productOutlet?.isAvailable||productOutlet.status!=='ACTIVE') throw new ApiError(400,'Produk tidak aktif di outlet ini');
+    if(productOutlet&&(!productOutlet.isAvailable||productOutlet.status!=='ACTIVE')) throw new ApiError(400,'Produk tidak aktif di outlet ini');
     const selectedAddons=product.addons.filter(a=>line.addonIds?.includes(a.id)&&a.status==='ACTIVE');
     if((line.addonIds?.length||0)!==selectedAddons.length) throw new ApiError(400,'Add-on tidak valid');
     const optionIds=[...new Set(line.selectedVariantOptionIds||[])];
     const selectedVariants:PricedLine['selectedVariants']=[];
-    let basePrice=Number(product.basePrice), baseHpp=Number(product.baseHpp), outletPrice=productOutlet.outletPrice===null?undefined:Number(productOutlet.outletPrice), outletHpp=productOutlet.outletHpp===null?undefined:Number(productOutlet.outletHpp), variantName='Base', variantId=line.variantId;
+    let basePrice=Number(product.basePrice), baseHpp=Number(product.baseHpp), outletPrice=productOutlet?.outletPrice===null||!productOutlet?undefined:Number(productOutlet.outletPrice), outletHpp=productOutlet?.outletHpp===null||!productOutlet?undefined:Number(productOutlet.outletHpp), variantName='Base', variantId=line.variantId;
     if(product.variantGroups.length){
       const seen=new Set<string>();
       for(const attached of product.variantGroups){

@@ -12,8 +12,10 @@ model User {
   name         String
   username     String        @unique
   passwordHash String        @map("password_hash")
+  pinHash      String?       @map("pin_hash")
   role         Role
   status       Status        @default(ACTIVE)
+  lastLogin    DateTime?     @map("last_login")
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @updatedAt @map("updated_at")
   sessions     CashSession[]
@@ -52,11 +54,14 @@ model Outlet {
 }
 
 model UserOutlet {
-  id       String @id @default(cuid())
-  userId   String @map("user_id")
-  outletId String @map("outlet_id")
-  outlet   Outlet @relation(fields: [outletId], references: [id], onDelete: Cascade)
-  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  outletId  String   @map("outlet_id")
+  status    Status   @default(ACTIVE)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  outlet    Outlet   @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, outletId])
   @@map("user_outlets")

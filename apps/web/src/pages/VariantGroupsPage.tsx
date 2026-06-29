@@ -1,15 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Edit, Plus, Trash2 } from 'lucide-react';
 import { api, rupiah } from '../api';
-import { subscribeMasterDataChanged } from '../masterEvents';
-import {
-  createVariantOption,
-  deleteVariantOption,
-  getVariantGroupsFromLocal,
-  setVariantOptionStatus,
-  updateVariantOption,
-  VariantOptionStatus,
-} from '../variantOptionsRepo';
+import { emitMasterDataChanged, subscribeMasterDataChanged } from '../masterEvents';
 
 const Page = ({ children }: { children: any }) => <div className="p-4 lg:p-8">{children}</div>;
 const Err = ({ v }: { v: string }) => v ? <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{v}</div> : null;
@@ -26,9 +18,7 @@ export default function VariantGroupsPage() {
   const [error, setError] = useState('');
 
   function load() {
-    const local = getVariantGroupsFromLocal();
-    if (local.length) setData(local);
-    else api<any[]>('/variant-groups').then(setData).catch((e) => setError(e.message));
+    api<any[]>('/variant-groups').then(setData).catch((e) => setError(e.message));
   }
 
   useEffect(() => {
@@ -53,6 +43,7 @@ export default function VariantGroupsPage() {
       });
       setEditGroup(null);
       load();
+      emitMasterDataChanged('variant_group_updated');
       alert('Variant group berhasil disimpan.');
     } catch (e) {
       setError((e as Error).message);
@@ -69,12 +60,13 @@ export default function VariantGroupsPage() {
         additionalPrice: Number(f.get('additionalPrice') || 0),
         hpp: Number(f.get('hpp') || 0),
         sortOrder: Number(f.get('sortOrder') || 0),
-        status: String(f.get('status') || 'ACTIVE') as VariantOptionStatus,
+        status: String(f.get('status') || 'ACTIVE') as 'ACTIVE' | 'INACTIVE',
       };
-      if (optionForm.option) await updateVariantOption(optionForm.groupId, optionForm.option.id, payload);
-      else await createVariantOption(optionForm.groupId, payload);
+      if (optionForm.option) await api(`/variant-options/${optionForm.option.id}`, { method: 'PUT', body: JSON.stringify(payload) });
+      else await api(`/variant-groups/${optionForm.groupId}/options`, { method: 'POST', body: JSON.stringify(payload) });
       setOptionForm(null);
       load();
+      emitMasterDataChanged(optionForm.option ? 'variant_option_updated' : 'variant_option_created', { groupId: optionForm.groupId, optionId: optionForm.option?.id });
       alert(optionForm.option ? 'Opsi varian berhasil diubah.' : 'Opsi varian berhasil ditambahkan.');
     } catch (e) {
       setError((e as Error).message);
@@ -84,8 +76,9 @@ export default function VariantGroupsPage() {
   async function removeOption(groupId: string, option: any) {
     try {
       if (!confirm(`Hapus/nonaktifkan opsi "${option.name}"?`)) return;
-      await deleteVariantOption(groupId, option.id);
+      await api(`/variant-options/${option.id}`, { method: 'DELETE' });
       load();
+      emitMasterDataChanged('variant_option_deleted', { groupId, optionId: option.id });
       alert('Opsi varian berhasil dihapus/nonaktif.');
     } catch (e) {
       setError((e as Error).message);
@@ -94,8 +87,9 @@ export default function VariantGroupsPage() {
 
   async function toggleStatus(groupId: string, option: any) {
     try {
-      await setVariantOptionStatus(groupId, option, option.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE');
+      await api(`/variant-options/${option.id}`, { method: 'PUT', body: JSON.stringify({ status: option.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE' }) });
       load();
+      emitMasterDataChanged('variant_option_updated', { groupId, optionId: option.id });
       alert(`Opsi varian berhasil dibuat ${option.status === 'ACTIVE' ? 'inactive' : 'active'}.`);
     } catch (e) {
       setError((e as Error).message);
@@ -127,7 +121,6 @@ export default function VariantGroupsPage() {
                 <b className="block truncate">{option.name}</b>
                 <p className="text-xs text-slate-400">
                   +{rupiah(option.additionalPrice)} · HPP {rupiah(option.hpp)} · Sort {option.sortOrder || 0} · {option.status}
-                  {option.syncStatus === 'PENDING' ? ' · Pending sync' : ''}
                 </p>
               </button>
               <div className="flex shrink-0 flex-wrap justify-end gap-2">

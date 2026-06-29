@@ -51,12 +51,117 @@ api.post('/auth/login',asyncRoute(async(req,res)=>{
   const {username,password}=z.object({username:z.string(),password:z.string()}).parse(req.body);
   const user=await prisma.user.findUnique({where:{username},include:{outlets:true}});
   if(!user||user.status!=='ACTIVE'||!await bcrypt.compare(password,user.passwordHash)) throw new ApiError(401,'Username atau password salah');
-  const payload={id:user.id,role:user.role,outletIds:user.outlets.map(x=>x.outletId)};
+  const outletIds=user.role==='OWNER'
+    ? (await prisma.outlet.findMany({where:{status:'ACTIVE'},select:{id:true}})).map(x=>x.id)
+    : user.outlets.filter(x=>x.status==='ACTIVE').map(x=>x.outletId);
+  const payload={id:user.id,role:user.role,outletIds};
+  await prisma.user.update({where:{id:user.id},data:{lastLogin:new Date()}});
   res.json({token:jwt.sign(payload,process.env.JWT_SECRET||'dev-secret',{expiresIn:'12h'}),user:{id:user.id,name:user.name,role:user.role,outletIds:payload.outletIds}});
 }));
-api.get('/auth/me',auth,asyncRoute(async(req,res)=>res.json(await prisma.user.findUnique({where:{id:req.user!.id},select:{id:true,name:true,username:true,role:true,outlets:{select:{outlet:true}}}}))));
+api.get('/auth/me',auth,asyncRoute(async(req,res)=>res.json(await prisma.user.findUnique({where:{id:req.user!.id},select:{id:true,name:true,username:true,role:true,status:true,lastLogin:true,outlets:{where:{status:'ACTIVE'},select:{outlet:true}}}}))));
 
 api.use(auth);
+const userSelect={id:true,name:true,username:true,role:true,status:true,lastLogin:true,createdAt:true,updatedAt:true,outlets:{where:{status:'ACTIVE' as const},include:{outlet:true},orderBy:{outlet:{name:'asc' as const}}}};
+const userBase=z.object({
+  name:z.string().min(2),
+  username:z.string().min(3),
+  password:z.string().min(8).optional(),
+  confirmPassword:z.string().optional(),
+  pin:z.string().regex(/^\d+$/,'PIN hanya boleh angka').optional().or(z.literal('')),
+  role:z.enum(['OWNER','SUPERVISOR','CASHIER']),
+  status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE'),
+  outletIds:z.array(z.string()).default([])
+});
+const userBody=userBase.refine(d=>!d.password||d.password===d.confirmPassword,{message:'Password dan confirm password harus sama'})
+  .refine(d=>d.role==='OWNER'||d.outletIds.length>0,{message:'Supervisor dan kasir minimal harus punya 1 outlet'});
+const createUserBody=userBody.refine(d=>!!d.password,{message:'Password wajib diisi'});
+const updateUserBody=userBase.partial().refine(d=>!d.password||d.password===d.confirmPassword,{message:'Password dan confirm password harus sama'});
+async function assertNotLastOwner(userId:string,next?:{role?:string,status?:string}){
+  const user=await prisma.user.findUnique({where:{id:userId}});
+  if(!user)throw new ApiError(404,'User tidak ditemukan');
+  const willRemainOwner=(next?.role??user.role)==='OWNER'&&(next?.status??user.status)==='ACTIVE';
+  if(willRemainOwner)return user;
+  if(user.role==='OWNER'&&user.status==='ACTIVE'){
+    const owners=await prisma.user.count({where:{role:'OWNER',status:'ACTIVE',id:{not:userId}}});
+    if(owners<1)throw new ApiError(400,'Tidak boleh menonaktifkan atau menghapus OWNER terakhir.');
+  }
+  return user;
+}
+async function syncUserOutlets(tx:any,userId:string,role:string,outletIds:string[]){
+  if(role==='OWNER'){await tx.userOutlet.deleteMany({where:{userId}});return;}
+  await tx.userOutlet.deleteMany({where:{userId,outletId:{notIn:outletIds}}});
+  for(const outletId of outletIds)await tx.userOutlet.upsert({where:{userId_outletId:{userId,outletId}},update:{status:'ACTIVE'},create:{userId,outletId,status:'ACTIVE'}});
+}
+api.get('/users',allow('OWNER'),asyncRoute(async(req,res)=>{
+  const where:any={};
+  if(req.query.role)where.role=String(req.query.role);
+  if(req.query.status)where.status=String(req.query.status);
+  if(req.query.q){const q=String(req.query.q);where.OR=[{name:{contains:q,mode:'insensitive'}},{username:{contains:q,mode:'insensitive'}}];}
+  if(req.query.outlet_id)where.outlets={some:{outletId:String(req.query.outlet_id),status:'ACTIVE'}};
+  res.json(await prisma.user.findMany({where,select:userSelect,orderBy:{createdAt:'desc'}}));
+}));
+api.post('/users',allow('OWNER'),asyncRoute(async(req,res)=>{
+  const d=createUserBody.parse(req.body);
+  if(await prisma.user.findUnique({where:{username:d.username}}))throw new ApiError(409,'Username sudah digunakan');
+  const passwordHash=await bcrypt.hash(d.password!,10);
+  const pinHash=d.pin?await bcrypt.hash(d.pin,10):undefined;
+  const created=await prisma.$transaction(async tx=>{
+    const user=await tx.user.create({data:{name:d.name,username:d.username,passwordHash,pinHash,role:d.role,status:d.status}});
+    await syncUserOutlets(tx,user.id,d.role,d.outletIds);
+    await tx.auditLog.create({data:{entityType:'USER',entityId:user.id,action:'USER_CREATED',oldValue:Prisma.JsonNull,newValue:{name:d.name,username:d.username,role:d.role,status:d.status,outletIds:d.outletIds},changedBy:req.user!.id}});
+    return tx.user.findUnique({where:{id:user.id},select:userSelect});
+  });
+  res.status(201).json(created);
+}));
+api.get('/users/:id',allow('OWNER'),asyncRoute(async(req,res)=>{
+  const user=await prisma.user.findUnique({where:{id:String(req.params.id)},select:userSelect});
+  if(!user)throw new ApiError(404,'User tidak ditemukan');
+  res.json(user);
+}));
+api.put('/users/:id',allow('OWNER'),asyncRoute(async(req,res)=>{
+  const id=String(req.params.id);
+  const d=updateUserBody.parse(req.body);
+  const existing=await assertNotLastOwner(id,{role:d.role,status:d.status});
+  if(d.username&&d.username!==existing.username&&await prisma.user.findUnique({where:{username:d.username}}))throw new ApiError(409,'Username sudah digunakan');
+  if((d.role==='SUPERVISOR'||d.role==='CASHIER')&&(!d.outletIds||d.outletIds.length<1))throw new ApiError(400,'Supervisor dan kasir minimal harus punya 1 outlet');
+  const data:any={name:d.name,username:d.username,role:d.role,status:d.status};
+  if(d.password)data.passwordHash=await bcrypt.hash(d.password,10);
+  if(d.pin)data.pinHash=await bcrypt.hash(d.pin,10);
+  const updated=await prisma.$transaction(async tx=>{
+    const user=await tx.user.update({where:{id},data});
+    if(d.outletIds||d.role)await syncUserOutlets(tx,id,d.role||user.role,d.outletIds||[]);
+    await tx.auditLog.create({data:{entityType:'USER',entityId:id,action:'USER_UPDATED',oldValue:{name:existing.name,username:existing.username,role:existing.role,status:existing.status},newValue:{...data,outletIds:d.outletIds},changedBy:req.user!.id}});
+    return tx.user.findUnique({where:{id},select:userSelect});
+  });
+  res.json(updated);
+}));
+api.delete('/users/:id',allow('OWNER'),asyncRoute(async(req,res)=>{
+  const id=String(req.params.id);
+  const existing=await assertNotLastOwner(id,{status:'INACTIVE'});
+  const updated=await prisma.$transaction(async tx=>{
+    const user=await tx.user.update({where:{id},data:{status:'INACTIVE'},select:userSelect});
+    await tx.auditLog.create({data:{entityType:'USER',entityId:id,action:'USER_SOFT_DELETED',oldValue:{status:existing.status},newValue:{status:'INACTIVE'},changedBy:req.user!.id}});
+    return user;
+  });
+  res.json(updated);
+}));
+api.post('/users/:id/reset-password',allow('OWNER'),asyncRoute(async(req,res)=>{
+  const id=String(req.params.id);
+  const d=z.object({password:z.string().min(8),confirmPassword:z.string()}).refine(x=>x.password===x.confirmPassword,{message:'Password dan confirm password harus sama'}).parse(req.body);
+  await prisma.user.update({where:{id},data:{passwordHash:await bcrypt.hash(d.password,10)}});
+  await prisma.auditLog.create({data:{entityType:'USER',entityId:id,action:'USER_PASSWORD_RESET',oldValue:Prisma.JsonNull,newValue:{reset:true},changedBy:req.user!.id}});
+  res.json({ok:true});
+}));
+api.get('/users/:id/outlets',allow('OWNER'),asyncRoute(async(req,res)=>res.json(await prisma.userOutlet.findMany({where:{userId:String(req.params.id)},include:{outlet:true},orderBy:{outlet:{name:'asc'}}}))));
+api.put('/users/:id/outlets',allow('OWNER'),asyncRoute(async(req,res)=>{
+  const id=String(req.params.id);
+  const user=await prisma.user.findUnique({where:{id}});
+  if(!user)throw new ApiError(404,'User tidak ditemukan');
+  const outletIds=z.object({outletIds:z.array(z.string())}).parse(req.body).outletIds;
+  if(user.role!=='OWNER'&&outletIds.length<1)throw new ApiError(400,'Supervisor dan kasir minimal harus punya 1 outlet');
+  const rows=await prisma.$transaction(async tx=>{await syncUserOutlets(tx,id,user.role,outletIds);await tx.auditLog.create({data:{entityType:'USER',entityId:id,action:'USER_OUTLETS_UPDATED',oldValue:Prisma.JsonNull,newValue:{outletIds},changedBy:req.user!.id}});return tx.userOutlet.findMany({where:{userId:id},include:{outlet:true},orderBy:{outlet:{name:'asc'}}});});
+  res.json(rows);
+}));
 api.get('/outlets',asyncRoute(async(req,res)=>res.json(await prisma.outlet.findMany({where:req.user!.role==='OWNER'?{}:{id:{in:req.user!.outletIds}},orderBy:{name:'asc'}}))));
 api.post('/outlets',allow('OWNER'),asyncRoute(async(req,res)=>res.status(201).json(await prisma.outlet.create({data:z.object({code:z.string().min(2),name:z.string().min(2),address:z.string().optional(),phone:z.string().optional()}).parse(req.body)}))));
 api.put('/outlets/:id',allow('OWNER'),asyncRoute(async(req,res)=>res.json(await prisma.outlet.update({where:{id:String(req.params.id)},data:z.object({code:z.string().min(2).optional(),name:z.string().min(2).optional(),address:z.string().nullable().optional(),phone:z.string().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).optional()}).parse(req.body)}))));
@@ -89,9 +194,44 @@ const productInput=z.object({name:z.string().min(2),categoryId:z.string().option
 const productInclude={categoryRef:true,variants:true,addons:true,outlets:{include:{outlet:true},orderBy:{outlet:{name:'asc' as const}}},variantGroups:{orderBy:{sortOrder:'asc' as const},include:{group:{include:{options:{orderBy:{sortOrder:'asc' as const},include:{outlets:{include:{outlet:true}}}}}}}}};
 async function categoryName(categoryId?:string,category?:string){if(categoryId){const c=await prisma.category.findUnique({where:{id:categoryId}});if(!c)throw new ApiError(400,'Kategori tidak ditemukan');return c.name;} if(category)return category; throw new ApiError(400,'Kategori wajib diisi');}
 api.get('/products',asyncRoute(async(_q,res)=>res.json(await prisma.product.findMany({include:productInclude,orderBy:{name:'asc'}}))));
-api.get('/pos/products',asyncRoute(async(req,res)=>{ const outletId=String(req.query.outlet_id||''); assertOutlet(req,outletId); const products=await prisma.product.findMany({where:{status:'ACTIVE',outlets:{some:{outletId,isAvailable:true,status:'ACTIVE'}}},include:{categoryRef:true,outlets:{where:{outletId}},variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId}}}}}}}}},orderBy:{name:'asc'}});res.json(products.map(p=>{const po=p.outlets[0];if(!po)throw new ApiError(500,'Konfigurasi outlet produk tidak ditemukan');return {...p,basePrice:po.outletPrice??p.basePrice,baseHpp:po.outletHpp??p.baseHpp,masterBasePrice:p.basePrice,masterBaseHpp:p.baseHpp,variantGroups:p.variantGroups.map(vg=>({...vg,group:{...vg.group,options:vg.group.options.filter(o=>!o.outlets[0]||o.outlets[0].status==='ACTIVE').map(o=>({...o,additionalPrice:o.outlets[0]?.additionalPrice??o.additionalPrice,hpp:o.outlets[0]?.hpp??o.hpp,masterAdditionalPrice:o.additionalPrice,masterHpp:o.hpp}))}}))};})); }));
-api.post('/products',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const d=productInput.parse(req.body);const category=await categoryName(d.categoryId,d.category);const basePrice=d.basePrice??d.variants?.[0]?.sellingPrice??0,baseHpp=d.baseHpp??d.variants?.[0]?.hpp??0;const outletRows=(d.outletPricing??d.outletIds.map(outletId=>({outletId,isAvailable:true,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}))).map(x=>({...x,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null}));res.status(201).json(await prisma.product.create({data:{name:d.name,category,categoryId:d.categoryId,description:d.description,imageUrl:d.imageUrl||null,basePrice,baseHpp,status:d.status,variants:{create:d.variants?.length?d.variants:[{variantName:'Base',sellingPrice:basePrice,hpp:baseHpp}]},variantGroups:{create:d.variantGroupIds.map((variantGroupId,i)=>({variantGroupId,sortOrder:i}))},outlets:{create:outletRows.map(x=>({outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))}},include:productInclude}));}));
-api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const d=productInput.partial().parse(req.body);const id=String(req.params.id);const category=d.categoryId||d.category?await categoryName(d.categoryId,d.category):undefined;res.json(await prisma.$transaction(async tx=>{if(d.variantGroupIds){await tx.productVariantGroup.deleteMany({where:{productId:id}});await tx.productVariantGroup.createMany({data:d.variantGroupIds.map((variantGroupId,i)=>({productId:id,variantGroupId,sortOrder:i})),skipDuplicates:true});}if(d.outletPricing){for(const x of d.outletPricing)await tx.productOutlet.upsert({where:{productId_outletId:{productId:id,outletId:x.outletId}},update:{isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null},create:{productId:id,outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null}});}else if(d.outletIds){await tx.productOutlet.deleteMany({where:{productId:id}});await tx.productOutlet.createMany({data:d.outletIds.map(outletId=>({productId:id,outletId,isAvailable:true,isActive:true,status:'ACTIVE'})),skipDuplicates:true});}return tx.product.update({where:{id},data:{name:d.name,category,categoryId:d.categoryId,description:d.description,imageUrl:d.imageUrl||undefined,basePrice:d.basePrice,baseHpp:d.baseHpp,status:d.status},include:productInclude});}));}));
+api.get('/pos/products',asyncRoute(async(req,res)=>{ const outletId=String(req.query.outlet_id||''); assertOutlet(req,outletId); const products=await prisma.product.findMany({where:{status:'ACTIVE',OR:[{outlets:{some:{outletId,isAvailable:true,status:'ACTIVE'}}},{outlets:{none:{outletId}}}]},include:{categoryRef:true,outlets:{where:{outletId}},variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId}}}}}}}}},orderBy:{name:'asc'}});res.json(products.map(p=>{const po=p.outlets[0];return {...p,basePrice:po?.outletPrice??p.basePrice,baseHpp:po?.outletHpp??p.baseHpp,masterBasePrice:p.basePrice,masterBaseHpp:p.baseHpp,variantGroups:p.variantGroups.map(vg=>({...vg,group:{...vg.group,options:vg.group.options.filter(o=>!o.outlets[0]||o.outlets[0].status==='ACTIVE').map(o=>({...o,additionalPrice:o.outlets[0]?.additionalPrice??o.additionalPrice,hpp:o.outlets[0]?.hpp??o.hpp,masterAdditionalPrice:o.additionalPrice,masterHpp:o.hpp}))}}))};})); }));
+api.post('/products',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
+  const d=productInput.parse(req.body);
+  const category=await categoryName(d.categoryId,d.category);
+  const basePrice=d.basePrice??d.variants?.[0]?.sellingPrice??0,baseHpp=d.baseHpp??d.variants?.[0]?.hpp??0;
+  let outletRows=(d.outletPricing??d.outletIds.map(outletId=>({outletId,isAvailable:true,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}))).map(x=>({...x,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null}));
+  if(!outletRows.length){
+    const outlets=await prisma.outlet.findMany({where:{status:'ACTIVE'},select:{id:true}});
+    outletRows=outlets.map(o=>({outletId:o.id,isAvailable:true,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}));
+  }
+  res.status(201).json(await prisma.product.create({data:{name:d.name,category,categoryId:d.categoryId,description:d.description,imageUrl:d.imageUrl||null,basePrice,baseHpp,status:d.status,variants:{create:d.variants?.length?d.variants:[{variantName:'Base',sellingPrice:basePrice,hpp:baseHpp}]},variantGroups:{create:d.variantGroupIds.map((variantGroupId,i)=>({variantGroupId,sortOrder:i}))},outlets:{create:outletRows.map(x=>({outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))}},include:productInclude}));
+}));
+api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
+  const d=productInput.partial().parse(req.body);
+  const id=String(req.params.id);
+  const category=d.categoryId||d.category?await categoryName(d.categoryId,d.category):undefined;
+  res.json(await prisma.$transaction(async tx=>{
+    const current=await tx.product.findUnique({where:{id},include:{outlets:true}});
+    if(!current)throw new ApiError(404,'Produk tidak ditemukan');
+    const oldBasePrice=Number(current.basePrice),oldBaseHpp=Number(current.baseHpp);
+    if(d.variantGroupIds){await tx.productVariantGroup.deleteMany({where:{productId:id}});await tx.productVariantGroup.createMany({data:d.variantGroupIds.map((variantGroupId,i)=>({productId:id,variantGroupId,sortOrder:i})),skipDuplicates:true});}
+    if(d.outletPricing){
+      for(const x of d.outletPricing){
+        const existing=current.outlets.find(o=>o.outletId===x.outletId);
+        const rawPrice=x.outletPrice??null,rawHpp=x.outletHpp??null;
+        const outletPrice=rawPrice!==null&&d.basePrice!==undefined&&Number(rawPrice)===oldBasePrice?d.basePrice:rawPrice;
+        const outletHpp=rawHpp!==null&&d.baseHpp!==undefined&&Number(rawHpp)===oldBaseHpp?d.baseHpp:rawHpp;
+        await tx.productOutlet.upsert({where:{productId_outletId:{productId:id,outletId:x.outletId}},update:{isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice,outletHpp},create:{productId:id,outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice,outletHpp}});
+      }
+    }else if(d.outletIds){await tx.productOutlet.deleteMany({where:{productId:id}});await tx.productOutlet.createMany({data:d.outletIds.map(outletId=>({productId:id,outletId,isAvailable:true,isActive:true,status:'ACTIVE'})),skipDuplicates:true});}
+    const updated=await tx.product.update({where:{id},data:{name:d.name,category,categoryId:d.categoryId,description:d.description,imageUrl:d.imageUrl||undefined,basePrice:d.basePrice,baseHpp:d.baseHpp,status:d.status},include:productInclude});
+    if(d.basePrice!==undefined||d.baseHpp!==undefined){
+      const baseVariant=updated.variants.find(v=>v.variantName==='Base');
+      if(baseVariant)await tx.productVariant.update({where:{id:baseVariant.id},data:{sellingPrice:d.basePrice??baseVariant.sellingPrice,hpp:d.baseHpp??baseVariant.hpp}});
+    }
+    return tx.product.findUniqueOrThrow({where:{id},include:productInclude});
+  }));
+}));
 api.delete('/products/:id',allow('OWNER'),asyncRoute(async(req,res)=>res.json(await prisma.product.update({where:{id:String(req.params.id)},data:{status:'INACTIVE'}}))));
 api.get('/products/:id/outlets',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const productId=String(req.params.id);const [outlets,rows]=await Promise.all([prisma.outlet.findMany({orderBy:{name:'asc'}}),prisma.productOutlet.findMany({where:{productId},include:{outlet:true}})]);res.json(outlets.map(outlet=>rows.find(r=>r.outletId===outlet.id)||{productId,outletId:outlet.id,outlet,isAvailable:false,isActive:false,outletPrice:null,outletHpp:null,status:'INACTIVE'}));}));
 api.put('/products/:id/outlets',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const productId=String(req.params.id);const rows=z.object({outlets:z.array(outletPricingInput)}).parse(req.body).outlets;res.json(await prisma.$transaction(async tx=>{for(const x of rows)await tx.productOutlet.upsert({where:{productId_outletId:{productId,outletId:x.outletId}},update:{isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null},create:{productId,outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null}});return tx.productOutlet.findMany({where:{productId},include:{outlet:true},orderBy:{outlet:{name:'asc'}}});}));}));
@@ -170,7 +310,24 @@ async function createOrder(req:any,d:z.infer<typeof saleInput>,paid:boolean){
 }
 api.post('/orders',asyncRoute(async(req,res)=>res.status(201).json(await createOrder(req,saleInput.parse(req.body),false))));
 api.post('/sales',asyncRoute(async(req,res)=>res.status(201).json(await createOrder(req,saleInput.parse(req.body),true))));
-api.get('/orders',asyncRoute(async(req,res)=>{const where:any={};if(req.query.status)where.status=String(req.query.status);if(req.query.outlet_id){assertOutlet(req,String(req.query.outlet_id));where.outletId=String(req.query.outlet_id);}else if(req.user!.role!=='OWNER')where.outletId={in:req.user!.outletIds};if(req.query.date)where.createdAt=dayRange(String(req.query.date));if(req.query.customer_name)where.customerName={contains:String(req.query.customer_name),mode:'insensitive'};res.json(await prisma.sale.findMany({where,include:{outlet:true,cashier:{select:{name:true}}},orderBy:{createdAt:'desc'},take:200}));}));
+function queryDateRange(query:any){const from=String(query.from||query.date||'');const to=String(query.to||query.date||'');if(from&&to){const start=new Date(`${from}T00:00:00+07:00`),end=new Date(`${to}T00:00:00+07:00`);end.setDate(end.getDate()+1);return {gte:start,lt:end};}return query.date?dayRange(String(query.date)):undefined;}
+function ordersBaseWhere(req:any){const where:any={};if(req.query.outletId||req.query.outlet_id){const outletId=String(req.query.outletId||req.query.outlet_id);assertOutlet(req,outletId);where.outletId=outletId;}else if(req.user!.role!=='OWNER')where.outletId={in:req.user!.outletIds};const range=queryDateRange(req.query);if(range)where.createdAt=range;return where;}
+api.get('/orders',asyncRoute(async(req,res)=>{const where:any=ordersBaseWhere(req);if(req.query.status)where.status=String(req.query.status);if(req.query.customer_name)where.customerName={contains:String(req.query.customer_name),mode:'insensitive'};res.json(await prisma.sale.findMany({where,include:{outlet:true,cashier:{select:{name:true}},items:{select:{id:true,productName:true,qty:true}}},orderBy:{createdAt:'desc'},take:200}));}));
+api.get('/orders/summary',asyncRoute(async(req,res)=>{
+  const baseWhere=ordersBaseWhere(req);
+  const statusScope=['PENDING_PAYMENT','PAID','CANCELLED','VOID'];
+  const [totalOrders,paidOrders,pendingOrders,cancelledOrders,paidAgg,itemAgg,topProducts]=await Promise.all([
+    prisma.sale.count({where:{...baseWhere,status:{in:statusScope as any}}}),
+    prisma.sale.count({where:{...baseWhere,status:'PAID'}}),
+    prisma.sale.count({where:{...baseWhere,status:'PENDING_PAYMENT'}}),
+    prisma.sale.count({where:{...baseWhere,status:'CANCELLED'}}),
+    prisma.sale.aggregate({where:{...baseWhere,status:'PAID'},_sum:{grandTotal:true}}),
+    prisma.saleItem.aggregate({where:{sale:{...baseWhere,status:'PAID'}},_sum:{qty:true}}),
+    prisma.saleItem.groupBy({by:['productId','productName'],where:{sale:{...baseWhere,status:'PAID'}},_sum:{qty:true,subtotalAfterDiscount:true},orderBy:{_sum:{qty:'desc'}},take:1})
+  ]);
+  const top=topProducts[0];
+  res.json({totalOrders,paidOrders,pendingOrders,cancelledOrders,totalItemsSold:Number(itemAgg._sum.qty||0),totalNominal:money(Number(paidAgg._sum.grandTotal||0)),topSellingProduct:top?{productId:top.productId,productName:top.productName,qty:Number(top._sum.qty||0),nominal:money(Number(top._sum.subtotalAfterDiscount||0))}:null});
+}));
 api.get('/orders/:id',asyncRoute(async(req,res)=>{const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)},include:{outlet:true,cashier:{select:{name:true}},items:{include:{addons:true}},printerLogs:{include:{printer:true,user:{select:{name:true}},},orderBy:{printedAt:'desc'}}}});if(!sale)throw new ApiError(404,'Order tidak ditemukan');assertOutlet(req,sale.outletId);res.json(sale);}));
 async function updatePendingOrder(req:any,id:string,d:z.infer<typeof saleInput>){
   const existing=await prisma.sale.findUnique({where:{id},include:{items:{include:{addons:true}}}});

@@ -1,0 +1,6 @@
+-- No-op migration.
+--
+-- This migration previously tried to alter user_outlets.updated_at before the
+-- column existed on production databases. The actual user management columns
+-- are added idempotently in the next migration:
+-- 20260627090000_add_user_management_fields.
