@@ -1,4 +1,4 @@
-import{FormEvent,useEffect,useState}from'react';import{Link,useNavigate,useParams}from'react-router-dom';import{ArrowUpRight,Check,Edit,Plus,Power,ReceiptText,Store,Tag,TrendingUp,Wallet}from'lucide-react';import{Capacitor,registerPlugin}from'@capacitor/core';import{api,dt,rupiah}from'../api';
+ï»¿import{FormEvent,useEffect,useState}from'react';import{Link,useNavigate,useParams}from'react-router-dom';import{ArrowUpRight,Check,Edit,Plus,Power,ReceiptText,Store,Tag,TrendingUp,Wallet}from'lucide-react';import{Capacitor,registerPlugin}from'@capacitor/core';import{api,dt,rupiah}from'../api';
 import{printWithBluetoothFallback}from'../printer';
 import{downloadMasterData}from'../sync';
 import{emitMasterDataChanged,subscribeMasterDataChanged}from'../masterEvents';
@@ -13,7 +13,98 @@ export function Reports(){const[d,setD]=useState<any>();useEffect(()=>{api('/rep
 export function Outlets(){const[data,setData]=useState<any[]>([]),[edit,setEdit]=useState<any>(null),[error,setError]=useState('');const load=()=>api<any[]>('/outlets').then(setData);useEffect(()=>{load()},[]);async function save(e:FormEvent<HTMLFormElement>){e.preventDefault();try{const f=new FormData(e.currentTarget);const body={code:f.get('code'),name:f.get('name'),address:f.get('address')||null,phone:f.get('phone')||null,status:f.get('status')||'ACTIVE'};await api(edit?.id?`/outlets/${edit.id}`:'/outlets',{method:edit?.id?'PUT':'POST',body:JSON.stringify(body)});setEdit(null);load()}catch(e){setError((e as Error).message)}}return<Page><Head title="Master outlet" sub="Kelola lokasi operasional FORU." action={()=>setEdit({})}/><Err v={error}/><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{data.map(o=><div className="card p-5" key={o.id}><div className="mb-5 flex justify-between"><span className="grid h-11 w-11 place-items-center rounded-xl bg-brand-50 font-black text-brand-700">{o.code}</span><span className={`pill ${o.status==='ACTIVE'?'bg-brand-50 text-brand-700':'bg-slate-100'}`}>{o.status}</span></div><h3 className="text-xl font-black">{o.name}</h3><p className="mt-2 text-sm text-slate-400">{o.address||'Alamat belum diisi'}</p><p className="mt-1 text-sm text-slate-400">{o.phone||'Telepon belum diisi'}</p><button onClick={()=>setEdit(o)} className="mt-4 flex items-center gap-2 text-sm font-bold text-brand-600"><Edit size={16}/> Edit info outlet</button></div>)}</div>{edit&&<Modal title={edit.id?'Edit outlet':'Outlet baru'} close={()=>setEdit(null)}><form onSubmit={save}><Fields values={edit} items={[['code','Kode outlet'],['name','Nama outlet'],['address','Alamat'],['phone','Telepon']]}/>{edit.id&&<><label className="label">Status</label><select className="input mb-3" name="status" defaultValue={edit.status||'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select></>}<button className="btn-primary mt-3 w-full">Simpan Outlet</button></form></Modal>}</Page>}
 export function Categories(){const[data,setData]=useState<any[]>([]),[edit,setEdit]=useState<any>(null),[error,setError]=useState('');const load=()=>api<any[]>('/categories').then(setData);useEffect(()=>{load()},[]);async function save(e:FormEvent<HTMLFormElement>){e.preventDefault();try{const f=new FormData(e.currentTarget),body={name:f.get('name'),description:f.get('description'),sortOrder:Number(f.get('sortOrder')||0),status:f.get('status')||'ACTIVE'};await api(edit?.id?`/categories/${edit.id}`:'/categories',{method:edit?.id?'PUT':'POST',body:JSON.stringify(body)});setEdit(null);load()}catch(e){setError((e as Error).message)}}return<Page><Head title="Master category" sub="Kelompok produk dan filter POS." action={()=>setEdit({})}/><Err v={error}/><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{data.map(c=><article className="card p-5" key={c.id}><div className="mb-4 flex items-center justify-between"><span className="pill bg-slate-100">Sort {c.sortOrder}</span><span className={`pill ${c.status==='ACTIVE'?'bg-brand-50 text-brand-700':'bg-slate-100'}`}>{c.status}</span></div><h3 className="text-xl font-black">{c.name}</h3><p className="mt-2 min-h-10 text-sm text-slate-400">{c.description||'Tanpa deskripsi'}</p><button onClick={()=>setEdit(c)} className="mt-4 flex items-center gap-2 text-sm font-bold text-brand-600"><Edit size={16}/> Edit</button></article>)}</div>{edit&&<Modal title={edit.id?'Edit kategori':'Kategori baru'} close={()=>setEdit(null)}><form onSubmit={save}><Fields values={edit} items={[['name','Nama kategori'],['description','Deskripsi'],['sortOrder','Urutan','number']]}/><label className="label">Status</label><select className="input mb-3" name="status" defaultValue={edit.status||'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select><button className="btn-primary w-full">Simpan Kategori</button></form></Modal>}</Page>}
 export function VariantGroups(){const[data,setData]=useState<any[]>([]),[edit,setEdit]=useState<any>(null),[error,setError]=useState('');const load=()=>api<any[]>('/variant-groups').then(setData);useEffect(()=>{load();return subscribeMasterDataChanged(()=>load())},[]);async function refreshMaster(type:any,message:string){await downloadMasterData('ONLINE');emitMasterDataChanged(type);await load();alert(message)}async function saveGroup(e:FormEvent<HTMLFormElement>){e.preventDefault();try{const f=new FormData(e.currentTarget);await api(edit?.id?`/variant-groups/${edit.id}`:'/variant-groups',{method:edit?.id?'PUT':'POST',body:JSON.stringify({name:f.get('name'),description:f.get('description'),minSelect:Number(f.get('minSelect')||0),maxSelect:Number(f.get('maxSelect')||1),required:f.get('required')==='on',status:f.get('status')||'ACTIVE'})});setEdit(null);await refreshMaster('variant_group_updated','Variant group berhasil disimpan.')}catch(e){setError((e as Error).message)}}async function addOption(id:string){try{const name=prompt('Nama opsi variant');if(!name)return;await api(`/variant-groups/${id}/options`,{method:'POST',body:JSON.stringify({name,additionalPrice:Number(prompt('Tambahan harga','0')||0),hpp:Number(prompt('HPP tambahan','0')||0),status:'ACTIVE'})});await refreshMaster('variant_option_created','Opsi varian berhasil ditambahkan.')}catch(e){setError((e as Error).message)}}async function editOption(o:any){try{const name=prompt('Nama opsi variant',o.name);if(!name)return;await api(`/variant-options/${o.id}`,{method:'PUT',body:JSON.stringify({name,additionalPrice:Number(prompt('Tambahan harga',String(o.additionalPrice||0))||0),hpp:Number(prompt('HPP tambahan',String(o.hpp||0))||0),status:prompt('Status: ACTIVE / INACTIVE',o.status||'ACTIVE')||'ACTIVE'})});await refreshMaster('variant_option_updated','Opsi varian berhasil diubah.')}catch(e){setError((e as Error).message)}}async function deleteOption(o:any){try{if(!confirm(`Nonaktifkan opsi "${o.name}"?`))return;await api(`/variant-options/${o.id}`,{method:'DELETE'});await refreshMaster('variant_option_deleted','Opsi varian berhasil dihapus/nonaktif.')}catch(e){setError((e as Error).message)}}return<Page><Head title="Variant groups" sub="Reusable modifier seperti Size, Temperature, Topping." action={()=>setEdit({})}/><Err v={error}/><div className="grid gap-4 xl:grid-cols-2">{data.map(g=><article className="card p-5" key={g.id}><div className="flex items-start justify-between gap-3"><div><h3 className="text-xl font-black">{g.name}</h3><p className="mt-1 text-sm text-slate-400">{g.required?'Wajib':'Opsional'} ? min {g.minSelect} ? max {g.maxSelect}</p></div><span className={`pill ${g.status==='ACTIVE'?'bg-brand-50 text-brand-700':'bg-slate-100'}`}>{g.status}</span></div><div className="mt-4 grid gap-2 sm:grid-cols-2">{g.options.map((o:any)=><div className="rounded-xl bg-slate-50 p-3 text-sm" key={o.id}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><b className="block truncate">{o.name}</b><p className="text-xs text-slate-400">+{rupiah(o.additionalPrice)} ? HPP {rupiah(o.hpp)} ? {o.status}</p></div><div className="flex shrink-0 gap-2"><button onClick={()=>editOption(o)} className="font-bold text-brand-600">Edit</button><button onClick={()=>deleteOption(o)} className="font-bold text-red-600">Hapus</button></div></div></div>)}</div><div className="mt-4 flex gap-4"><button onClick={()=>setEdit(g)} className="text-sm font-bold text-brand-600">Edit group</button><button onClick={()=>addOption(g.id)} className="text-sm font-bold text-brand-600">+ Opsi</button></div></article>)}</div>{edit&&<Modal title={edit.id?'Edit variant group':'Variant group baru'} close={()=>setEdit(null)}><form onSubmit={saveGroup}><Fields values={edit} items={[["name","Nama group"],["description","Deskripsi"],["minSelect","Min pilih","number"],["maxSelect","Max pilih","number"]]}/><label className="mb-3 flex items-center gap-2 text-sm"><input name="required" type="checkbox" defaultChecked={edit.required}/> Wajib dipilih</label><label className="label">Status</label><select className="input mb-3" name="status" defaultValue={edit.status||'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select><button className="btn-primary w-full">Simpan Group</button></form></Modal>}</Page>}
-export function Products(){const[data,setData]=useState<any[]>([]),[categories,setCategories]=useState<any[]>([]),[groups,setGroups]=useState<any[]>([]),[outlets,setOutlets]=useState<any[]>([]),[edit,setEdit]=useState<any>(null),[error,setError]=useState('');const load=()=>api<any[]>('/products').then(setData);useEffect(()=>{load();api<any[]>('/categories').then(setCategories);api<any[]>('/variant-groups').then(setGroups);api<any[]>('/outlets').then(setOutlets);return subscribeMasterDataChanged(()=>{load();api<any[]>('/variant-groups').then(setGroups)})},[]);async function save(e:FormEvent<HTMLFormElement>){e.preventDefault();try{const f=new FormData(e.currentTarget);const outletPricing=outlets.map(o=>({outletId:o.id,isAvailable:f.get(`available_${o.id}`)==='on',outletPrice:f.get(`price_${o.id}`)?Number(f.get(`price_${o.id}`)):null,outletHpp:f.get(`hpp_${o.id}`)?Number(f.get(`hpp_${o.id}`)):null,status:f.get(`status_${o.id}`)||'ACTIVE'}));await api(edit?.id?`/products/${edit.id}`:'/products',{method:edit?.id?'PUT':'POST',body:JSON.stringify({name:f.get('name'),categoryId:f.get('categoryId'),description:f.get('description'),imageUrl:f.get('imageUrl'),basePrice:Number(f.get('basePrice')||0),baseHpp:Number(f.get('baseHpp')||0),status:f.get('status')||'ACTIVE',variantGroupIds:f.getAll('variantGroupIds'),outletPricing})});await downloadMasterData('ONLINE');emitMasterDataChanged('product_master_updated');setEdit(null);load();alert('Produk berhasil disimpan.')}catch(e){setError((e as Error).message)}}function rowFor(o:any){return(edit?.outlets||[]).find((x:any)=>x.outletId===o.id)}return<Page><Head title="Master produk" sub="Produk, harga/HPP outlet, kategori, dan attached variant groups." action={()=>setEdit({})}/><Err v={error}/><div className="card overflow-hidden"><div className="overflow-auto"><table className="w-full min-w-[920px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-4">Produk</th><th>Kategori</th><th>Base Price</th><th>Base HPP</th><th>Variant Groups</th><th>Outlet aktif</th><th>Status</th><th></th></tr></thead><tbody>{data.map(p=><tr className="border-t" key={p.id}><td className="p-4 font-bold">{p.name}<p className="font-normal text-slate-400">{p.description}</p></td><td>{p.categoryRef?.name||p.category}</td><td>{rupiah(p.basePrice)}</td><td>{rupiah(p.baseHpp)}</td><td>{p.variantGroups?.map((x:any)=>x.group.name).join(', ')||'-'}</td><td>{(p.outlets||[]).filter((x:any)=>x.isAvailable&&x.status==='ACTIVE').length} outlet</td><td><span className="pill bg-brand-50 text-brand-700">{p.status}</span></td><td><button onClick={()=>setEdit(p)} className="text-brand-600"><Edit size={17}/></button></td></tr>)}</tbody></table></div></div>{edit&&<Modal title={edit.id?'Edit produk':'Produk baru'} close={()=>setEdit(null)}><form onSubmit={save}><Fields values={edit} items={[['name','Nama produk'],['description','Deskripsi'],['imageUrl','Image URL'],['basePrice','Base selling price','number'],['baseHpp','Base HPP','number']]}/><label className="label">Kategori</label><select className="input mb-3" name="categoryId" defaultValue={edit.categoryId||categories[0]?.id} required>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select><label className="label">Status produk master</label><select className="input mb-3" name="status" defaultValue={edit.status||'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select><CheckList title="Variant Groups" name="variantGroupIds" rows={groups.map(g=>[g.id,g.name])} checked={(edit.variantGroups||[]).map((x:any)=>x.variantGroupId)}/><div className="mt-5"><label className="label">Outlet Availability & Pricing</label><div className="overflow-auto rounded-2xl border"><table className="w-full min-w-[640px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Outlet</th><th>Available</th><th>Price</th><th>HPP</th><th>Status</th></tr></thead><tbody>{outlets.map(o=>{const r=rowFor(o),isNew=!edit.id;return<tr className="border-t" key={o.id}><td className="p-3 font-bold">{o.name}<p className="text-xs font-normal text-slate-400">{o.code}</p></td><td className="text-center"><input name={`available_${o.id}`} type="checkbox" defaultChecked={isNew?true:!!r?.isAvailable}/></td><td className="p-2"><input className="input" name={`price_${o.id}`} type="number" min="0" placeholder={`Base ${edit.basePrice??0}`} defaultValue={r?.outletPrice??''}/></td><td className="p-2"><input className="input" name={`hpp_${o.id}`} type="number" min="0" placeholder={`Base ${edit.baseHpp??0}`} defaultValue={r?.outletHpp??''}/></td><td className="p-2"><select className="input" name={`status_${o.id}`} defaultValue={r?.status||(isNew?'ACTIVE':'INACTIVE')}><option>ACTIVE</option><option>INACTIVE</option></select></td></tr>})}</tbody></table></div><p className="mt-2 text-xs text-slate-400">Kosongkan Price/HPP outlet untuk memakai Base Price/Base HPP produk.</p></div><button className="btn-primary mt-5 w-full">Simpan Produk</button></form></Modal>}</Page>}
+export function Products(){const[data,setData]=useState<any[]>([]),[categories,setCategories]=useState<any[]>([]),[groups,setGroups]=useState<any[]>([]),[outlets,setOutlets]=useState<any[]>([]),[edit,setEdit]=useState<any>(null),[error,setError]=useState('');const load=()=>api<any[]>('/products').then(setData);useEffect(()=>{load();api<any[]>('/categories').then(setCategories);api<any[]>('/variant-groups').then(setGroups);api<any[]>('/outlets').then(setOutlets);return subscribeMasterDataChanged(()=>{load();api<any[]>('/variant-groups').then(setGroups)})},[]);async function save(e:FormEvent<HTMLFormElement>){e.preventDefault();try{const f=new FormData(e.currentTarget);const outletPricing=outlets.map(o=>({outletId:o.id,isAvailable:f.get(`available_${o.id}`)==='on',outletPrice:f.get(`price_${o.id}`)?Number(f.get(`price_${o.id}`)):null,outletHpp:f.get(`hpp_${o.id}`)?Number(f.get(`hpp_${o.id}`)):null,status:f.get(`status_${o.id}`)||'ACTIVE'}));await api(edit?.id?`/products/${edit.id}`:'/products',{method:edit?.id?'PUT':'POST',body:JSON.stringify({name:f.get('name'),categoryId:f.get('categoryId'),description:f.get('description'),imageUrl:f.get('imageUrl'),basePrice:Number(f.get('basePrice')||0),baseHpp:Number(f.get('baseHpp')||0),status:f.get('status')||'ACTIVE',variantGroupIds:f.getAll('variantGroupIds'),outletPricing})});await downloadMasterData('ONLINE');emitMasterDataChanged('product_master_updated');setEdit(null);load();alert('Produk berhasil disimpan.')}catch(e){setError((e as Error).message)}}function rowFor(o:any){return(edit?.outlets||[]).find((x:any)=>x.outletId===o.id)}return<Page><Head title="Master produk" sub="Produk, harga/HPP outlet, kategori, dan attached variant groups." action={()=>setEdit({})}/><Err v={error}/>
+<div className="space-y-3 md:hidden">
+  {data.map(p => (
+    <div key={p.id} className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="line-clamp-2 font-black text-ink">{p.name}</h3>
+          <p className="text-sm text-slate-400">
+            {p.categoryRef?.name || p.category}
+          </p>
+        </div>
+
+        <button onClick={() => setEdit(p)} className="shrink-0 rounded-xl bg-brand-50 p-2 text-brand-600">
+          <Edit size={17} />
+        </button>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+        <div className="rounded-2xl bg-slate-50 p-3">
+          <p className="text-xs text-slate-400">Harga</p>
+          <b>{rupiah(p.basePrice)}</b>
+        </div>
+
+        <div className="rounded-2xl bg-slate-50 p-3">
+          <p className="text-xs text-slate-400">HPP</p>
+          <b>{rupiah(p.baseHpp)}</b>
+        </div>
+
+        <div className="rounded-2xl bg-slate-50 p-3">
+          <p className="text-xs text-slate-400">Outlet aktif</p>
+          <b>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</b>
+        </div>
+
+        <div className="rounded-2xl bg-slate-50 p-3">
+          <p className="text-xs text-slate-400">Status</p>
+          <span className="pill bg-brand-50 text-brand-700">{p.status}</span>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm">
+        <p className="text-xs text-slate-400">Variant Groups</p>
+        <p className="mt-1 line-clamp-2">
+          {p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}
+        </p>
+      </div>
+    </div>
+  ))}
+</div>
+
+<div className="card hidden overflow-hidden md:block">
+  <div className="overflow-x-auto">
+    <table className="w-full min-w-[920px] text-left text-sm">
+      <thead className="bg-slate-50 text-slate-500">
+        <tr>
+          <th className="p-4">Produk</th>
+          <th>Kategori</th>
+          <th>Base Price</th>
+          <th>Base HPP</th>
+          <th>Variant Groups</th>
+          <th>Outlet aktif</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {data.map(p => (
+          <tr className="border-t" key={p.id}>
+            <td className="p-4 font-bold">
+              {p.name}
+              <p className="font-normal text-slate-400">{p.description}</p>
+            </td>
+            <td>{p.categoryRef?.name || p.category}</td>
+            <td>{rupiah(p.basePrice)}</td>
+            <td>{rupiah(p.baseHpp)}</td>
+            <td>{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</td>
+            <td>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</td>
+            <td>
+              <span className="pill bg-brand-50 text-brand-700">{p.status}</span>
+            </td>
+            <td>
+              <button onClick={() => setEdit(p)} className="text-brand-600">
+                <Edit size={17} />
+              </button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</div>
+{edit&&<Modal title={edit.id?'Edit produk':'Produk baru'} close={()=>setEdit(null)}><form onSubmit={save}><Fields values={edit} items={[['name','Nama produk'],['description','Deskripsi'],['imageUrl','Image URL'],['basePrice','Base selling price','number'],['baseHpp','Base HPP','number']]}/><label className="label">Kategori</label><select className="input mb-3" name="categoryId" defaultValue={edit.categoryId||categories[0]?.id} required>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select><label className="label">Status produk master</label><select className="input mb-3" name="status" defaultValue={edit.status||'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select><CheckList title="Variant Groups" name="variantGroupIds" rows={groups.map(g=>[g.id,g.name])} checked={(edit.variantGroups||[]).map((x:any)=>x.variantGroupId)}/><div className="mt-5"><label className="label">Outlet Availability & Pricing</label><div className="overflow-auto rounded-2xl border"><table className="w-full min-w-[640px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Outlet</th><th>Available</th><th>Price</th><th>HPP</th><th>Status</th></tr></thead><tbody>{outlets.map(o=>{const r=rowFor(o),isNew=!edit.id;return<tr className="border-t" key={o.id}><td className="p-3 font-bold">{o.name}<p className="text-xs font-normal text-slate-400">{o.code}</p></td><td className="text-center"><input name={`available_${o.id}`} type="checkbox" defaultChecked={isNew?true:!!r?.isAvailable}/></td><td className="p-2"><input className="input" name={`price_${o.id}`} type="number" min="0" placeholder={`Base ${edit.basePrice??0}`} defaultValue={r?.outletPrice??''}/></td><td className="p-2"><input className="input" name={`hpp_${o.id}`} type="number" min="0" placeholder={`Base ${edit.baseHpp??0}`} defaultValue={r?.outletHpp??''}/></td><td className="p-2"><select className="input" name={`status_${o.id}`} defaultValue={r?.status||(isNew?'ACTIVE':'INACTIVE')}><option>ACTIVE</option><option>INACTIVE</option></select></td></tr>})}</tbody></table></div><p className="mt-2 text-xs text-slate-400">Kosongkan Price/HPP outlet untuk memakai Base Price/Base HPP produk.</p></div><button className="btn-primary mt-5 w-full">Simpan Produk</button></form></Modal>}</Page>}
 export function Coupons(){
   const[data,setData]=useState<any[]>([]),[outlets,setOutlets]=useState<any[]>([]),[products,setProducts]=useState<any[]>([]),[show,setShow]=useState(false),[error,setError]=useState('');
   const load=()=>api<any[]>('/coupons').then(setData);
@@ -100,7 +191,7 @@ export function PrinterSettings(){
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{data.map(p=><article className="card p-5" key={p.id}>
       <div className="mb-4 flex justify-between"><span className="pill bg-slate-100">{p.connectionType}</span><span className={`pill ${p.status==='ACTIVE'?'bg-brand-50 text-brand-700':'bg-slate-100'}`}>{p.status}</span></div>
       <h3 className="text-xl font-black">{p.printerName}</h3>
-      <p className="mt-1 text-sm text-slate-400">{p.outlet?.name} · {p.paperSize}</p>
+      <p className="mt-1 text-sm text-slate-400">{p.outlet?.name} ï¿½ {p.paperSize}</p>
       <p className="mt-3 text-sm">{p.isCustomerReceipt?'Receipt ':''}{p.isKitchenPrinter?'Kitchen ':''}</p>
       {p.connectionType==='BLUETOOTH'&&<div className="mt-3 rounded-xl bg-slate-50 p-3 text-xs text-slate-500">
         <p><b>MAC / Identifier:</b> {p.bluetoothAddress||'Belum diisi'}</p>

@@ -1,0 +1,23 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+!*.env.example
+.DS_Store
+coverage
+apps/api/prisma/dev.db
+.pnpm-store/
+work/
+*.tar.gz
+*.tsbuildinfo
+
+
+# Gradle
+.gradle/
+.gradle-foru-jdk21/
+**/.gradle/
+**/.gradle-foru-jdk21/
+
+# Android
+**/build/

@@ -19,8 +19,8 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
       });
       localStorage.setItem('token', r.token);
       localStorage.setItem('user', JSON.stringify(r.user));
-      if (r.user.outletIds.length === 1) localStorage.setItem('outletId', r.user.outletIds[0]);
-      if (r.user.outletIds.length > 1 && !r.user.outletIds.includes(localStorage.getItem('outletId') || '')) localStorage.removeItem('outletId');
+      localStorage.setItem('foru:must_select_outlet', '1');
+      if (!r.user.outletIds.includes(localStorage.getItem('outletId') || '')) localStorage.removeItem('outletId');
       onLogin(r.user);
     } catch (e) {
       setError((e as Error).message);

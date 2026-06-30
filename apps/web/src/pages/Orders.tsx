@@ -32,6 +32,7 @@ const zeroSummary = { totalOrders: 0, paidOrders: 0, pendingOrders: 0, cancelled
 
 export function Orders() {
   const tabs = ['PENDING_PAYMENT', 'PAID', 'CANCELLED', 'VOID'];
+  const outletId = localStorage.getItem('outletId') || '';
   const [status, setStatus] = useState('PENDING_PAYMENT');
   const [preset, setPreset] = useState('today');
   const initialRange = datePresetRange('today');
@@ -52,12 +53,14 @@ export function Orders() {
   }
   const query = () => {
     const params = new URLSearchParams({ from, to });
+    if (outletId) params.set('outletId', outletId);
     return params.toString();
   };
   const load = async () => {
     try {
       setLoading(true);
       setError('');
+      if (!outletId) throw new Error('Silakan pilih outlet terlebih dahulu.');
       const q = query();
       const [orders, nextSummary] = await Promise.all([
         api<any[]>(`/orders?status=${status}&${q}`),
@@ -82,13 +85,13 @@ export function Orders() {
       setLoading(false);
     }
   };
-  useEffect(() => { load(); }, [status, from, to]);
+  useEffect(() => { load(); }, [status, from, to, outletId]);
 
   async function pay(o: any) {
     try {
       const paymentMethod = prompt('Payment method: CASH, QRIS, GOFOOD, GRABFOOD, SHOPEEFOOD, VOUCHER', 'CASH') || 'CASH';
       const cashReceived = paymentMethod === 'CASH' ? Number(prompt('Cash received', String(o.grandTotal)) || 0) : undefined;
-      const active = await api<any>('/cash-sessions/active');
+      const active = await api<any>(`/outlets/${o.outletId}/active-shift`);
       await api(`/orders/${o.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod, cashReceived, cashSessionId: active?.id }) });
       load();
     } catch (e) { alert((e as Error).message); }
@@ -136,6 +139,7 @@ export function Orders() {
         <label className="text-sm font-bold text-slate-600">Sampai tanggal<input className="input mt-1" type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
       </div>}
     </div>}
+    <div className="mb-4 inline-flex rounded-full bg-brand-50 px-4 py-2 text-sm font-black text-brand-700">Data Outlet Aktif</div>
     <div className="mb-5 grid grid-cols-2 gap-x-5 gap-y-7 rounded-2xl bg-slate-50 p-5 lg:grid-cols-4 lg:gap-x-10">
       <div className="min-w-0"><p className="text-sm font-black text-slate-500">Total Order</p><p className="mt-2 text-base text-slate-800">{summary.totalOrders}</p></div>
       <div className="min-w-0"><p className="text-sm font-black leading-tight text-slate-500">Total Item Terjual</p><p className="mt-2 text-base text-slate-800">{summary.totalItemsSold}</p></div>
@@ -231,7 +235,7 @@ export function OrderDetail() {
     try {
       const paymentMethod = prompt('Payment method: CASH, QRIS, GOFOOD, GRABFOOD, SHOPEEFOOD, VOUCHER', 'CASH') || 'CASH';
       const cashReceived = paymentMethod === 'CASH' ? Number(prompt('Cash received', String(order.grandTotal)) || 0) : undefined;
-      const active = await api<any>('/cash-sessions/active');
+      const active = await api<any>(`/outlets/${order.outletId}/active-shift`);
       const updated = await api<any>(`/orders/${order.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod, cashReceived, cashSessionId: active?.id }) });
       setOrder(updated);
     } catch (e) { alert((e as Error).message); }

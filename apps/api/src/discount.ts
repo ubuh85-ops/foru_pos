@@ -19,7 +19,7 @@ export async function priceCart(items:CartLine[],outletId:string):Promise<Priced
     const itemNote=line.itemNote?.trim();
     if(itemNote&&itemNote.length>255) throw new ApiError(400,'Catatan item maksimal 255 karakter');
     const product=await prisma.product.findFirst({
-      where:{id:line.productId,status:'ACTIVE',OR:[{outlets:{some:{outletId,isAvailable:true,status:'ACTIVE'}}},{outlets:{none:{outletId}}}]},
+      where:{id:line.productId,status:'ACTIVE',outlets:{some:{outletId,isAvailable:true,isActive:true,status:'ACTIVE'}}},
       include:{
         categoryRef:true,
         addons:true,
