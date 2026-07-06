@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Eye, Power, Printer, Store } from 'lucide-react';
 import { api, dt, rupiah } from '../api';
 import { printShiftCloseReport } from '../printer';
+import { toast } from '../toast';
 
 type Outlet = { id: string; name: string; code?: string };
 const today = () => new Date().toLocaleDateString('en-CA');
@@ -17,6 +18,8 @@ export default function ShiftPage() {
   const [detail, setDetail] = useState<any>(null);
   const [closeResult, setCloseResult] = useState<any>(null);
   const [error, setError] = useState('');
+  const [openSubmitting, setOpenSubmitting] = useState(false);
+  const [closeSubmitting, setCloseSubmitting] = useState(false);
   const [from, setFrom] = useState(today());
   const [to, setTo] = useState(today());
   const [outletFilter, setOutletFilter] = useState(localStorage.getItem('outletId') || '');
@@ -69,6 +72,8 @@ export default function ShiftPage() {
 
   async function open(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (openSubmitting) return;
+    setOpenSubmitting(true);
     try {
       const f = new FormData(e.currentTarget);
       const openingCash = Number(f.get('openingCash'));
@@ -82,8 +87,10 @@ export default function ShiftPage() {
           }
         });
       setShift(opened);
+      toast.success('Data berhasil disimpan.');
       navigate('/pos');
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) { const msg = (e as Error).message; setError(msg); toast.error(msg); }
+    finally { setOpenSubmitting(false); }
   }
 
   async function logPrint(report: any, status: 'SUCCESS' | 'FAILED', errorMessage?: string) {
@@ -108,6 +115,8 @@ export default function ShiftPage() {
 
   async function close(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (closeSubmitting) return;
+    setCloseSubmitting(true);
     try {
       const f = new FormData(e.currentTarget);
       const closingCashActual = Number(f.get('closingCashActual'));
@@ -120,7 +129,9 @@ export default function ShiftPage() {
       setDetail(report);
       setShift(null);
       await loadReports();
-    } catch (e) { setError((e as Error).message); }
+      toast.success('Data berhasil disimpan.');
+    } catch (e) { const msg = (e as Error).message; setError(msg); toast.error(msg); }
+    finally { setCloseSubmitting(false); }
   }
 
   return <div className="p-4 lg:p-8">
@@ -133,15 +144,15 @@ export default function ShiftPage() {
       {error && <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</div>}
       {closeResult && <div className="mb-4 rounded-2xl bg-brand-50 p-4 text-sm text-brand-800"><b>Shift closed successfully.</b><br />{closeResult.printStatus}<div className="mt-3 flex gap-2"><button onClick={() => reprint(closeResult.report)} className="btn-soft"><Printer size={16} /> Reprint Shift Report</button><button onClick={() => setDetail(closeResult.report)} className="btn-soft"><Eye size={16} /> View Report Detail</button></div></div>}
 
-      {tab === 'active' && <ActiveShift outlet={outlet} outletId={outletId} shift={shift} open={open} close={close} />}
+      {tab === 'active' && <ActiveShift outlet={outlet} outletId={outletId} shift={shift} open={open} close={close} openSubmitting={openSubmitting} closeSubmitting={closeSubmitting} />}
       {tab === 'reports' && <ReportsTab reports={reports} outlets={outlets} user={user} from={from} to={to} outletFilter={outletFilter} setFrom={setFrom} setTo={setTo} setOutletFilter={setOutletFilter} quick={quick} viewReport={viewReport} reprint={async (id: string) => reprint(await api<any>(`/cash-sessions/${id}/close-report`))} />}
     </div>
     {detail && <ReportModal report={detail} close={() => setDetail(null)} reprint={() => reprint(detail)} />}
   </div>;
 }
 
-function ActiveShift({ outlet, outletId, shift, open, close }: any) {
-  return <div className="mx-auto max-w-2xl"><div className="mb-4 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5"><p className="text-xs font-bold uppercase tracking-wide text-slate-400">Outlet aktif</p><div className="mt-2 flex items-center gap-3"><span className="grid h-12 w-12 place-items-center rounded-2xl bg-brand-50 text-brand-700"><Store size={22} /></span><div className="min-w-0"><b className="block truncate text-lg">{outlet?.name || 'Outlet terpilih'}</b><span className="text-sm text-slate-400">{outlet?.code || outletId}</span></div></div></div>{shift ? <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5"><div className="bg-brand-600 p-6 text-white"><span className="rounded-full bg-white/15 px-3 py-1 text-xs font-black">SHIFT AKTIF</span><h3 className="mt-4 text-2xl font-black">{shift.outlet?.name || outlet?.name}</h3><p className="text-white/75">Dibuka {dt(shift.openedAt)} oleh {shift.openedBy || shift.opened_by || shift.cashier?.name || '-'}</p></div><form onSubmit={close} className="p-6"><div className="mb-5 flex justify-between rounded-2xl bg-slate-50 p-4"><span>Kas awal</span><b>{rupiah(shift.openingCash)}</b></div>{shift.expenses?.length > 0 && <div className="mb-5 rounded-2xl border p-4"><b className="mb-2 block">Pengeluaran shift</b>{shift.expenses.map((x: any) => <div className="flex justify-between border-t py-2 text-sm" key={x.id}><span>{x.categoryName} - {x.description}</span><b>{rupiah(x.amount)}</b></div>)}</div>}<label className="label">Kas aktual saat tutup</label><input className="input" name="closingCashActual" type="number" min="0" required /><button className="btn-primary mt-5 w-full">Tutup Shift</button></form></div> : <form onSubmit={open} className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5"><div className="mb-5 grid h-14 w-14 place-items-center rounded-2xl bg-brand-50 text-brand-700"><Store /></div><label className="label">Kas awal</label><input className="input" name="openingCash" type="number" min="0" defaultValue="0" required /><button className="btn-primary mt-5 w-full"><Power size={18} /> Buka Shift</button></form>}</div>;
+function ActiveShift({ outlet, outletId, shift, open, close, openSubmitting, closeSubmitting }: any) {
+  return <div className="mx-auto max-w-2xl"><div className="mb-4 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5"><p className="text-xs font-bold uppercase tracking-wide text-slate-400">Outlet aktif</p><div className="mt-2 flex items-center gap-3"><span className="grid h-12 w-12 place-items-center rounded-2xl bg-brand-50 text-brand-700"><Store size={22} /></span><div className="min-w-0"><b className="block truncate text-lg">{outlet?.name || 'Outlet terpilih'}</b><span className="text-sm text-slate-400">{outlet?.code || outletId}</span></div></div></div>{shift ? <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5"><div className="bg-brand-600 p-6 text-white"><span className="rounded-full bg-white/15 px-3 py-1 text-xs font-black">SHIFT AKTIF</span><h3 className="mt-4 text-2xl font-black">{shift.outlet?.name || outlet?.name}</h3><p className="text-white/75">Dibuka {dt(shift.openedAt)} oleh {shift.openedBy || shift.opened_by || shift.cashier?.name || '-'}</p></div><form onSubmit={close} className="p-6"><div className="mb-5 flex justify-between rounded-2xl bg-slate-50 p-4"><span>Kas awal</span><b>{rupiah(shift.openingCash)}</b></div>{shift.expenses?.length > 0 && <div className="mb-5 rounded-2xl border p-4"><b className="mb-2 block">Pengeluaran shift</b>{shift.expenses.map((x: any) => <div className="flex justify-between border-t py-2 text-sm" key={x.id}><span>{x.categoryName} - {x.description}</span><b>{rupiah(x.amount)}</b></div>)}</div>}<label className="label">Kas aktual saat tutup</label><input className="input" name="closingCashActual" type="number" min="0" required /><button disabled={closeSubmitting} className="btn-primary mt-5 w-full">{closeSubmitting ? 'Menyimpan...' : 'Tutup Shift'}</button></form></div> : <form onSubmit={open} className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5"><div className="mb-5 grid h-14 w-14 place-items-center rounded-2xl bg-brand-50 text-brand-700"><Store /></div><label className="label">Kas awal</label><input className="input" name="openingCash" type="number" min="0" defaultValue="0" required /><button disabled={openSubmitting} className="btn-primary mt-5 w-full"><Power size={18} /> {openSubmitting ? 'Menyimpan...' : 'Buka Shift'}</button></form>}</div>;
 }
 
 function ReportsTab(p: any) {

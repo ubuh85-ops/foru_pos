@@ -10,8 +10,22 @@ type ManagedUser = {
   role: 'OWNER' | 'SUPERVISOR' | 'CASHIER';
   status: 'ACTIVE' | 'INACTIVE';
   lastLogin?: string | null;
+  inventoryPermissions?: string[];
   outlets?: { outlet: Outlet; status?: string }[];
 };
+
+const inventoryPermissions = [
+  ['inventory.view', 'View Inventory'],
+  ['inventory.stock_in', 'Stock In'],
+  ['inventory.stock_out', 'Stock Out'],
+  ['inventory.adjustment', 'Stock Adjustment'],
+  ['inventory.opname', 'Stock Opname'],
+  ['inventory.transfer', 'Stock Transfer'],
+  ['inventory.report', 'Inventory Report'],
+  ['inventory.warehouse', 'Warehouse Management'],
+  ['inventory.item_management', 'Item Management']
+] as const;
+const allInventoryPermissionKeys = inventoryPermissions.map(([key]) => key);
 
 const Page = ({ children }: { children: any }) => <div className="p-4 lg:p-8">{children}</div>;
 const Err = ({ v }: { v: string }) => v ? <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{v}</div> : null;
@@ -73,6 +87,7 @@ export default function UserManagementPage() {
         role: f.get('role'),
         status: f.get('status'),
         outletIds: f.getAll('outletIds'),
+        inventoryPermissions: f.getAll('inventoryPermissions'),
       };
       await api(edit.id ? `/users/${edit.id}` : '/users', { method: edit.id ? 'PUT' : 'POST', body: JSON.stringify(body) });
       setEdit(null);
@@ -174,7 +189,8 @@ export default function UserManagementPage() {
     </Modal>}
     {assign && <Modal title={`Assign Outlet - ${assign.name}`} close={() => setAssign(null)}>
       <form onSubmit={saveAssignment}>
-        <OutletChecks outlets={outlets} selected={(assign.outlets || []).map(x => x.outlet.id)} loading={outletsLoading} error={outletsError} reload={loadOutlets} />
+        <OutletChecks outlets={outlets} selected={(assign.outlets || []).map(x => x.outlet.id)} loading={outletsLoading} error={outletsError} reload={loadOutlets} single={assign.role === 'CASHIER'} />
+        {assign.role === 'CASHIER' && <p className="mt-2 text-xs text-amber-700">Cashier hanya boleh memiliki 1 outlet aktif.</p>}
         <button className="btn-primary mt-5 w-full">Simpan Outlet</button>
       </form>
     </Modal>}
@@ -199,6 +215,24 @@ function Actions({ user, edit, reset, assign, setStatus, softDelete }: { user: M
 
 function UserForm({ user, outlets, outletsLoading, outletsError, reloadOutlets, onSubmit }: { user: ManagedUser; outlets: Outlet[]; outletsLoading: boolean; outletsError: string; reloadOutlets: () => void; onSubmit: (e: FormEvent<HTMLFormElement>) => void }) {
   const selected = (user.outlets || []).map(x => x.outlet.id);
+  const [role, setRole] = useState<ManagedUser['role']>(user.role || 'CASHIER');
+  const initialPermissions = user.id ? (user.inventoryPermissions || []) : (role === 'CASHIER' ? [] : allInventoryPermissionKeys);
+  const [selectedPermissions, setSelectedPermissions] = useState<string[]>(initialPermissions);
+  const viewEnabled = selectedPermissions.includes('inventory.view');
+  function setPermission(key: string, checked: boolean) {
+    setSelectedPermissions(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(key); else next.delete(key);
+      if (key === 'inventory.view' && !checked) allInventoryPermissionKeys.forEach(k => next.delete(k));
+      if (key !== 'inventory.view' && checked) next.add('inventory.view');
+      return [...next];
+    });
+  }
+  function changeRole(nextRole: ManagedUser['role']) {
+    setRole(nextRole);
+    if (nextRole === 'OWNER' || nextRole === 'SUPERVISOR') setSelectedPermissions(allInventoryPermissionKeys);
+    if (nextRole === 'CASHIER' && !user.id) setSelectedPermissions([]);
+  }
   return <form onSubmit={onSubmit}>
     <Field name="name" label="Name" defaultValue={user.name} required />
     <Field name="username" label="Username" defaultValue={user.username} required minLength={3} />
@@ -206,23 +240,43 @@ function UserForm({ user, outlets, outletsLoading, outletsError, reloadOutlets, 
     <Field name="confirmPassword" label="Confirm Password" type="password" required={!user.id} minLength={8} />
     <Field name="pin" label="PIN optional" inputMode="numeric" pattern="[0-9]*" />
     <label className="label">Role</label>
-    <select className="input mb-3" name="role" defaultValue={user.role || 'CASHIER'}><option>OWNER</option><option>SUPERVISOR</option><option>CASHIER</option></select>
+    <select className="input mb-3" name="role" value={role} onChange={e => changeRole(e.target.value as ManagedUser['role'])}><option>OWNER</option><option>SUPERVISOR</option><option>CASHIER</option></select>
     <label className="label">Status</label>
     <select className="input mb-3" name="status" defaultValue={user.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select>
-    <OutletChecks outlets={outlets} selected={selected} loading={outletsLoading} error={outletsError} reload={reloadOutlets} />
-    <p className="mt-2 text-xs text-slate-400">OWNER otomatis bisa akses semua outlet. Supervisor/kasir minimal pilih 1 outlet.</p>
+    <OutletChecks outlets={outlets} selected={selected} loading={outletsLoading} error={outletsError} reload={reloadOutlets} single={role === 'CASHIER'} />
+    <p className="mt-2 text-xs text-slate-400">OWNER otomatis bisa akses semua outlet. Supervisor bisa multi outlet. Cashier hanya 1 outlet.</p>
+    <section className="mt-4 rounded-2xl border p-3">
+      <b className="mb-3 block text-sm">Inventory Permission</b>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {inventoryPermissions.map(([key, label]) => {
+          const disabled = key !== 'inventory.view' && !viewEnabled;
+          return <label key={key} className={`flex items-center gap-2 rounded-xl p-3 text-sm ${disabled ? 'bg-slate-50 text-slate-400' : 'bg-brand-50 text-slate-700'}`}>
+            <input
+              type="checkbox"
+              name="inventoryPermissions"
+              value={key}
+              checked={selectedPermissions.includes(key)}
+              disabled={disabled}
+              onChange={e => setPermission(key, e.target.checked)}
+            />
+            {label}
+          </label>;
+        })}
+      </div>
+      <p className="mt-2 text-xs text-slate-400">Jika View Inventory OFF, permission Inventory lainnya otomatis nonaktif.</p>
+    </section>
     <button className="btn-primary mt-5 w-full">Simpan User</button>
   </form>;
 }
 
-function OutletChecks({ outlets, selected, loading, error, reload }: { outlets: Outlet[]; selected: string[]; loading?: boolean; error?: string; reload?: () => void }) {
+function OutletChecks({ outlets, selected, loading, error, reload, single }: { outlets: Outlet[]; selected: string[]; loading?: boolean; error?: string; reload?: () => void; single?: boolean }) {
   return <div className="mt-3 rounded-2xl border p-3">
     <b className="mb-2 block text-sm">Assigned Outlets</b>
     {loading ? <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">Memuat outlet...</div> : error ? <div className="rounded-xl bg-red-50 p-3 text-sm text-red-700">
       <p className="font-semibold">Outlet gagal dimuat.</p>
       <p className="mt-1">{error}</p>
       {reload && <button type="button" onClick={reload} className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-bold text-red-700 ring-1 ring-red-200">Muat ulang outlet</button>}
-    </div> : outlets.length ? <div className="grid gap-2 sm:grid-cols-2">{outlets.map(outlet => <label key={outlet.id} className="flex items-center gap-2 rounded-xl bg-slate-50 p-3 text-sm"><input type="checkbox" name="outletIds" value={outlet.id} defaultChecked={selected.includes(outlet.id)} />{outlet.name}</label>)}</div> : <div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
+    </div> : outlets.length ? <div className="grid gap-2 sm:grid-cols-2">{outlets.map(outlet => <label key={outlet.id} className="flex items-center gap-2 rounded-xl bg-slate-50 p-3 text-sm"><input type={single ? 'radio' : 'checkbox'} name="outletIds" value={outlet.id} defaultChecked={selected.includes(outlet.id)} />{outlet.name}</label>)}</div> : <div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
       <p className="font-semibold">Belum ada outlet aktif.</p>
       <p className="mt-1">Buat atau seed outlet terlebih dahulu, lalu klik muat ulang.</p>
       {reload && <button type="button" onClick={reload} className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-bold text-amber-800 ring-1 ring-amber-200">Muat ulang outlet</button>}

@@ -14,6 +14,7 @@ export type User = {
   name: string;
   role: 'OWNER' | 'SUPERVISOR' | 'CASHIER';
   outletIds: string[];
+  inventoryPermissions?: string[];
 };
 
 export async function api<T = any>(path: string, options: RequestInit = {}) {

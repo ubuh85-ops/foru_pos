@@ -4,6 +4,7 @@ import { Check, LayoutGrid, List, Minus, Plus, Power, Printer, Search, ShoppingB
 import { api, rupiah } from '../api';
 import { printWithBluetoothFallback } from '../printer';
 import { subscribeMasterDataChanged } from '../masterEvents';
+import { toast } from '../toast';
 import foruLogo from '/images/foru.png';
 
 type Option = { id: string; name: string; additionalPrice: number; hpp: number };
@@ -44,6 +45,7 @@ export default function POS() {
   const [receipt, setReceipt] = useState<any>(null);
   const [activeShift, setActiveShift] = useState<any>(null);
   const [error, setError] = useState('');
+  const [orderSubmitting, setOrderSubmitting] = useState(false);
 
   async function loadProductsForOutlet(outletId = outlet) {
     if (!outletId) return;
@@ -190,7 +192,29 @@ export default function POS() {
   async function applyCoupon() { try { const r = await api<any>('/coupons/validate', { method: 'POST', body: JSON.stringify({ couponCode: coupon, outletId: outlet, items: cart.map(itemPayload) }) }); setCouponDiscount(r.discountAmount); setCouponMsg(`${r.coupon.name} diterapkan`); } catch (e) { setCouponDiscount(0); setCouponMsg((e as Error).message); } }
   const orderPayload = (active?: any) => ({ outletId: outlet, cashSessionId: active?.id, customerName, orderType, tableNumber, orderNote, items: cart.map(itemPayload), transactionDiscount: trxDisc, couponCode: couponDiscount ? coupon : undefined });
   function resetCart() { setCart([]); setCoupon(''); setCouponDiscount(0); setTrxDisc(undefined); setCustomerName(''); setTableNumber(''); setOrderNote(''); }
-  async function saveOrder() { try { const active = await refreshActiveShift(); if (editingOrder) { const result = await api(`/orders/${editingOrder.id}`, { method: 'PUT', body: JSON.stringify(orderPayload(active)) }); navigate(`/orders/${(result as any).id}`); return; } const result = await api('/orders', { method: 'POST', body: JSON.stringify(orderPayload(active)) }); setReceipt(result); resetCart(); } catch (e) { alert((e as Error).message); } }
+  async function saveOrder() {
+    if (orderSubmitting) return;
+    setOrderSubmitting(true);
+    try {
+      const active = await refreshActiveShift();
+      if (editingOrder) {
+        const result = await api(`/orders/${editingOrder.id}`, { method: 'PUT', body: JSON.stringify(orderPayload(active)) });
+        toast.success('Data berhasil disimpan.');
+        navigate(`/orders/${(result as any).id}`);
+        return;
+      }
+      const result = await api('/orders', { method: 'POST', body: JSON.stringify(orderPayload(active)) });
+      setReceipt(result);
+      resetCart();
+      toast.success('Data berhasil disimpan.');
+    } catch (e) {
+      const msg = (e as Error).message;
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setOrderSubmitting(false);
+    }
+  }
 
   return <div className="grid min-h-[calc(100vh-4rem)] min-w-0 max-w-full overflow-x-hidden bg-[#f7f4ec] lg:h-[calc(100vh-4rem)] lg:overflow-hidden lg:grid-cols-[minmax(0,6fr)_minmax(480px,4fr)] 2xl:grid-cols-[minmax(0,1fr)_540px]">
     <section className="flex min-h-0 min-w-0 flex-col p-3 sm:p-4 lg:overflow-hidden lg:p-4 2xl:p-5">
@@ -370,18 +394,18 @@ export default function POS() {
         <div className="space-y-1.5 text-sm"><Row label={`Subtotal (${cart.reduce((s, x) => s + x.qty, 0)} item)`} n={summary.subtotal} /><Row label="Diskon Item" n={-summary.productDiscount} /><Row label="Diskon Transaksi" n={-summary.transactionDiscount} /><Row label="Diskon Kupon" n={-couponDiscount} /><Row label="PPN (0%)" n={0} /></div>
         <div className="mt-3 flex items-end justify-between border-t pt-3"><b className="text-2xl text-ink lg:text-xl">Total</b><strong className="money text-3xl text-brand-700 lg:text-2xl">{rupiah(summary.grand)}</strong></div>
         <div className="mt-4 grid grid-cols-2 gap-3 lg:mt-3">
-          <button disabled={!cart.length || !shiftOpen} onClick={saveOrder} className="h-14 rounded-2xl border border-brand-600 bg-white px-3 text-sm font-black text-brand-700 disabled:opacity-40 lg:h-12">{editingOrder ? 'Update Order' : 'Simpan Draft'}</button>
-          <button disabled={!cart.length || !shiftOpen} onClick={() => setPayOpen(true)} className="btn-primary h-14 rounded-2xl text-lg font-black lg:h-12 lg:text-base">Bayar</button>
+          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={saveOrder} className="h-14 rounded-2xl border border-brand-600 bg-white px-3 text-sm font-black text-brand-700 disabled:opacity-40 lg:h-12">{orderSubmitting ? 'Menyimpan...' : editingOrder ? 'Update Order' : 'Simpan Draft'}</button>
+          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={() => setPayOpen(true)} className="btn-primary h-14 rounded-2xl text-lg font-black lg:h-12 lg:text-base">Bayar</button>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2">
-          <button disabled={!cart.length || !shiftOpen} onClick={saveOrder} className="rounded-2xl border px-2 py-3 text-xs font-extrabold text-slate-600 disabled:opacity-40">Hold Order</button>
+          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={saveOrder} className="rounded-2xl border px-2 py-3 text-xs font-extrabold text-slate-600 disabled:opacity-40">{orderSubmitting ? 'Menyimpan...' : 'Hold Order'}</button>
           <button disabled={!cart.length} onClick={clearCart} className="rounded-2xl border px-2 py-3 text-xs font-extrabold text-red-600 disabled:opacity-40">Clear Cart</button>
         </div>
         {editingOrder && <button onClick={() => navigate(`/orders/${editingOrder.id}`)} className="mt-2 w-full rounded-2xl border px-4 py-3 text-sm font-extrabold text-slate-500">Cancel Edit</button>}
       </div>
     </aside>
     {config && <ConfigProduct product={config} close={() => setConfig(null)} add={addLine} />}
-    {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); const payload = { ...orderPayload(active), customerName: paidCustomerName }; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); if (editingOrder) setEditingOrder(null); } catch (e) { alert((e as Error).message); } }} />}
+    {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); const payload = { ...orderPayload(active), customerName: paidCustomerName }; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); if (editingOrder) setEditingOrder(null); toast.success('Data berhasil disimpan.'); } catch (e) { const msg = (e as Error).message; toast.error(msg); throw e; } }} />}
     {receipt && <Receipt sale={receipt} close={() => setReceipt(null)} />}
   </div>;
 }
@@ -397,11 +421,12 @@ function ConfigProduct({ product, close, add }: { product: Product; close: () =>
 }
 
 function Row({ label, n }: { label: string; n: number }) { return <div className="flex justify-between text-slate-500"><span>{label}</span><span className="money">{rupiah(n)}</span></div>; }
-function Payment({ total, initialCustomerName = '', onClose, onPay }: { total: number; initialCustomerName?: string; onClose: () => void; onPay: (m: string, c: number | undefined, customerName: string) => void }) {
+function Payment({ total, initialCustomerName = '', onClose, onPay }: { total: number; initialCustomerName?: string; onClose: () => void; onPay: (m: string, c: number | undefined, customerName: string) => void | Promise<void> }) {
   const [m, setM] = useState('CASH');
   const [cash, setCash] = useState(0);
   const [customerName, setCustomerName] = useState(initialCustomerName);
   const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const methods = ['CASH', 'QRIS', 'GOFOOD', 'GRABFOOD', 'SHOPEEFOOD', 'VOUCHER'];
   const quickAmounts = [10000, 20000, 50000, 100000];
   const nonCash = m !== 'CASH';
@@ -437,7 +462,7 @@ function Payment({ total, initialCustomerName = '', onClose, onPay }: { total: n
       </>}
       <label className="label">Catatan</label>
       <textarea className="input min-h-20" value={note} onChange={e => setNote(e.target.value)} placeholder="Catatan pembayaran (opsional)" />
-      <button disabled={m === 'CASH' && cash < total} onClick={() => onPay(m, m === 'CASH' ? cash : undefined, customerName)} className="btn-primary mt-5 w-full">Selesaikan Transaksi</button>
+      <button disabled={submitting || (m === 'CASH' && cash < total)} onClick={async () => { if (submitting) return; setSubmitting(true); try { await onPay(m, m === 'CASH' ? cash : undefined, customerName); } finally { setSubmitting(false); } }} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Selesaikan Transaksi'}</button>
     </div>
   </div>;
 }

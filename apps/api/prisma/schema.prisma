@@ -16,6 +16,7 @@ model User {
   role         Role
   status       Status        @default(ACTIVE)
   lastLogin    DateTime?     @map("last_login")
+  inventoryPermissions String[] @default([]) @map("inventory_permissions")
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @updatedAt @map("updated_at")
   sessions     CashSession[]

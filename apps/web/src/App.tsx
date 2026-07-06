@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { BarChart3, ClipboardList, History, Layers3, LogOut, Menu, Percent, Printer, ReceiptText, ShoppingBag, Store, Tag, UserCog, X } from 'lucide-react';
-import type { User } from './api';
+import { api, type User } from './api';
 import Login from './pages/Login';
 import OutletSelect from './pages/OutletSelect';
 import POS from './pages/POS';
@@ -46,9 +46,48 @@ const nav = [
   ['/inventory/alerts', 'Notifikasi Stok', History]
 ] as const;
 
+const inventoryRoutePermissions: Record<string, string> = {
+  '/inventory': 'inventory.report',
+  '/inventory/warehouses': 'inventory.warehouse',
+  '/inventory/items': 'inventory.item_management',
+  '/inventory/stock-in': 'inventory.stock_in',
+  '/inventory/stock-out': 'inventory.stock_out',
+  '/inventory/transfers': 'inventory.transfer',
+  '/inventory/adjustments': 'inventory.adjustment',
+  '/inventory/opname': 'inventory.opname',
+  '/inventory/history': 'inventory.report',
+  '/inventory/alerts': 'inventory.view'
+};
+function hasInventoryPermission(user: User, permission: string) {
+  return user.role === 'OWNER' || (user.inventoryPermissions || []).includes(permission);
+}
+function canSeeInventoryPath(user: User, path: string) {
+  if (!path.startsWith('/inventory')) return true;
+  if (!hasInventoryPermission(user, 'inventory.view')) return false;
+  return hasInventoryPermission(user, inventoryRoutePermissions[path] || 'inventory.view');
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(() => JSON.parse(localStorage.getItem('user') || 'null'));
   useEffect(() => { initSyncService(); }, []);
+  useEffect(() => {
+    if (!localStorage.getItem('token')) return;
+    const refreshUser = () => api<any>('/auth/me').then(me => {
+      if (!me) return;
+      const next: User = { id: me.id, name: me.name, role: me.role, outletIds: me.outletIds || [], inventoryPermissions: me.inventoryPermissions || [] };
+      localStorage.setItem('user', JSON.stringify(next));
+      setUser(next);
+    }).catch(() => {});
+    refreshUser();
+    const onFocus = () => refreshUser();
+    const onVisibility = () => { if (document.visibilityState === 'visible') refreshUser(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
   if (!user) return <Login onLogin={setUser} />;
   return <Routes><Route path="*" element={<Shell user={user} logout={() => { recordLocalAudit('LOGOUT','USER',user.id,{name:user.name}); localStorage.removeItem('token'); localStorage.removeItem('user'); setUser(null); }} />} /></Routes>;
 }
@@ -60,7 +99,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
   const navigate = useNavigate();
   const activeOutletId = localStorage.getItem('outletId') || '';
   const allowed = nav.filter(([p]) => {
-    if (user.role === 'CASHIER' && p.startsWith('/inventory')) return false;
+    if (!canSeeInventoryPath(user, p)) return false;
     return user.role === 'OWNER' || !['/coupons', '/outlets', '/categories', '/variant-groups', '/printers', '/users'].includes(p);
   });
   function toggleSidebar() { setSidebarHidden(v => { localStorage.setItem('foru:sidebar_hidden', v ? '0' : '1'); return !v; }); }
@@ -70,7 +109,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
     }
   }, [loc.pathname, navigate]);
   useEffect(() => {
-    if (!['OWNER', 'SUPERVISOR'].includes(user.role)) return;
+    if (!hasInventoryPermission(user, 'inventory.view')) return;
     const run = () => checkInventoryStockAlerts().catch(() => {});
     run();
     const timer = window.setInterval(run, 30 * 60 * 1000);
@@ -130,7 +169,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
         <Route path="/products" element={<ProductPage />} />
         <Route path="/outlets" element={user.role === 'OWNER' ? <Outlets /> : <Navigate to="/pos" />} />
         <Route path="/reports" element={<ReportsPage />} />
-        <Route path="/inventory/*" element={user.role === 'OWNER' || user.role === 'SUPERVISOR' ? <InventoryPage /> : <Navigate to="/pos" />} />
+        <Route path="/inventory/*" element={hasInventoryPermission(user, 'inventory.view') ? <InventoryPage user={user} /> : <Navigate to="/pos" />} />
         <Route path="/receipt/:saleId" element={<ReceiptPrint />} />
         <Route path="/kitchen-ticket/:saleId" element={<KitchenTicketPrint />} />
         <Route path="/customer-item-list/:saleId" element={<CustomerItemListPrint />} />

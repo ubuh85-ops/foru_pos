@@ -1,5 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
-import { api, dt, rupiah } from './api';
+import { api, dt } from './api';
 
 export type PrintDocType = 'customer-receipt' | 'kitchen-ticket' | 'customer-item-list' | 'shift-close-report';
 
@@ -17,6 +17,24 @@ const outletNameOf = (doc: any) => doc.outlet?.name || '-';
 const cashierNameOf = (doc: any) => doc.cashier?.name || '-';
 const docNumberOf = (doc: any) => doc.transactionNumber || doc.orderNumber || '-';
 const customerNameOf = (doc: any) => doc.customerName || 'Walk In';
+
+export function printMoney(n: any) {
+  const raw = Math.round(Number(n || 0));
+  const sign = raw < 0 ? '-' : '';
+  const digits = String(Math.abs(raw)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return `${sign}Rp ${digits}`;
+}
+
+function thermalSafe(text: string) {
+  return String(text || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9 .:\-\n]/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .split('\n')
+    .map(line => line.trimEnd())
+    .join('\n');
+}
 
 function pad(text: string, len: number) {
   const s = String(text ?? '');
@@ -69,18 +87,18 @@ function buildItemLine(item: any, width: number, showAmount: boolean) {
   const qty = value(item.qty);
   const title = `${qty}x ${item.productName || item.name || 'Item'}`;
   if (showAmount) {
-    const amount = rupiah(itemSubtotal(item));
+    const amount = printMoney(itemSubtotal(item));
     const rightWidth = Math.min(12, amount.length);
     lines.push(pad(title, width - rightWidth) + right(amount, rightWidth));
   } else {
     lines.push(title);
   }
   if (item.variantName || item.variant) lines.push(`  ${item.variantName || item.variant}`);
-  if (Array.isArray(item.addons)) item.addons.forEach((a: any) => lines.push(`  + ${a.addonName || a.name}`));
+  if (Array.isArray(item.addons)) item.addons.forEach((a: any) => lines.push(`  Addon ${a.addonName || a.name}`));
   const selected = item.selectedVariantsJson;
-  if (Array.isArray(selected)) selected.forEach((v: any) => v?.optionName && lines.push(`  + ${v.optionName}`));
+  if (Array.isArray(selected)) selected.forEach((v: any) => v?.optionName && lines.push(`  Varian ${v.optionName}`));
   if (item.itemNote) wrap(`NOTE: ${String(item.itemNote).toUpperCase()}`, width - 2).forEach(line => lines.push(`  ${line}`));
-  if (!showAmount) lines.push(`  @ ${rupiah(itemUnitPrice(item))}`);
+  if (!showAmount) lines.push(`  Harga ${printMoney(itemUnitPrice(item))}`);
   return lines;
 }
 
@@ -97,14 +115,14 @@ function receiptText(doc: any, width: number) {
     line,
     ...(doc.items || []).flatMap((item: any) => buildItemLine(item, width, true)),
     line,
-    pair('Subtotal', rupiah(value(doc.subtotalBeforeDiscount)), width),
-    pair('Diskon produk', rupiah(-value(doc.productDiscountTotal)), width),
-    pair('Diskon transaksi', rupiah(-value(doc.transactionDiscountAmount)), width),
-    pair('Diskon kupon', rupiah(-value(doc.couponDiscountAmount)), width),
-    pair('TOTAL', rupiah(value(doc.grandTotal)), width),
+    pair('Subtotal', printMoney(value(doc.subtotalBeforeDiscount)), width),
+    pair('Diskon produk', printMoney(-value(doc.productDiscountTotal)), width),
+    pair('Diskon transaksi', printMoney(-value(doc.transactionDiscountAmount)), width),
+    pair('Diskon kupon', printMoney(-value(doc.couponDiscountAmount)), width),
+    pair('TOTAL', printMoney(value(doc.grandTotal)), width),
     doc.paymentMethod ? `Metode: ${doc.paymentMethod}` : '',
-    doc.cashReceived != null ? pair('Diterima', rupiah(value(doc.cashReceived)), width) : '',
-    doc.changeAmount != null ? pair('Kembali', rupiah(value(doc.changeAmount)), width) : '',
+    doc.cashReceived != null ? pair('Diterima', printMoney(value(doc.cashReceived)), width) : '',
+    doc.changeAmount != null ? pair('Kembali', printMoney(value(doc.changeAmount)), width) : '',
     line,
     center('Terima kasih', width)
   ];
@@ -140,7 +158,7 @@ function customerItemListText(doc: any, width: number) {
     line,
     ...(doc.items || []).flatMap((item: any) => buildItemLine(item, width, true)),
     line,
-    pair('Total sementara', rupiah(value(doc.grandTotal)), width),
+    pair('Total sementara', printMoney(value(doc.grandTotal)), width),
     center('STATUS: BELUM DIBAYAR', width)
   ];
   return lines.filter(Boolean).join('\n');
@@ -164,29 +182,29 @@ function shiftCloseReportText(doc: any, width: number) {
     `Closed: ${doc.closedBy?.name || '-'}`,
     line,
     'CASH SUMMARY',
-    pair('Opening Cash', rupiah(value(cash.openingCash)), width),
-    pair('Cash Sales', rupiah(value(cash.cashSales)), width),
-    pair('Expense Cash', rupiah(value(cash.cashDrawerExpenses)), width),
-    pair('Cash Refund', rupiah(value(cash.cashRefund)), width),
-    pair('Expected Cash', rupiah(value(cash.expectedCash)), width),
-    pair('Actual Cash', rupiah(value(cash.actualCash)), width),
-    pair('Variance', rupiah(value(cash.variance)), width),
+    pair('Opening Cash', printMoney(value(cash.openingCash)), width),
+    pair('Cash Sales', printMoney(value(cash.cashSales)), width),
+    pair('Expense Cash', printMoney(value(cash.cashDrawerExpenses)), width),
+    pair('Cash Refund', printMoney(value(cash.cashRefund)), width),
+    pair('Expected Cash', printMoney(value(cash.expectedCash)), width),
+    pair('Actual Cash', printMoney(value(cash.actualCash)), width),
+    pair('Variance', printMoney(value(cash.variance)), width),
     line,
     'OMSET SUMMARY',
-    pair('Gross Sales', rupiah(value(omset.grossSales)), width),
-    pair('Discount', rupiah(value(omset.discount)), width),
-    pair('Net Sales', rupiah(value(omset.netSales)), width),
-    pair('HPP', rupiah(value(omset.totalHpp)), width),
-    pair('Gross Profit', rupiah(value(omset.grossProfit)), width),
+    pair('Gross Sales', printMoney(value(omset.grossSales)), width),
+    pair('Discount', printMoney(value(omset.discount)), width),
+    pair('Net Sales', printMoney(value(omset.netSales)), width),
+    pair('HPP', printMoney(value(omset.totalHpp)), width),
+    pair('Gross Profit', printMoney(value(omset.grossProfit)), width),
     line,
     'PAYMENT',
-    ...Object.entries(pay).filter(([, v]) => value(v) > 0).map(([k, v]) => pair(k, rupiah(value(v)), width)),
+    ...Object.entries(pay).filter(([, v]) => value(v) > 0).map(([k, v]) => pair(k, printMoney(value(v)), width)),
     line,
     'ITEM SOLD',
-    ...((doc.itemSold || []).length ? (doc.itemSold || []).flatMap((i: any) => [`${i.productName} - ${i.variantName || 'Base'}`, pair(`${i.qty} x`, rupiah(value(i.grossSales)), width)]) : ['-']),
+    ...((doc.itemSold || []).length ? (doc.itemSold || []).flatMap((i: any) => [`${i.productName} - ${i.variantName || 'Base'}`, pair(`${i.qty} x`, printMoney(value(i.grossSales)), width)]) : ['-']),
     line,
     'EXPENSE',
-    ...((doc.expenseDetails || []).length ? (doc.expenseDetails || []).map((e: any) => pair(e.description || e.categoryName, rupiah(value(e.amount)), width)) : ['-']),
+    ...((doc.expenseDetails || []).length ? (doc.expenseDetails || []).map((e: any) => pair(e.description || e.categoryName, printMoney(value(e.amount)), width)) : ['-']),
     line,
     'ORDER SUMMARY',
     pair('Paid', String(order.paidOrder || 0), width),
@@ -200,10 +218,12 @@ function shiftCloseReportText(doc: any, width: number) {
 
 function buildPrintText(doc: any, type: PrintDocType, paperSize = 'MM58') {
   const width = paperSize === 'MM80' ? 48 : 32;
-  if (type === 'shift-close-report') return shiftCloseReportText(doc, width);
-  if (type === 'kitchen-ticket') return kitchenText(doc, width);
-  if (type === 'customer-item-list') return customerItemListText(doc, width);
-  return receiptText(doc, width);
+  const text =
+    type === 'shift-close-report' ? shiftCloseReportText(doc, width) :
+    type === 'kitchen-ticket' ? kitchenText(doc, width) :
+    type === 'customer-item-list' ? customerItemListText(doc, width) :
+    receiptText(doc, width);
+  return thermalSafe(text);
 }
 
 function rememberBluetoothPrinter(printer: any) {
@@ -276,7 +296,7 @@ export async function printShiftCloseReport(report: any) {
     if (isNativeAndroid()) throw e;
   }
   if (isNativeAndroid()) throw new Error('Printer Bluetooth aktif tidak ditemukan untuk laporan shift.');
-  const text = shiftCloseReportText(report, 32);
+  const text = thermalSafe(shiftCloseReportText(report, 32));
   const win = window.open('', '_blank');
   if (!win) throw new Error('Popup print diblokir browser.');
   win.document.write(`<pre style="font-family:monospace;white-space:pre-wrap;font-size:12px">${text.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c] || c))}</pre><script>window.print()</script>`);
