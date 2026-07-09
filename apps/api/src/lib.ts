@@ -27,7 +27,7 @@ export async function auth(req:Request,res:Response,next:NextFunction){
     const outletIds=user.role==='OWNER'
       ? (await prisma.outlet.findMany({where:{status:'ACTIVE'},select:{id:true}})).map(x=>x.id)
       : user.outlets.filter(x=>x.status==='ACTIVE').map(x=>x.outletId);
-    req.user={id:user.id,role:user.role,outletIds,inventoryPermissions:user.inventoryPermissions.length?user.inventoryPermissions:defaultInventoryPermissions(user.role)};
+    req.user={id:user.id,role:user.role,outletIds,inventoryPermissions:user.inventoryPermissions.length?user.inventoryPermissions:defaultInventoryPermissions(user.role),assignedWarehouseId:user.assignedWarehouseId};
     next();
   }
   catch { res.status(401).json({message:'Sesi tidak valid atau telah berakhir'}); }

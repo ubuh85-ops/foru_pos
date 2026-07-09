@@ -3,6 +3,7 @@ import { Edit, KeyRound, Plus, Search, Store, Trash2, UserCog } from 'lucide-rea
 import { api, dt } from '../api';
 
 type Outlet = { id: string; name: string; code?: string };
+type Warehouse = { id: string; name: string; code?: string; outletId?: string | null; outlet?: Outlet | null; status?: string };
 type ManagedUser = {
   id: string;
   name: string;
@@ -11,6 +12,8 @@ type ManagedUser = {
   status: 'ACTIVE' | 'INACTIVE';
   lastLogin?: string | null;
   inventoryPermissions?: string[];
+  assignedWarehouseId?: string | null;
+  assignedWarehouse?: Warehouse | null;
   outlets?: { outlet: Outlet; status?: string }[];
 };
 
@@ -33,6 +36,7 @@ const Err = ({ v }: { v: string }) => v ? <div className="mb-4 rounded-xl bg-red
 export default function UserManagementPage() {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [edit, setEdit] = useState<ManagedUser | null>(null);
   const [assign, setAssign] = useState<ManagedUser | null>(null);
   const [reset, setReset] = useState<ManagedUser | null>(null);
@@ -68,8 +72,11 @@ export default function UserManagementPage() {
       })
       .finally(() => setOutletsLoading(false));
   }
+  function loadWarehouses() {
+    api<Warehouse[]>('/warehouses?status=ACTIVE').then(rows => setWarehouses(rows)).catch(() => setWarehouses([]));
+  }
 
-  useEffect(() => { loadOutlets(); }, []);
+  useEffect(() => { loadOutlets(); loadWarehouses(); }, []);
   useEffect(() => { load(); }, [query]);
 
   async function saveUser(e: FormEvent<HTMLFormElement>) {
@@ -88,6 +95,7 @@ export default function UserManagementPage() {
         status: f.get('status'),
         outletIds: f.getAll('outletIds'),
         inventoryPermissions: f.getAll('inventoryPermissions'),
+        assignedWarehouseId: String(f.get('assignedWarehouseId') || '') || null,
       };
       await api(edit.id ? `/users/${edit.id}` : '/users', { method: edit.id ? 'PUT' : 'POST', body: JSON.stringify(body) });
       setEdit(null);
@@ -162,8 +170,8 @@ export default function UserManagementPage() {
 
     <div className="hidden overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5 lg:block">
       <table className="w-full text-left text-sm">
-        <thead className="bg-slate-50 text-slate-500"><tr><th className="p-4">Name</th><th>Username</th><th>Role</th><th>Assigned Outlets</th><th>Status</th><th>Last Login</th><th className="p-4 text-right">Actions</th></tr></thead>
-        <tbody>{users.map(user => <tr className="border-t" key={user.id}><td className="p-4 font-bold">{user.name}</td><td>{user.username}</td><td><span className="pill bg-slate-100">{user.role}</span></td><td>{outletText(user)}</td><td><span className={`pill ${user.status === 'ACTIVE' ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500'}`}>{user.status}</span></td><td>{user.lastLogin ? dt(user.lastLogin) : '-'}</td><td className="p-4"><Actions user={user} edit={setEdit} reset={setReset} assign={setAssign} setStatus={setUserStatus} softDelete={softDelete} /></td></tr>)}</tbody>
+        <thead className="bg-slate-50 text-slate-500"><tr><th className="p-4">Name</th><th>Username</th><th>Role</th><th>Assigned Outlets</th><th>Warehouse</th><th>Status</th><th>Last Login</th><th className="p-4 text-right">Actions</th></tr></thead>
+        <tbody>{users.map(user => <tr className="border-t" key={user.id}><td className="p-4 font-bold">{user.name}</td><td>{user.username}</td><td><span className="pill bg-slate-100">{user.role}</span></td><td>{outletText(user)}</td><td>{warehouseText(user)}</td><td><span className={`pill ${user.status === 'ACTIVE' ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500'}`}>{user.status}</span></td><td>{user.lastLogin ? dt(user.lastLogin) : '-'}</td><td className="p-4"><Actions user={user} edit={setEdit} reset={setReset} assign={setAssign} setStatus={setUserStatus} softDelete={softDelete} /></td></tr>)}</tbody>
       </table>
     </div>
 
@@ -172,13 +180,14 @@ export default function UserManagementPage() {
         <div className="mb-3 flex items-start justify-between gap-2"><div><h3 className="text-lg font-black">{user.name}</h3><p className="text-sm text-slate-400">@{user.username}</p></div><span className={`pill ${user.status === 'ACTIVE' ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500'}`}>{user.status}</span></div>
         <p className="text-sm"><b>Role:</b> {user.role}</p>
         <p className="mt-1 text-sm"><b>Outlet:</b> {outletText(user)}</p>
+        <p className="mt-1 text-sm"><b>Warehouse:</b> {warehouseText(user)}</p>
         <p className="mt-1 text-sm text-slate-500">Last Login: {user.lastLogin ? dt(user.lastLogin) : '-'}</p>
         <div className="mt-3"><Actions user={user} edit={setEdit} reset={setReset} assign={setAssign} setStatus={setUserStatus} softDelete={softDelete} /></div>
       </article>)}
     </div>
 
     {edit && <Modal title={edit.id ? 'Edit User' : 'Tambah User'} close={() => setEdit(null)}>
-      <UserForm user={edit} outlets={outlets} outletsLoading={outletsLoading} outletsError={outletsError} reloadOutlets={loadOutlets} onSubmit={saveUser} />
+      <UserForm user={edit} outlets={outlets} warehouses={warehouses} outletsLoading={outletsLoading} outletsError={outletsError} reloadOutlets={loadOutlets} onSubmit={saveUser} />
     </Modal>}
     {reset && <Modal title={`Reset Password - ${reset.name}`} close={() => setReset(null)}>
       <form onSubmit={resetPassword}>
@@ -203,6 +212,11 @@ function outletText(user: ManagedUser) {
   return names.length ? names.join(', ') : '-';
 }
 
+function warehouseText(user: ManagedUser) {
+  if (user.role !== 'CASHIER') return '-';
+  return user.assignedWarehouse?.name || 'Ikuti outlet';
+}
+
 function Actions({ user, edit, reset, assign, setStatus, softDelete }: { user: ManagedUser; edit: (u: ManagedUser) => void; reset: (u: ManagedUser) => void; assign: (u: ManagedUser) => void; setStatus: (u: ManagedUser, s: 'ACTIVE' | 'INACTIVE') => void; softDelete: (u: ManagedUser) => void }) {
   return <div className="flex flex-wrap justify-end gap-2">
     <button onClick={() => edit(user)} className="rounded-xl border px-3 py-2 text-xs font-bold text-brand-700"><Edit size={14} className="inline" /> Edit</button>
@@ -213,7 +227,7 @@ function Actions({ user, edit, reset, assign, setStatus, softDelete }: { user: M
   </div>;
 }
 
-function UserForm({ user, outlets, outletsLoading, outletsError, reloadOutlets, onSubmit }: { user: ManagedUser; outlets: Outlet[]; outletsLoading: boolean; outletsError: string; reloadOutlets: () => void; onSubmit: (e: FormEvent<HTMLFormElement>) => void }) {
+function UserForm({ user, outlets, warehouses, outletsLoading, outletsError, reloadOutlets, onSubmit }: { user: ManagedUser; outlets: Outlet[]; warehouses: Warehouse[]; outletsLoading: boolean; outletsError: string; reloadOutlets: () => void; onSubmit: (e: FormEvent<HTMLFormElement>) => void }) {
   const selected = (user.outlets || []).map(x => x.outlet.id);
   const [role, setRole] = useState<ManagedUser['role']>(user.role || 'CASHIER');
   const initialPermissions = user.id ? (user.inventoryPermissions || []) : (role === 'CASHIER' ? [] : allInventoryPermissionKeys);
@@ -245,6 +259,14 @@ function UserForm({ user, outlets, outletsLoading, outletsError, reloadOutlets, 
     <select className="input mb-3" name="status" defaultValue={user.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select>
     <OutletChecks outlets={outlets} selected={selected} loading={outletsLoading} error={outletsError} reload={reloadOutlets} single={role === 'CASHIER'} />
     <p className="mt-2 text-xs text-slate-400">OWNER otomatis bisa akses semua outlet. Supervisor bisa multi outlet. Cashier hanya 1 outlet.</p>
+    {role === 'CASHIER' && <section className="mt-4 rounded-2xl border p-3">
+      <b className="mb-2 block text-sm">Assigned Warehouse</b>
+      <select className="input" name="assignedWarehouseId" defaultValue={user.assignedWarehouseId || ''}>
+        <option value="">Ikuti outlet kasir / belum diassign</option>
+        {warehouses.map(w => <option key={w.id} value={w.id}>{w.name} {w.outlet?.name ? `- ${w.outlet.name}` : ''}</option>)}
+      </select>
+      <p className="mt-2 text-xs text-slate-400">Opsional. Jika dipilih, kasir hanya bisa mengakses stok di warehouse ini.</p>
+    </section>}
     <section className="mt-4 rounded-2xl border p-3">
       <b className="mb-3 block text-sm">Inventory Permission</b>
       <div className="grid gap-2 sm:grid-cols-2">
@@ -296,3 +318,4 @@ function Modal({ title, close, children }: { title: string; close: () => void; c
     </div>
   </div>;
 }
+

@@ -100,7 +100,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
   const activeOutletId = localStorage.getItem('outletId') || '';
   const allowed = nav.filter(([p]) => {
     if (!canSeeInventoryPath(user, p)) return false;
-    return user.role === 'OWNER' || !['/coupons', '/outlets', '/categories', '/variant-groups', '/printers', '/users'].includes(p);
+    return user.role === 'OWNER' || !['/coupons', '/outlets', '/categories', '/variant-groups', '/printers', '/users', '/reports'].includes(p);
   });
   function toggleSidebar() { setSidebarHidden(v => { localStorage.setItem('foru:sidebar_hidden', v ? '0' : '1'); return !v; }); }
   useEffect(() => {
@@ -168,7 +168,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
         <Route path="/users" element={user.role === 'OWNER' ? <UserManagementPage /> : <Navigate to="/pos" />} />
         <Route path="/products" element={<ProductPage />} />
         <Route path="/outlets" element={user.role === 'OWNER' ? <Outlets /> : <Navigate to="/pos" />} />
-        <Route path="/reports" element={<ReportsPage />} />
+        <Route path="/reports" element={user.role === 'OWNER' ? <ReportsPage /> : <Navigate to="/pos" />} />
         <Route path="/inventory/*" element={hasInventoryPermission(user, 'inventory.view') ? <InventoryPage user={user} /> : <Navigate to="/pos" />} />
         <Route path="/receipt/:saleId" element={<ReceiptPrint />} />
         <Route path="/kitchen-ticket/:saleId" element={<KitchenTicketPrint />} />
