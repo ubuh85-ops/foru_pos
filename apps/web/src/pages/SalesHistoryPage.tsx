@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, dt, rupiah } from '../api';
+import { useOutlet } from '../OutletContext';
 
 const Page = ({ children }: { children: any }) => <div className="p-4 lg:p-8">{children}</div>;
 const today = () => new Date().toLocaleDateString('en-CA');
 
 export default function SalesHistoryPage() {
-  const outletId = localStorage.getItem('outletId') || '';
+  const { selectedOutletId: outletId } = useOutlet();
   const [data, setData] = useState<any[]>([]);
   const [date, setDate] = useState(today());
   const [error, setError] = useState('');

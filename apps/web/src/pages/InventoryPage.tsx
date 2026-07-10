@@ -5,6 +5,7 @@ import { api, dt, rupiah, type User } from '../api';
 import { checkInventoryStockAlerts, requestInventoryNotificationPermission } from '../inventoryAlerts';
 import { scanInventoryBarcode } from '../barcodeScanner';
 import { toast } from '../toast';
+import { useOutlet } from '../OutletContext';
 
 type Category = { id: string; name: string; status: string };
 type Unit = { id: string; name: string; status: string };
@@ -53,6 +54,7 @@ const n = (v: any) => Number(v || 0);
 
 export default function InventoryPage({ user }: { user: User }) {
   const loc = useLocation();
+  const { selectedOutletId } = useOutlet();
   const [items, setItems] = useState<Item[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
@@ -74,11 +76,13 @@ export default function InventoryPage({ user }: { user: User }) {
   const canAccessCurrent = canOpenInventoryPath(user, normalizedPath);
   const canManageItems = hasInv(user, 'inventory.item_management');
   const visibleTabs = tabs.filter(([path]) => canOpenInventoryPath(user, path));
+  const selectedOutletWarehouse = useMemo(() => warehouses.find(w => w.outletId === selectedOutletId), [selectedOutletId, warehouses]);
 
   async function loadLookups() {
     const [nextCategories, nextUnits, nextWarehouses] = await Promise.all([api<Category[]>('/inventory/categories'), api<Unit[]>('/inventory/units'), api<InvWarehouse[]>('/inventory/warehouses?status=ACTIVE')]);
     setCategories(nextCategories); setUnits(nextUnits); setWarehouses(nextWarehouses);
-    setWarehouseId(old => nextWarehouses.some(w => w.id === old) ? old : nextWarehouses[0]?.id || '');
+    const outletWarehouse = nextWarehouses.find(w => w.outletId === selectedOutletId);
+    setWarehouseId(old => outletWarehouse?.id || (nextWarehouses.some(w => w.id === old) ? old : nextWarehouses[0]?.id || ''));
     return { categories: nextCategories, units: nextUnits, warehouses: nextWarehouses };
   }
   function loadItems() {
@@ -111,6 +115,9 @@ export default function InventoryPage({ user }: { user: User }) {
     if (mode === 'history') loadHistory().catch(e => setError(e.message));
     if (mode === 'transfers') loadTransfers().catch(e => setError(e.message));
   }, [canAccessCurrent, mode, period, warehouseId]);
+  useEffect(() => {
+    if (selectedOutletWarehouse && selectedOutletWarehouse.id !== warehouseId) setWarehouseId(selectedOutletWarehouse.id);
+  }, [selectedOutletWarehouse, warehouseId]);
 
   const activeItems = useMemo(() => items.filter(i => i.status === 'ACTIVE'), [items]);
   const warehouseItems = useMemo(() => {
@@ -198,7 +205,7 @@ export default function InventoryPage({ user }: { user: User }) {
   return <div className="p-4 lg:p-8">
     <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
       <div><h2 className="text-3xl font-black">Inventory</h2><p className="text-slate-500">Manajemen stok manual. Belum terhubung dengan transaksi POS.</p></div>
-      <div className="flex gap-2 overflow-x-auto">{visibleTabs.map(([path, label]) => <Link key={path} to={path} className={`shrink-0 rounded-full px-4 py-2 text-sm font-black ${loc.pathname === path || (path === '/inventory' && loc.pathname === '/inventory/dashboard') ? 'bg-ink text-white' : 'bg-white text-slate-600'}`}>{label}</Link>)}</div>
+      <div className="flex gap-2 overflow-x-auto">{visibleTabs.map(([path, label]) => <Link key={path} to={path} className={`shrink-0 rounded-full px-4 py-2 text-sm font-black ${loc.pathname === path || (path === '/inventory' && loc.pathname === '/inventory/dashboard') ? 'bg-brand-500 text-white' : 'bg-white text-slate-600'}`}>{label}</Link>)}</div>
     </div>
     {error && <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</div>}
     {!canAccessCurrent && <div className="rounded-3xl bg-white p-8 text-center text-slate-500 shadow-sm ring-1 ring-black/5">Anda tidak memiliki akses ke menu ini.</div>}

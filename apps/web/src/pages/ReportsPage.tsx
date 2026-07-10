@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BarChart3, CalendarDays, Filter, Layers3, PackageSearch, Percent, ReceiptText, TrendingUp } from 'lucide-react';
 import { api, rupiah } from '../api';
+import { useOutlet } from '../OutletContext';
 
 const Page = ({ children }: { children: any }) => <div className="p-4 lg:p-8">{children}</div>;
 const today = () => new Date().toLocaleDateString('en-CA');
@@ -26,7 +27,7 @@ function money(n: any) { return rupiah(Number(n || 0)); }
 function pct(n: any) { return `${Number(n || 0).toLocaleString('id-ID', { maximumFractionDigits: 2 })}%`; }
 
 export default function ReportsPage() {
-  const outletId = localStorage.getItem('outletId') || '';
+  const { selectedOutletId: outletId } = useOutlet();
   const [tab, setTab] = useState<'sales' | 'cogs'>('sales');
   const [quick, setQuick] = useState('today');
   const initial = rangeOf('today');
@@ -109,12 +110,12 @@ export default function ReportsPage() {
         <h2 className="text-4xl font-black tracking-tight text-ink">Reports</h2>
         <p className="mt-1 text-slate-500">Laporan outlet aktif. Hanya transaksi PAID yang dihitung.</p>
       </div>
-      <button onClick={() => setFiltersOpen(v => !v)} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-pink-50 px-5 py-3 font-black text-pink-600 ring-1 ring-pink-100 lg:hidden"><Filter size={20} /> Saring</button>
+      <button onClick={() => setFiltersOpen(v => !v)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-50 px-5 py-3 font-black text-brand-700 ring-1 ring-brand-100 lg:hidden"><Filter size={20} /> Saring</button>
     </div>
 
     <div className="mb-5 flex gap-2 overflow-auto pb-1">
-      <button onClick={() => setTab('sales')} className={`shrink-0 rounded-full px-5 py-3 text-sm font-black ${tab === 'sales' ? 'bg-ink text-white' : 'bg-white text-slate-600 shadow-sm ring-1 ring-black/5'}`}>Laporan Penjualan</button>
-      <button onClick={() => setTab('cogs')} className={`shrink-0 rounded-full px-5 py-3 text-sm font-black ${tab === 'cogs' ? 'bg-ink text-white' : 'bg-white text-slate-600 shadow-sm ring-1 ring-black/5'}`}>Laporan COGS</button>
+      <button onClick={() => setTab('sales')} className={`shrink-0 rounded-full px-5 py-3 text-sm font-black ${tab === 'sales' ? 'bg-brand-500 text-white' : 'bg-white text-slate-600 shadow-sm ring-1 ring-black/5'}`}>Laporan Penjualan</button>
+      <button onClick={() => setTab('cogs')} className={`shrink-0 rounded-full px-5 py-3 text-sm font-black ${tab === 'cogs' ? 'bg-brand-500 text-white' : 'bg-white text-slate-600 shadow-sm ring-1 ring-black/5'}`}>Laporan COGS</button>
     </div>
 
     <div className={`${filtersOpen ? 'block' : 'hidden'} mb-5 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5 lg:block`}>

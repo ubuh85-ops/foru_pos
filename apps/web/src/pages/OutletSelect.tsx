@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Edit3, Eye, Filter, LogOut, Plus, Search, Store } from 'lucide-react';
 import { api, type User } from '../api';
+import { useOutlet } from '../OutletContext';
 
 type Outlet = { id: string; code?: string; name: string; address?: string | null; status?: string };
 
 export default function OutletSelect({ user, logout }: { user: User; logout: () => void }) {
   const navigate = useNavigate();
+  const { setSelectedOutletId } = useOutlet();
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -27,8 +29,7 @@ export default function OutletSelect({ user, logout }: { user: User; logout: () 
 
   async function enter(outlet: Outlet) {
     try {
-      localStorage.setItem('outletId', outlet.id);
-      localStorage.removeItem('foru:must_select_outlet');
+      setSelectedOutletId(outlet.id);
       await api<any>(`/outlets/${outlet.id}/active-shift`).catch(() => null);
       navigate('/pos', { replace: true });
     } catch {
@@ -36,7 +37,7 @@ export default function OutletSelect({ user, logout }: { user: User; logout: () 
     }
   }
 
-  return <div className="min-h-dvh bg-[#f7f4ec] pb-24 text-ink">
+  return <div className="min-h-dvh bg-cream pb-24 text-ink">
     <header className="sticky top-0 z-20 border-b bg-white/90 px-4 py-3 backdrop-blur">
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
         <div className="min-w-0">
@@ -49,7 +50,7 @@ export default function OutletSelect({ user, logout }: { user: User; logout: () 
 
     <main className="mx-auto max-w-5xl px-4 py-4">
       <div className="mb-3 grid grid-cols-3 border-b text-center text-xs font-bold text-slate-400">
-        <span className="border-b-2 border-pink-500 py-3 text-pink-600">Outlet</span>
+        <span className="border-b-2 border-brand-500 py-3 text-brand-700">Outlet</span>
         <span className="py-3">Member Get Member</span>
         <span className="py-3">Central Dashboard</span>
       </div>
@@ -73,9 +74,9 @@ export default function OutletSelect({ user, logout }: { user: User; logout: () 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {!loading && filtered.map(outlet => <article key={outlet.id} className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5">
           <div className="grid place-items-center rounded-2xl bg-slate-50 py-3">
-            <div className="relative grid h-24 w-28 place-items-center rounded-2xl bg-gradient-to-b from-pink-100 to-brand-50">
+            <div className="relative grid h-24 w-28 place-items-center rounded-2xl bg-gradient-to-b from-brand-100 to-brand-50">
               <Store className="text-brand-700" size={44} />
-              <span className="absolute top-2 rounded bg-pink-500 px-2 py-0.5 text-[9px] font-black text-white">STORE</span>
+              <span className="absolute top-2 rounded bg-brand-500 px-2 py-0.5 text-[9px] font-black text-white">STORE</span>
             </div>
           </div>
           <h3 className="mt-4 min-h-10 text-sm font-black leading-snug">{outlet.name}</h3>
@@ -83,7 +84,7 @@ export default function OutletSelect({ user, logout }: { user: User; logout: () 
           <button onClick={() => enter(outlet)} className="mb-2 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-black text-ink hover:bg-brand-50 hover:text-brand-700"><Eye size={16} /> Masuk Ke Outlet</button>
           <div className="grid grid-cols-2 gap-2">
             <button onClick={() => alert(`${outlet.name}\n${outlet.address || '-'}\nStatus: ${outlet.status || 'ACTIVE'}`)} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-bold"><Eye size={15} /> Info</button>
-            <button onClick={() => navigate(user.role === 'OWNER' ? '/outlets' : '/select-outlet')} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-bold text-pink-600"><Edit3 size={15} /> Edit</button>
+            <button onClick={() => navigate(user.role === 'OWNER' ? '/outlets' : '/select-outlet')} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-bold text-brand-700"><Edit3 size={15} /> Edit</button>
           </div>
         </article>)}
       </div>
@@ -92,7 +93,7 @@ export default function OutletSelect({ user, logout }: { user: User; logout: () 
     </main>
 
     {user.role === 'OWNER' && <div className="fixed inset-x-0 bottom-0 z-20 bg-[#f7f4ec]/90 p-4 backdrop-blur">
-      <button onClick={() => navigate('/outlets')} className="mx-auto flex h-14 w-full max-w-5xl items-center justify-center gap-2 rounded-2xl bg-pink-600 font-black text-white shadow-lg shadow-pink-200"><Plus size={20} /> Tambah Outlet</button>
+      <button onClick={() => navigate('/outlets')} className="mx-auto flex h-14 w-full max-w-5xl items-center justify-center gap-2 rounded-xl bg-brand-500 font-black text-white shadow-sm hover:bg-brand-600"><Plus size={20} /> Tambah Outlet</button>
     </div>}
   </div>;
 }

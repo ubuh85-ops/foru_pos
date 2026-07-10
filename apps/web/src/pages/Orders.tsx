@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Check, Clock3, Eye, Filter, MoreHorizontal, UserRound, X } from 'lucide-react';
 import { api, dt, rupiah } from '../api';
 import { printWithBluetoothFallback } from '../printer';
+import { useOutlet } from '../OutletContext';
 
 const Page = ({ children }: { children: any }) => <div className="p-4 lg:p-8">{children}</div>;
 const Loading = () => <div className="p-10 text-center text-slate-400">Memuat data...</div>;
@@ -32,7 +33,7 @@ const zeroSummary = { totalOrders: 0, paidOrders: 0, pendingOrders: 0, cancelled
 
 export function Orders() {
   const tabs = ['PENDING_PAYMENT', 'PAID', 'CANCELLED', 'VOID'];
-  const outletId = localStorage.getItem('outletId') || '';
+  const { selectedOutletId: outletId } = useOutlet();
   const [status, setStatus] = useState('PENDING_PAYMENT');
   const [preset, setPreset] = useState('today');
   const initialRange = datePresetRange('today');

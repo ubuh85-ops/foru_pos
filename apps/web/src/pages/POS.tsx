@@ -6,12 +6,18 @@ import { printWithBluetoothFallback } from '../printer';
 import { subscribeMasterDataChanged } from '../masterEvents';
 import { toast } from '../toast';
 import foruLogo from '/images/foru.png';
+import { useOutlet } from '../OutletContext';
+import { ConfirmDialog, DiscountDialog, TextInputDialog, type DiscountKind, type ForuDialogTone } from '../components/ForuDialog';
 
 type Option = { id: string; name: string; additionalPrice: number; hpp: number };
 type Group = { id: string; name: string; minSelect: number; maxSelect: number; required: boolean; options: Option[] };
 type Variant = { id: string; variantName: string; sellingPrice: number };
 type Product = { id: string; name: string; category: string; categoryRef?: { name: string }; basePrice: number; baseHpp: number; imageUrl?: string; variants: Variant[]; variantGroups: { group: Group }[] };
 type Line = { key: string; productId: string; variantId?: string; selectedVariantOptionIds?: string[]; name: string; variant: string; price: number; qty: number; itemNote?: string; discount?: { type: 'NOMINAL' | 'PERCENTAGE'; value: number } };
+type PosDialog =
+  | { kind: 'confirm'; tone?: ForuDialogTone; title: string; description?: string; detail?: string; cancelText?: string; confirmText?: string; resolve: (value: boolean) => void }
+  | { kind: 'text'; title: string; description?: string; label: string; defaultValue?: string; placeholder?: string; resolve: (value: string | null) => void }
+  | { kind: 'discount'; title: string; description?: string; initialType?: DiscountKind; initialValue?: number; resolve: (value: { type: DiscountKind; value: number } | null) => void };
 
 const calcDisc = (base: number, d?: Line['discount']) => !d ? 0 : Math.min(base, d.type === 'PERCENTAGE' ? base * d.value / 100 : d.value);
 const catName = (p: Product) => p.categoryRef?.name || p.category;
@@ -21,8 +27,7 @@ export default function POS() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const editOrderId = params.get('editOrderId');
-  const [outlets, setOutlets] = useState<any[]>([]);
-  const [outlet, setOutlet] = useState(localStorage.getItem('outletId') || '');
+  const { selectedOutletId: outlet, setSelectedOutletId } = useOutlet();
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<Line[]>([]);
   const [config, setConfig] = useState<Product | null>(null);
@@ -46,6 +51,19 @@ export default function POS() {
   const [activeShift, setActiveShift] = useState<any>(null);
   const [error, setError] = useState('');
   const [orderSubmitting, setOrderSubmitting] = useState(false);
+  const [dialog, setDialog] = useState<PosDialog | null>(null);
+
+  function askConfirm(options: Omit<Extract<PosDialog, { kind: 'confirm' }>, 'kind' | 'resolve'>) {
+    return new Promise<boolean>(resolve => setDialog({ kind: 'confirm', ...options, resolve }));
+  }
+
+  function askText(options: Omit<Extract<PosDialog, { kind: 'text' }>, 'kind' | 'resolve'>) {
+    return new Promise<string | null>(resolve => setDialog({ kind: 'text', ...options, resolve }));
+  }
+
+  function askDiscount(options: Omit<Extract<PosDialog, { kind: 'discount' }>, 'kind' | 'resolve'>) {
+    return new Promise<{ type: DiscountKind; value: number } | null>(resolve => setDialog({ kind: 'discount', ...options, resolve }));
+  }
 
   async function loadProductsForOutlet(outletId = outlet) {
     if (!outletId) return;
@@ -77,7 +95,6 @@ export default function POS() {
     }
   }
 
-  useEffect(() => { api<any[]>('/outlets').then(x => { setOutlets(x); if (!outlet && x[0]) setOutlet(x[0].id); }); }, []);
   useEffect(() => { refreshActiveShift(); }, []);
   useEffect(() => {
     const refreshWhenActive = () => { refreshActiveShift(); loadProductsForOutlet(); };
@@ -91,7 +108,7 @@ export default function POS() {
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
   }, [outlet]);
-  useEffect(() => { if (outlet) { localStorage.setItem('outletId', outlet); loadProductsForOutlet(outlet); refreshActiveShift(); setCouponDiscount(0); } }, [outlet]);
+  useEffect(() => { if (outlet) { loadProductsForOutlet(outlet); refreshActiveShift(); setCouponDiscount(0); } }, [outlet]);
   useEffect(() => subscribeMasterDataChanged(() => { if (!outlet) return; loadProductsForOutlet(outlet); }), [outlet]);
   useEffect(() => { setPage(1); }, [q, cat, pageSize]);
   useEffect(() => {
@@ -117,7 +134,7 @@ export default function POS() {
     api<any>(`/orders/${editOrderId}`).then(order => {
       if (order.status !== 'PENDING_PAYMENT') throw new Error('Order sudah tidak bisa diedit karena status berubah.');
       setEditingOrder(order);
-      setOutlet(order.outletId);
+      setSelectedOutletId(order.outletId);
       setCustomerName(order.customerName || '');
       setCoupon(order.couponCode || '');
       setCouponDiscount(Number(order.couponDiscountAmount || 0));
@@ -138,7 +155,7 @@ export default function POS() {
         } as Line;
       }));
     }).catch(e => setError((e as Error).message));
-  }, [editOrderId]);
+  }, [editOrderId, setSelectedOutletId]);
   useEffect(() => {
     if (!config && !payOpen && !receipt) return;
     history.pushState({ ...(history.state || {}), foruPosWindow: true }, '', location.href);
@@ -161,7 +178,6 @@ export default function POS() {
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedProducts = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const selectedOutlet = outlets.find(o => o.id === outlet);
   const summary = useMemo(() => {
     const subtotal = cart.reduce((s, x) => s + x.price * x.qty, 0);
     const productDiscount = cart.reduce((s, x) => s + calcDisc(x.price * x.qty, x.discount), 0);
@@ -174,21 +190,70 @@ export default function POS() {
 
   function changeMenuView(view: 'grid' | 'list') { setMenuView(view); localStorage.setItem('foru:pos_menu_view', view); }
   function changePageSize(size: number) { setPageSize(size); setPage(1); localStorage.setItem('foru:pos_page_size', String(size)); }
-  function addLine(line: Line) { if (!shiftOpen) return alert('Shift belum dibuka. Silakan buka kasir terlebih dahulu.'); setCart(c => { const i = c.findIndex(x => x.key === line.key && !x.discount && !x.itemNote); return i < 0 ? [...c, line] : c.map((x, j) => j === i ? { ...x, qty: x.qty + 1 } : x); }); setCouponDiscount(0); }
+  function addLine(line: Line) { if (!shiftOpen) { toast.error('Shift belum dibuka. Silakan buka kasir terlebih dahulu.'); return; } setCart(c => { const i = c.findIndex(x => x.key === line.key && !x.discount && !x.itemNote); return i < 0 ? [...c, line] : c.map((x, j) => j === i ? { ...x, qty: x.qty + 1 } : x); }); setCouponDiscount(0); }
   function quickAdd(p: Product) { if (!shiftOpen) return; if (p.variantGroups?.length) return setConfig(p); const v = p.variants[0]; const price = v && v.variantName !== 'Base' ? Number(v.sellingPrice) : Number(p.basePrice || v?.sellingPrice || 0); addLine({ key: v ? `${p.id}:${v.id}` : `${p.id}:base`, productId: p.id, variantId: v?.id, name: p.name, variant: v?.variantName || 'Base', price, qty: 1 }); }
-  function qty(i: number, n: number) {
-    setCart(c => {
-      if (n < 1) {
-        if (!confirm('Hapus item?')) return c;
-        return c.filter((_, j) => j !== i);
-      }
-      return c.map((x, j) => j === i ? { ...x, qty: n } : x);
-    });
+  async function qty(i: number, n: number) {
+    if (n < 1) {
+      const item = cart[i];
+      const ok = await askConfirm({
+        tone: 'danger',
+        title: 'Hapus Item',
+        description: 'Yakin ingin menghapus item ini dari pesanan?',
+        detail: item ? `Item: ${item.name} - ${item.variant || 'Base'}` : undefined,
+        confirmText: 'Hapus'
+      });
+      if (!ok) return;
+      setCart(c => c.filter((_, j) => j !== i));
+      setCouponDiscount(0);
+      return;
+    }
+    setCart(c => c.map((x, j) => j === i ? { ...x, qty: n } : x));
     setCouponDiscount(0);
   }
   function note(i: number, itemNote: string) { setCart(c => c.map((x, j) => j === i ? { ...x, itemNote: itemNote.slice(0, 255) } : x)); }
-  function editItemNote(i: number, current = '') { const value = prompt('Catatan item', current); if (value !== null) note(i, value); }
-  function clearCart() { if (!cart.length) return; if (confirm('Kosongkan cart?')) resetCart(); }
+  async function editItemNote(i: number, current = '') {
+    const value = await askText({
+      title: 'Catatan Item',
+      description: 'Tambahkan instruksi khusus untuk item ini.',
+      label: 'Catatan',
+      defaultValue: current,
+      placeholder: 'Contoh: tanpa bawang, sedikit gula, pedas'
+    });
+    if (value !== null) note(i, value);
+  }
+  async function clearCart() {
+    if (!cart.length) return;
+    const ok = await askConfirm({
+      tone: 'warning',
+      title: 'Batal Transaksi',
+      description: 'Yakin ingin mengosongkan semua pesanan?',
+      detail: 'Data yang sudah diinput tidak dapat dikembalikan.',
+      cancelText: 'Tidak',
+      confirmText: 'Ya, Batalkan'
+    });
+    if (ok) resetCart();
+  }
+  async function applyItemDiscount() {
+    if (!cart.length) return;
+    const discount = await askDiscount({
+      title: 'Diskon Item',
+      description: 'Diskon akan diterapkan ke item terakhir di pesanan',
+      initialType: 'NOMINAL',
+      initialValue: 0
+    });
+    if (!discount) return;
+    setCart(c => c.map((a, j) => j === c.length - 1 ? { ...a, discount, key: a.key + `:disc:${discount.type}:${discount.value}` } : a));
+    setCouponDiscount(0);
+  }
+  async function applyTransactionDiscount() {
+    const discount = await askDiscount({
+      title: 'Diskon Transaksi',
+      description: 'Pilih jenis diskon dan isi nilainya',
+      initialType: trxDisc?.type || 'PERCENTAGE',
+      initialValue: trxDisc?.value || 0
+    });
+    if (discount) setTrxDisc(discount);
+  }
   async function applyCoupon() { try { const r = await api<any>('/coupons/validate', { method: 'POST', body: JSON.stringify({ couponCode: coupon, outletId: outlet, items: cart.map(itemPayload) }) }); setCouponDiscount(r.discountAmount); setCouponMsg(`${r.coupon.name} diterapkan`); } catch (e) { setCouponDiscount(0); setCouponMsg((e as Error).message); } }
   const orderPayload = (active?: any) => ({ outletId: outlet, cashSessionId: active?.id, customerName, orderType, tableNumber, orderNote, items: cart.map(itemPayload), transactionDiscount: trxDisc, couponCode: couponDiscount ? coupon : undefined });
   function resetCart() { setCart([]); setCoupon(''); setCouponDiscount(0); setTrxDisc(undefined); setCustomerName(''); setTableNumber(''); setOrderNote(''); }
@@ -216,31 +281,26 @@ export default function POS() {
     }
   }
 
-  return <div className="grid min-h-[calc(100vh-4rem)] min-w-0 max-w-full overflow-x-hidden bg-[#f7f4ec] lg:h-[calc(100vh-4rem)] lg:overflow-hidden lg:grid-cols-[minmax(0,6fr)_minmax(480px,4fr)] 2xl:grid-cols-[minmax(0,1fr)_540px]">
-    <section className="flex min-h-0 min-w-0 flex-col p-3 sm:p-4 lg:overflow-hidden lg:p-4 2xl:p-5">
+  return <div className="grid min-h-[calc(100vh-4rem)] min-w-0 max-w-full overflow-x-hidden bg-[#f7f4ec] md:h-[calc(100vh-4rem)]  
+  md:overflow-hidden 
+md:grid-cols-[minmax(0,1fr)_320px]
+lg:grid-cols-[minmax(0,1fr)_340px]
+xl:grid-cols-[minmax(0,1fr)_360px]
+2xl:grid-cols-[minmax(0,1fr)_380px]
+  ">
+    <section className="flex min-h-0 min-w-0 flex-col p-3 sm:p-4 md:overflow-hidden md:p-4 2xl:p-5">
       <div className="mb-3 rounded-[2rem] bg-white/95 p-3 shadow-sm ring-1 ring-black/5 sm:p-4">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
 
-          <div className="flex h-12 min-w-0 items-center gap-2 rounded-2xl border bg-white px-4 font-bold text-slate-700 xl:w-56">
-            <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-brand-500" />
-            <span className="truncate">{selectedOutlet?.name || 'Outlet belum dipilih'}</span>
-          </div>
           <div className="flex shrink-0 rounded-2xl bg-slate-100 p-1">
             <button aria-label="Tampilan grid" onClick={() => changeMenuView('grid')} className={`grid h-10 w-10 place-items-center rounded-xl ${menuView === 'grid' ? 'bg-ink text-white shadow-sm' : 'text-slate-500'}`}><LayoutGrid size={18} /></button>
             <button aria-label="Tampilan list" onClick={() => changeMenuView('list')} className={`grid h-10 w-10 place-items-center rounded-xl ${menuView === 'list' ? 'bg-ink text-white shadow-sm' : 'text-slate-500'}`}><List size={19} /></button>
-          </div>
                     <div className="relative min-w-0 flex-1">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
             <input className="input h-12 rounded-2xl pl-12 text-base" value={q} onChange={e => setQ(e.target.value)} placeholder="Cari nama produk..." />
           </div>
+          </div>
         </div>
-        {!shiftOpen && <div className="mt-3 flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between">
-          <div><b>Shift belum dibuka.</b><p>Silakan buka kasir terlebih dahulu untuk mulai transaksi.</p></div>
-          <button onClick={() => navigate('/shift')} className="btn-primary min-h-10 shrink-0 px-4 text-sm"><Power size={16} /> Buka Kasir</button>
-        </div>}
-        {shiftOpen && <div className="mt-3 rounded-2xl border border-brand-100 bg-brand-50 p-3 text-sm text-brand-800">
-          <b>Shift aktif:</b> {activeShift.shiftNumber || activeShift.shift_number || activeShift.id?.slice(-6)?.toUpperCase()} · Dibuka oleh {activeShift.openedBy || activeShift.opened_by || activeShift.cashier?.name || '-'} · Kas awal {rupiah(activeShift.openingCash || activeShift.opening_cash || 0)}
-        </div>}
         {editingOrder && <div className="mt-3 rounded-2xl bg-brand-50 p-3 text-sm text-brand-800"><b>Editing Order:</b> {editingOrder.orderNumber}</div>}
       </div>
 
@@ -250,8 +310,8 @@ export default function POS() {
 
       {error && <p className="mb-3 rounded-2xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
 
-      <div className="min-h-0 rounded-[1.75rem] pr-1 lg:flex-1 lg:overflow-y-auto">
-        {menuView === 'grid' ? <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-5">
+      <div className="min-h-0 rounded-[1.75rem] pr-1 md:flex-1 md:overflow-y-auto">
+        {menuView === 'grid' ? <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
           {pagedProducts.map(p => {
             const price = Number(p.basePrice || p.variants[0]?.sellingPrice || 0);
             const outOfStock = Number((p as any).stock || (p as any).stockQty || 1) <= 0;
@@ -275,7 +335,7 @@ export default function POS() {
               </div>
               <div className="p-3">
                 <p className="truncate text-[11px] font-bold text-slate-400">{catName(p)}</p>
-                <h3 className="line-clamp-2 min-h-[2.35rem] text-sm font-extrabold leading-tight text-ink">{p.name}</h3>
+                <h3 className="line-clamp-3 min-h-[2.35rem] text-sm font-extrabold leading-tight text-ink">{p.name}</h3>
                 <div className="mt-3 flex items-center justify-between gap-2 rounded-2xl bg-slate-50 px-3 py-2">
                   <span className="truncate text-[11px] font-bold text-slate-500">{p.variantGroups?.length ? 'Pilih opsi' : p.variants[0]?.variantName || 'Base'}</span>
                   <b className="money shrink-0 text-sm text-brand-700">{rupiah(price)}</b>
@@ -288,7 +348,7 @@ export default function POS() {
             const price = Number(p.basePrice || p.variants[0]?.sellingPrice || 0);
             return <button key={p.id} onClick={() => quickAdd(p)} disabled={!shiftOpen} className="flex min-w-0 items-center gap-3 rounded-2xl bg-white p-3 text-left shadow-sm ring-1 ring-black/5 disabled:opacity-60">
               <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-gradient-to-br from-brand-50 to-amber-50 text-2xl">{p.imageUrl ? <img src={p.imageUrl || foruLogo} alt={p.name} className="h-full w-full object-cover" loading="lazy" onError={(e) => { e.currentTarget.src = foruLogo;}} /> : ''}</div>
-              <div className="min-w-0 flex-1"><p className="truncate text-xs font-bold text-brand-600">{catName(p)}</p><h3 className="truncate font-extrabold">{p.name}</h3><p className="truncate text-xs text-slate-400">{p.variantGroups?.length ? 'Pilih opsi' : p.variants[0]?.variantName || 'Base'}</p></div>
+              <div className="min-w-0 flex-1"><h3 className=" line-clamp-3 truncate  text-sm">{p.name}</h3><p className="truncate text-xs text-slate-400">{p.variantGroups?.length ? 'Pilih opsi' : p.variants[0]?.variantName || 'Base'}</p></div>
               <b className="money shrink-0 text-brand-700">{rupiah(price)}</b>
             </button>;
           })}
@@ -298,7 +358,7 @@ export default function POS() {
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[1.75rem] bg-white p-3 text-sm shadow-sm ring-1 ring-black/5">
         <div className="flex items-center gap-2">
           <span className="text-slate-400">Page</span>
-          <select className="rounded-xl border px-3 py-2" value={pageSize} onChange={e => changePageSize(Number(e.target.value))}>{[10].map(n => <option key={n} value={n}>{n} produk</option>)}</select>
+          <select className="rounded-xl border px-3 py-2" value={pageSize} onChange={e => changePageSize(Number(e.target.value))}>{[10,20].map(n => <option key={n} value={n}>{n} produk</option>)}</select>
         </div>
         <div className="flex items-center gap-2">
           <button disabled={currentPage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))} className="rounded-xl border px-4 py-2 font-bold disabled:opacity-40">Prev</button>
@@ -308,25 +368,25 @@ export default function POS() {
       </div>
     </section>
 
-    <aside className="flex min-w-0 flex-col border-t bg-slate-50 shadow-[-8px_0_24px_rgba(15,23,42,0.06)] lg:sticky lg:top-16 lg:h-[calc(100vh-4rem)] lg:min-h-0 lg:gap-3 lg:overflow-y-auto lg:overscroll-contain lg:border-l lg:border-t-0 lg:bg-[#f8faf6] lg:p-3">
-      <div className="shrink-0 bg-white p-4 shadow-sm ring-1 ring-black/5 lg:rounded-[1.75rem] lg:border lg:border-slate-100 lg:p-4 lg:shadow-sm lg:ring-0">
+    <aside className="flex min-w-0 flex-col border-t bg-slate-50 shadow-[-8px_0_24px_rgba(15,23,42,0.06)] md:sticky md:top-16 md:h-[calc(100vh-4rem)] md:min-h-0 md:gap-3 md:overflow-y-auto md:overscroll-contain md:border-l md:border-t-0 md:bg-[#f8faf6] md:p-3">
+      <div className="shrink-0 bg-white p-4 shadow-sm ring-1 ring-black/5 md:rounded-[1.75rem] md:border md:border-slate-100 md:p-4 md:shadow-sm md:ring-0">
         {editingOrder && <div className="mb-3 rounded-2xl bg-brand-50 p-3 text-sm text-brand-800"><b>Editing Order:</b> {editingOrder.orderNumber}</div>}
-        <div className="mb-4 hidden items-center justify-between lg:flex">
+        <div className="mb-4 hidden items-center justify-between md:flex">
           <div>
-            <h2 className="text-lg font-black text-ink">Order Cart</h2>
+            <h2 className="text-sm font-black text-ink">Order Cart</h2>
             <p className="text-xs font-semibold text-slate-400">{cart.length} macam item · {cart.reduce((s, x) => s + x.qty, 0)} total qty</p>
           </div>
           <div className="grid h-11 w-11 place-items-center rounded-2xl bg-brand-50 text-brand-700"><ShoppingBag size={22} /></div>
         </div>
-        <div className="space-y-4 lg:space-y-3">
+        <div className="space-y-4 md:space-y-3">
           <div className="grid grid-cols-[minmax(0,1fr)_minmax(150px,190px)] gap-3">
             <div className="min-w-0">
               <label className="label text-slate-600">Customer</label>
-              <input className="input h-12 w-full rounded-2xl lg:h-11" value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Walk In" />
+              <input className="input h-12 w-full rounded-2xl md:h-11" value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Walk In" />
             </div>
             <div className="min-w-0">
               <label className="label text-slate-600">Order Type</label>
-              <select className="input h-12 w-full rounded-2xl lg:h-11" value={orderType} onChange={e => setOrderType(e.target.value)}>
+              <select className="input h-12 w-full rounded-2xl text-xs md:h-11" value={orderType} onChange={e => setOrderType(e.target.value)}>
                 <option value="DINE_IN">Dine In</option>
                 <option value="TAKE_AWAY">Take Away</option>
                 <option value="DELIVERY">Delivery</option>
@@ -335,43 +395,43 @@ export default function POS() {
           </div>
           <div>
             <label className="label text-slate-600">Catatan Order</label>
-            <input className="input h-12 w-full rounded-2xl lg:h-11" value={orderNote} onChange={e => setOrderNote(e.target.value)} placeholder="Catatan untuk order (opsional)" />
+            <input className="input h-12 w-full rounded-2xl text-xs md:h-11" value={orderNote} onChange={e => setOrderNote(e.target.value)} placeholder="Catatan untuk order (opsional)" />
           </div>
           <div className="-mx-4 border-t border-slate-100" />
-          <button onClick={() => { const type = (prompt('Tipe: NOMINAL atau PERCENTAGE', 'NOMINAL') || '').toUpperCase() as any; const value = Number(prompt('Nilai diskon item untuk item terakhir', '0')); if (cart.length && ['NOMINAL', 'PERCENTAGE'].includes(type) && value >= 0) setCart(c => c.map((a, j) => j === c.length - 1 ? { ...a, discount: { type, value }, key: a.key + `:disc:${type}:${value}` } : a)); }} disabled={!cart.length} className="flex w-full items-center justify-between rounded-2xl px-1 py-1 text-left text-sm font-black text-brand-700 disabled:opacity-40"><span>+ Diskon item</span><span>⌄</span></button>
+          <button onClick={applyItemDiscount} disabled={!cart.length} className="flex w-full items-center justify-between rounded-2xl px-1 py-1 text-left text-sm font-black text-brand-700 disabled:opacity-40"><span>+ Diskon item</span><span>⌄</span></button>
           <div className="grid grid-cols-[minmax(0,1fr)_5rem] gap-2">
-            <input className="input h-12 rounded-2xl uppercase lg:h-11" value={coupon} onChange={e => setCoupon(e.target.value.toUpperCase())} placeholder="GUNAKAN KUPON" />
+            <input className="input h-12 rounded-2xl  text-xs uppercase md:h-11" value={coupon} onChange={e => setCoupon(e.target.value.toUpperCase())} placeholder="GUNAKAN KUPON" />
             <button onClick={applyCoupon} disabled={!cart.length || !coupon} className="btn-soft rounded-2xl px-4"><Tag size={20} /></button>
           </div>
           {couponMsg && <p className={`text-xs ${couponDiscount ? 'text-brand-600' : 'text-red-600'}`}>{couponDiscount ? <Check className="mr-1 inline" size={14} /> : null}{couponMsg}</p>}
-          <button onClick={() => { const type = (prompt('Diskon transaksi: NOMINAL atau PERCENTAGE', 'PERCENTAGE') || '').toUpperCase() as any; const value = Number(prompt('Nilai diskon transaksi', '0')); if (['NOMINAL', 'PERCENTAGE'].includes(type) && value >= 0) setTrxDisc({ type, value }); }} className="rounded-2xl bg-brand-50 px-4 py-3 text-sm font-extrabold text-brand-700 lg:py-2.5">+ Diskon transaksi</button>
+          <button onClick={applyTransactionDiscount} className="rounded-2xl bg-brand-50 px-4 py-3 text-sm font-extrabold text-brand-700 md:py-2.5">+ Diskon transaksi</button>
         </div>
       </div>
 
-      <div className="min-h-[220px] flex-none bg-slate-50/70 p-3 lg:min-h-[180px] lg:max-h-[32vh] lg:overflow-y-auto lg:overscroll-contain lg:bg-transparent lg:p-0">
-        <div className="flex min-h-full flex-col rounded-3xl bg-white p-3 shadow-sm ring-1 ring-black/5 lg:min-h-0 lg:rounded-[1.75rem] lg:border lg:border-slate-100 lg:p-4">
+      <div className="min-h-[220px] flex-none bg-slate-50/70 p-3 md:min-h-[180px] md:max-h-[60vh] md:overflow-y-auto md:overscroll-contain md:bg-transparent md:p-0">
+        <div className="flex min-h-full flex-col rounded-3xl bg-white p-3 shadow-sm ring-1 ring-black/5 md:min-h-0 md:rounded-[1.75rem] md:border md:border-slate-100 md:p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3"><ShoppingBag className="shrink-0 text-slate-600" size={22} /><h2 className="truncate text-lg font-black text-ink">Pesanan ({cart.reduce((s, x) => s + x.qty, 0)})</h2></div>
+            <div className="flex min-w-0 items-center gap-3"><ShoppingBag className="shrink-0 text-slate-600" size={22} /><h2 className="truncate text-sm font-black text-ink">Pesanan ({cart.reduce((s, x) => s + x.qty, 0)})</h2></div>
             <button onClick={clearCart} disabled={!cart.length} className="flex shrink-0 items-center gap-1 rounded-xl px-2 py-1 text-sm font-semibold text-red-600 disabled:opacity-40"><Trash2 size={16} />Kosongkan</button>
           </div>
-          {!cart.length ? <div className="grid min-h-64 flex-1 place-items-center rounded-3xl border-2 border-dashed bg-slate-50/70 text-center text-slate-400 lg:min-h-0">
+          {!cart.length ? <div className="grid min-h-64 flex-1 place-items-center rounded-3xl border-2 border-dashed bg-slate-50/70 text-center text-slate-400 md:min-h-0">
             <div><ShoppingBag className="mx-auto mb-3" /><p>Pilih produk untuk<br />memulai transaksi</p></div>
           </div> : <div className="space-y-3">{cart.map((x, i) => {
             const lineBase = x.price * x.qty;
             const discount = calcDisc(lineBase, x.discount);
             const total = lineBase - discount;
             return <div key={x.key} className="min-w-0 rounded-2xl border bg-white p-2.5 shadow-sm">
-              <div className="grid grid-cols-[4.25rem_minmax(0,1fr)_96px] items-start gap-3">
+              <div className="grid grid-cols-[4.25rem_minmax(0,1fr)_60px] items-start gap-2">
                 <div className="relative h-16 w-16 overflow-hidden rounded-2xl bg-slate-50">
                   <span className="absolute left-0 top-0 z-10 grid h-6 w-6 place-items-center rounded-full bg-brand-600 text-xs font-black text-white">{i + 1}</span>
                   <img src="/images/foru.png" alt="" className="h-full w-full object-contain p-2 opacity-70" />
                 </div>
-                <div className="min-w-0">
-                  <h3 className="line-clamp-2 text-sm font-black text-ink">{x.name}</h3>
+                <div className="flex-1 min-w-0 ">
+                  <h3 className="text-sm font-semibold leading-tight text-ink break-words">{x.name}</h3>
                   <p className="mt-1 truncate text-xs font-semibold text-slate-500">{x.variant || 'Base'}</p>
                   {x.itemNote && <button onClick={() => editItemNote(i, x.itemNote || '')} className="mt-2 max-w-full truncate rounded-lg bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800">{x.itemNote}</button>}
                 </div>
-                <b className="money shrink-0 text-right text-sm font-black text-ink">{rupiah(total)}</b>
+                <b className="money shrink-1 text-right text-sm font-black text-ink">{rupiah(total)}</b>
               </div>
               <div className="mt-3 grid grid-cols-[auto_1fr] items-center gap-2">
                 <div className="flex items-center overflow-hidden rounded-2xl border bg-white">
@@ -390,12 +450,12 @@ export default function POS() {
         </div>
       </div>
 
-      <div className="shrink-0 border-t bg-white p-4 pb-[max(6rem,env(safe-area-inset-bottom))] lg:rounded-[1.75rem] lg:border lg:border-slate-100 lg:p-4 lg:shadow-sm">
+      <div className="shrink-0 border-t bg-white p-4 pb-[max(6rem,env(safe-area-inset-bottom))] md:rounded-[1.75rem] md:border md:border-slate-100 md:p-4 md:shadow-sm">
         <div className="space-y-1.5 text-sm"><Row label={`Subtotal (${cart.reduce((s, x) => s + x.qty, 0)} item)`} n={summary.subtotal} /><Row label="Diskon Item" n={-summary.productDiscount} /><Row label="Diskon Transaksi" n={-summary.transactionDiscount} /><Row label="Diskon Kupon" n={-couponDiscount} /><Row label="PPN (0%)" n={0} /></div>
-        <div className="mt-3 flex items-end justify-between border-t pt-3"><b className="text-2xl text-ink lg:text-xl">Total</b><strong className="money text-3xl text-brand-700 lg:text-2xl">{rupiah(summary.grand)}</strong></div>
-        <div className="mt-4 grid grid-cols-2 gap-3 lg:mt-3">
-          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={saveOrder} className="h-14 rounded-2xl border border-brand-600 bg-white px-3 text-sm font-black text-brand-700 disabled:opacity-40 lg:h-12">{orderSubmitting ? 'Menyimpan...' : editingOrder ? 'Update Order' : 'Simpan Draft'}</button>
-          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={() => setPayOpen(true)} className="btn-primary h-14 rounded-2xl text-lg font-black lg:h-12 lg:text-base">Bayar</button>
+        <div className="mt-3 flex items-end justify-between border-t pt-3"><b className="text-2xl text-ink md:text-xl">Total</b><strong className="money text-3xl text-brand-700 md:text-2xl">{rupiah(summary.grand)}</strong></div>
+        <div className="mt-4 grid grid-cols-2 gap-3 md:mt-3">
+          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={saveOrder} className="h-14 rounded-2xl border border-brand-600 bg-white px-3 text-sm font-black text-brand-700 disabled:opacity-40 md:h-12">{orderSubmitting ? 'Menyimpan...' : editingOrder ? 'Update Order' : 'Simpan Draft'}</button>
+          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={() => setPayOpen(true)} className="btn-primary h-14 rounded-2xl text-sm font-black md:h-12 md:text-base">Bayar</button>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2">
           <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={saveOrder} className="rounded-2xl border px-2 py-3 text-xs font-extrabold text-slate-600 disabled:opacity-40">{orderSubmitting ? 'Menyimpan...' : 'Hold Order'}</button>
@@ -404,6 +464,33 @@ export default function POS() {
         {editingOrder && <button onClick={() => navigate(`/orders/${editingOrder.id}`)} className="mt-2 w-full rounded-2xl border px-4 py-3 text-sm font-extrabold text-slate-500">Cancel Edit</button>}
       </div>
     </aside>
+    {dialog?.kind === 'confirm' && <ConfirmDialog
+      tone={dialog.tone}
+      title={dialog.title}
+      description={dialog.description}
+      detail={dialog.detail}
+      cancelText={dialog.cancelText}
+      confirmText={dialog.confirmText}
+      onCancel={() => { dialog.resolve(false); setDialog(null); }}
+      onConfirm={() => { dialog.resolve(true); setDialog(null); }}
+    />}
+    {dialog?.kind === 'text' && <TextInputDialog
+      title={dialog.title}
+      description={dialog.description}
+      label={dialog.label}
+      defaultValue={dialog.defaultValue}
+      placeholder={dialog.placeholder}
+      onCancel={() => { dialog.resolve(null); setDialog(null); }}
+      onSubmit={value => { dialog.resolve(value); setDialog(null); }}
+    />}
+    {dialog?.kind === 'discount' && <DiscountDialog
+      title={dialog.title}
+      description={dialog.description}
+      initialType={dialog.initialType}
+      initialValue={dialog.initialValue}
+      onCancel={() => { dialog.resolve(null); setDialog(null); }}
+      onSubmit={value => { dialog.resolve(value); setDialog(null); }}
+    />}
     {config && <ConfigProduct product={config} close={() => setConfig(null)} add={addLine} />}
     {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); const payload = { ...orderPayload(active), customerName: paidCustomerName }; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); if (editingOrder) setEditingOrder(null); toast.success('Data berhasil disimpan.'); } catch (e) { const msg = (e as Error).message; toast.error(msg); throw e; } }} />}
     {receipt && <Receipt sale={receipt} close={() => setReceipt(null)} />}
@@ -436,8 +523,8 @@ function Payment({ total, initialCustomerName = '', onClose, onPay }: { total: n
     <div className="max-h-[94vh] w-full max-w-xl overflow-auto rounded-t-3xl bg-white p-5 sm:rounded-3xl">
       <div className="mb-4 flex items-center justify-between"><h3 className="text-xl"><span className="text-slate-500">Metode </span><b>Pembayaran</b></h3><button onClick={onClose} className="rounded-xl p-2 text-slate-500 hover:bg-slate-50"><X /></button></div>
       <div className="mb-4 grid grid-cols-2 gap-2">{methods.map(value => <button key={value} onClick={() => setM(value)} className={`rounded-xl border p-3 text-sm font-black ${m === value ? 'border-brand-500 bg-brand-50 text-brand-700' : 'bg-white'}`}>{value}</button>)}</div>
-      <button className="mb-3 w-full rounded-xl bg-pink-50 px-4 py-4 font-medium text-pink-600">Edit Tanggal</button>
-      <div className="mb-4 grid grid-cols-[1fr_5rem] gap-2"><input className="input" value="" readOnly placeholder="Gunakan Kupon" /><button className="rounded-xl border border-pink-400 text-2xl text-pink-500">⌄</button></div>
+      <button className="mb-3 w-full rounded-xl bg-brand-50 px-4 py-4 font-medium text-brand-700">Edit Tanggal</button>
+      <div className="mb-4 grid grid-cols-[1fr_5rem] gap-2"><input className="input" value="" readOnly placeholder="Gunakan Kupon" /><button className="rounded-xl border border-brand-300 text-2xl text-brand-500">⌄</button></div>
       <div className="mb-4 rounded-xl bg-slate-100 p-3">
         <div className="bg-white p-4 text-sm">
           <div className="flex justify-between py-1"><span>Total Belanja</span><b>{rupiah(total)}</b></div>
@@ -447,8 +534,8 @@ function Payment({ total, initialCustomerName = '', onClose, onPay }: { total: n
           <div className="flex justify-between py-1"><span>Potongan Member</span><b>{rupiah(0)}</b></div>
           <div className="flex justify-between py-1"><span>Potongan Kupon</span><b>{rupiah(0)}</b></div>
           <div className="my-2 border-t" />
-          <div className="flex justify-between text-lg font-black"><span>Total Bayar</span><span>{rupiah(total)}</span></div>
-          <div className="flex justify-between text-lg font-black"><span>Jumlah Uang</span><span>{rupiah(paidAmount)}</span></div>
+          <div className="flex justify-between text-sm font-black"><span>Total Bayar</span><span>{rupiah(total)}</span></div>
+          <div className="flex justify-between text-sm font-black"><span>Jumlah Uang</span><span>{rupiah(paidAmount)}</span></div>
           <div className="my-2 border-t" />
           <div className="flex justify-between"><span>Kembalian</span><b>{rupiah(change)}</b></div>
         </div>
@@ -477,11 +564,11 @@ function Receipt({ sale, close }: { sale: any; close: () => void }) {
   }
   async function printSelected() {
     try {
-      if (!customerPrint && !kitchenPrint) return alert('Pilih minimal satu struk untuk dicetak');
+      if (!customerPrint && !kitchenPrint) { toast.error('Pilih minimal satu struk untuk dicetak'); return; }
       if (customerPrint) await print(paid ? 'customer-receipt' : 'customer-item-list');
       if (kitchenPrint) await print('kitchen-ticket');
     } catch (e) {
-      alert((e as Error).message);
+      toast.error((e as Error).message);
     }
   }
   return <div className="fixed inset-0 z-[70] grid place-items-center bg-ink/80 p-4">

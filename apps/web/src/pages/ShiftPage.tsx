@@ -4,12 +4,14 @@ import { Eye, Power, Printer, Store } from 'lucide-react';
 import { api, dt, rupiah } from '../api';
 import { printShiftCloseReport } from '../printer';
 import { toast } from '../toast';
+import { useOutlet } from '../OutletContext';
 
 type Outlet = { id: string; name: string; code?: string };
 const today = () => new Date().toLocaleDateString('en-CA');
 
 export default function ShiftPage() {
   const navigate = useNavigate();
+  const { selectedOutletId: outletId, outletList } = useOutlet();
   const [tab, setTab] = useState<'active' | 'reports'>('active');
   const [shift, setShift] = useState<any>(null);
   const [outlet, setOutlet] = useState<Outlet | null>(null);
@@ -22,15 +24,18 @@ export default function ShiftPage() {
   const [closeSubmitting, setCloseSubmitting] = useState(false);
   const [from, setFrom] = useState(today());
   const [to, setTo] = useState(today());
-  const [outletFilter, setOutletFilter] = useState(localStorage.getItem('outletId') || '');
-  const outletId = localStorage.getItem('outletId') || '';
+  const [outletFilter, setOutletFilter] = useState('');
   const user = JSON.parse(localStorage.getItem('user') || 'null');
+
+  useEffect(() => {
+    setOutletFilter(current => current === 'ALL' ? current : outletId);
+  }, [outletId]);
 
   async function load() {
     setError('');
     if (!outletId) return navigate('/select-outlet', { replace: true });
     try {
-      const nextOutlets = await api<Outlet[]>('/outlets');
+      const nextOutlets = outletList.length ? outletList : await api<Outlet[]>('/outlets');
       setOutlets(nextOutlets);
       setOutlet(nextOutlets.find(o => o.id === outletId) || null);
       const active = await api<any>(`/outlets/${outletId}/active-shift`).catch(async () => {
@@ -38,26 +43,26 @@ export default function ShiftPage() {
         return legacy?.outletId === outletId ? legacy : null;
       });
       setShift(active);
-      await loadReports();
+      await loadReports(outletId);
     } catch (e) {
       setShift(null);
       setError((e as Error).message);
     }
   }
 
-  async function loadReports() {
+  async function loadReports(filterValue = outletFilter || outletId) {
     const p = new URLSearchParams();
     if (from) p.set('from', from);
     if (to) p.set('to', to);
-    if (outletFilter === 'ALL') p.set('consolidated', '1');
-    else if (outletFilter) p.set('outletId', outletFilter);
+    if (filterValue === 'ALL') p.set('consolidated', '1');
+    else if (filterValue) p.set('outletId', filterValue);
     else throw new Error('Silakan pilih outlet terlebih dahulu.');
     const rows = await api<any[]>(`/cash-sessions/reports?${p}`);
     setReports(rows);
   }
 
-  useEffect(() => { load(); }, []);
-  useEffect(() => { if (tab === 'reports') loadReports().catch(e => setError(e.message)); }, [tab, from, to, outletFilter]);
+  useEffect(() => { load(); }, [outletId, outletList]);
+  useEffect(() => { if (tab === 'reports') loadReports(outletFilter || outletId).catch(e => setError(e.message)); }, [tab, from, to, outletFilter, outletId]);
 
   function quick(kind: 'today' | 'yesterday' | 'week' | 'month') {
     const d = new Date();
@@ -87,6 +92,7 @@ export default function ShiftPage() {
           }
         });
       setShift(opened);
+      window.dispatchEvent(new CustomEvent('foru:shift-changed', { detail: { outletId, shift: opened } }));
       toast.success('Data berhasil disimpan.');
       navigate('/pos');
     } catch (e) { const msg = (e as Error).message; setError(msg); toast.error(msg); }
@@ -128,6 +134,7 @@ export default function ShiftPage() {
       setCloseResult({ report, printStatus });
       setDetail(report);
       setShift(null);
+      window.dispatchEvent(new CustomEvent('foru:shift-changed', { detail: { outletId, shift: null } }));
       await loadReports();
       toast.success('Data berhasil disimpan.');
     } catch (e) { const msg = (e as Error).message; setError(msg); toast.error(msg); }
@@ -140,7 +147,7 @@ export default function ShiftPage() {
         <div><h2 className="text-3xl font-black">Shift kasir</h2><p className="mt-1 text-slate-500">Shift mengikuti outlet yang dipilih saat login.</p></div>
         <button onClick={() => navigate('/select-outlet')} className="rounded-2xl border bg-white px-4 py-2 text-sm font-bold text-slate-600">Ganti Outlet</button>
       </div>
-      <div className="mb-5 flex gap-2 overflow-auto"><button onClick={() => setTab('active')} className={`rounded-full px-4 py-2 text-sm font-black ${tab === 'active' ? 'bg-ink text-white' : 'bg-white text-slate-600'}`}>Active Shift</button><button onClick={() => setTab('reports')} className={`rounded-full px-4 py-2 text-sm font-black ${tab === 'reports' ? 'bg-ink text-white' : 'bg-white text-slate-600'}`}>Laporan Tutup Shift</button></div>
+      <div className="mb-5 flex gap-2 overflow-auto"><button onClick={() => setTab('active')} className={`rounded-full px-4 py-2 text-sm font-black ${tab === 'active' ? 'bg-brand-500 text-white' : 'bg-white text-slate-600'}`}>Active Shift</button><button onClick={() => setTab('reports')} className={`rounded-full px-4 py-2 text-sm font-black ${tab === 'reports' ? 'bg-brand-500 text-white' : 'bg-white text-slate-600'}`}>Laporan Tutup Shift</button></div>
       {error && <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</div>}
       {closeResult && <div className="mb-4 rounded-2xl bg-brand-50 p-4 text-sm text-brand-800"><b>Shift closed successfully.</b><br />{closeResult.printStatus}<div className="mt-3 flex gap-2"><button onClick={() => reprint(closeResult.report)} className="btn-soft"><Printer size={16} /> Reprint Shift Report</button><button onClick={() => setDetail(closeResult.report)} className="btn-soft"><Eye size={16} /> View Report Detail</button></div></div>}
 

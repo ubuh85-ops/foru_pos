@@ -9,9 +9,17 @@ type BluetoothPrinterPlugin = {
 
 const NativeBluetoothPrinter = registerPlugin<BluetoothPrinterPlugin>('BluetoothPrinter');
 const LAST_BT_PRINTER_KEY = 'foru:lastBluetoothPrinter';
+const BT_PRINT_CHUNK_SIZE = 700;
+const SHIFT_DETAIL_LIMIT = 30;
 
 const isNativeAndroid = () => Capacitor.getPlatform() === 'android';
-const value = (n: any) => Number(n || 0);
+const value = (n: any) => {
+  if (typeof n === 'string') {
+    const cleaned = n.replace(/[^0-9.-]/g, '');
+    return Number(cleaned || 0);
+  }
+  return Number(n || 0);
+};
 const outletIdOf = (doc: any) => doc.outletId || doc.outlet?.id;
 const outletNameOf = (doc: any) => doc.outlet?.name || '-';
 const cashierNameOf = (doc: any) => doc.cashier?.name || '-';
@@ -57,6 +65,30 @@ function pair(label: string, amount: string, width: number) {
   const rightWidth = Math.min(14, Math.max(10, amount.length));
   return pad(label, width - rightWidth) + right(amount, rightWidth);
 }
+
+function clipLine(text: string, width: number) {
+  const s = String(text || '');
+  return s.length > width ? s.slice(0, Math.max(0, width - 1)) : s;
+}
+
+function chunkText(text: string, maxLength = BT_PRINT_CHUNK_SIZE) {
+  const lines = String(text || '').split('\n');
+  const chunks: string[] = [];
+  let current = '';
+  for (const line of lines) {
+    const next = current ? `${current}\n${line}` : line;
+    if (next.length > maxLength && current) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current = next;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 function wrap(text: string, width: number) {
   const words = String(text || '').split(/\s+/).filter(Boolean);
@@ -170,6 +202,8 @@ function shiftCloseReportText(doc: any, width: number) {
   const omset = doc.omsetSummary || {};
   const pay = doc.paymentBreakdown || {};
   const order = doc.orderSummary || {};
+  const itemRows = (doc.itemSold || []).slice(0, SHIFT_DETAIL_LIMIT);
+  const expenseRows = (doc.expenseDetails || []).slice(0, SHIFT_DETAIL_LIMIT);
   const lines = [
     center('FORU POS', width),
     center('LAPORAN TUTUP SHIFT', width),
@@ -201,10 +235,12 @@ function shiftCloseReportText(doc: any, width: number) {
     ...Object.entries(pay).filter(([, v]) => value(v) > 0).map(([k, v]) => pair(k, printMoney(value(v)), width)),
     line,
     'ITEM SOLD',
-    ...((doc.itemSold || []).length ? (doc.itemSold || []).flatMap((i: any) => [`${i.productName} - ${i.variantName || 'Base'}`, pair(`${i.qty} x`, printMoney(value(i.grossSales)), width)]) : ['-']),
+    ...(itemRows.length ? itemRows.flatMap((i: any) => [clipLine(`${i.productName} - ${i.variantName || 'Base'}`, width), pair(`${i.qty} x`, printMoney(value(i.grossSales)), width)]) : ['-']),
+    ...(doc.itemSold?.length > SHIFT_DETAIL_LIMIT ? [`... ${doc.itemSold.length - SHIFT_DETAIL_LIMIT} item lagi`] : []),
     line,
     'EXPENSE',
-    ...((doc.expenseDetails || []).length ? (doc.expenseDetails || []).map((e: any) => pair(e.description || e.categoryName, printMoney(value(e.amount)), width)) : ['-']),
+    ...(expenseRows.length ? expenseRows.map((e: any) => pair(clipLine(e.description || e.categoryName, width - 12), printMoney(value(e.amount)), width)) : ['-']),
+    ...(doc.expenseDetails?.length > SHIFT_DETAIL_LIMIT ? [`... ${doc.expenseDetails.length - SHIFT_DETAIL_LIMIT} expense lagi`] : []),
     line,
     'ORDER SUMMARY',
     pair('Paid', String(order.paidOrder || 0), width),
@@ -213,7 +249,7 @@ function shiftCloseReportText(doc: any, width: number) {
     pair('Void', String(order.voidOrder || 0), width),
     line
   ];
-  return lines.filter(Boolean).join('\n');
+  return `${lines.filter(Boolean).join('\n')}\n\n\n`;
 }
 
 function buildPrintText(doc: any, type: PrintDocType, paperSize = 'MM58') {
@@ -262,10 +298,15 @@ export async function tryNativeBluetoothPrint(doc: any, type: PrintDocType) {
     (type === 'kitchen-ticket' ? p.isKitchenPrinter : p.isCustomerReceipt)
   ) || activeBluetoothPrinters[0] || lastBluetoothPrinter();
   if (!printer) return false;
-  await NativeBluetoothPrinter.printText({
-    address: printer.bluetoothAddress,
-    text: buildPrintText(doc, type, printer.paperSize || 'MM58')
-  });
+  const text = buildPrintText(doc, type, printer.paperSize || 'MM58');
+  const chunks = type === 'shift-close-report' ? chunkText(text) : [text];
+  for (const [index, chunk] of chunks.entries()) {
+    await NativeBluetoothPrinter.printText({
+      address: printer.bluetoothAddress,
+      text: index === chunks.length - 1 ? `${chunk}\n\n\n` : chunk
+    });
+    if (chunks.length > 1) await delay(350);
+  }
   rememberBluetoothPrinter(printer);
   return true;
 }

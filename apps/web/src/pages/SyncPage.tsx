@@ -56,7 +56,7 @@ export default function SyncPage() {
     </div>
 
     <div className="mb-4 flex flex-wrap gap-2">
-      {(['PENDING', 'FAILED', 'SYNCED', 'ALL'] as const).map(x => <button key={x} onClick={() => setFilter(x)} className={`rounded-full px-4 py-2 text-sm font-bold ${filter === x ? 'bg-ink text-white' : 'bg-white text-slate-500'}`}>{x}</button>)}
+      {(['PENDING', 'FAILED', 'SYNCED', 'ALL'] as const).map(x => <button key={x} onClick={() => setFilter(x)} className={`rounded-full px-4 py-2 text-sm font-bold ${filter === x ? 'bg-brand-500 text-white' : 'bg-white text-slate-500'}`}>{x}</button>)}
       <button onClick={() => retry(selected)} className="rounded-full bg-brand-50 px-4 py-2 text-sm font-bold text-brand-700">Retry Selected</button>
       <button onClick={() => retry()} className="rounded-full bg-amber-50 px-4 py-2 text-sm font-bold text-amber-700">Retry All Failed</button>
     </div>

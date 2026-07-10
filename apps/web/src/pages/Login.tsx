@@ -30,7 +30,7 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
   }
 
   return <div className="grid min-h-screen lg:grid-cols-2">
-    <section className="hidden overflow-hidden bg-ink p-14 text-white lg:flex lg:flex-col lg:justify-between">
+    <section className="hidden overflow-hidden bg-brand-900 p-14 text-white lg:flex lg:flex-col lg:justify-between">
       <div className="flex items-center gap-3 text-2xl font-black"><span className="grid h-12 w-12 place-items-center rounded-2xl bg-brand-500">F</span>FORU POS</div>
       <div>
         <p className="mb-5 text-sm font-bold uppercase tracking-[.25em] text-brand-500">Point of Sale</p>
