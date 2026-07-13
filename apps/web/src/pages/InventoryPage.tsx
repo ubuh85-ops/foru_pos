@@ -6,6 +6,7 @@ import { checkInventoryStockAlerts, requestInventoryNotificationPermission } fro
 import { scanInventoryBarcode } from '../barcodeScanner';
 import { toast } from '../toast';
 import { useOutlet } from '../OutletContext';
+import { appAlert, appConfirm, appPrompt } from '../components/ui/AppDialog';
 
 type Category = { id: string; name: string; status: string };
 type Unit = { id: string; name: string; status: string };
@@ -126,14 +127,14 @@ export default function InventoryPage({ user }: { user: User }) {
   }, [activeItems, warehouseId]);
 
   async function addLookup(kind: 'categories' | 'units') {
-    const name = prompt(kind === 'categories' ? 'Nama kategori baru' : 'Nama satuan baru');
+    const name = await appPrompt(kind === 'categories' ? 'Nama kategori baru' : 'Nama satuan baru', '', { title: kind === 'categories' ? 'Tambah Kategori' : 'Tambah Satuan', label: 'Nama' });
     if (!name) return;
     try {
       const created = await api<any>(`/inventory/${kind}`, { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
       await loadLookups();
       if (kind === 'categories') setCategoryId(created.id);
-      alert(`${kind === 'categories' ? 'Kategori' : 'Satuan'} "${created.name}" berhasil ditambahkan.`);
-    } catch (e) { alert((e as Error).message); }
+      toast.success(`${kind === 'categories' ? 'Kategori' : 'Satuan'} "${created.name}" berhasil ditambahkan.`);
+    } catch (e) { toast.error((e as Error).message); }
   }
   async function saveItem(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -156,19 +157,19 @@ export default function InventoryPage({ user }: { user: User }) {
       toast.success('Data berhasil disimpan.');
       if (body.stockAlertEnabled) {
         const permission = await requestInventoryNotificationPermission();
-        if (!permission.granted) alert(permission.reason);
+        if (!permission.granted) await appAlert(permission.reason || 'Izin notifikasi belum aktif.', { title: 'Izin Notifikasi', tone: 'warning' });
       }
     } catch (e) { const msg = (e as Error).message; setError(msg); toast.error(msg); }
     finally { setItemSubmitting(false); }
   }
   async function removeItem(item: Item) {
-    if (!confirm(`Hapus bahan baku ${item.name}?`)) return;
-    try { await api(`/inventory/items/${item.id}`, { method: 'DELETE' }); reload(); } catch (e) { alert((e as Error).message); }
+    if (!await appConfirm(`Hapus bahan baku ${item.name}?`, { title: 'Hapus Bahan Baku', confirmText: 'Hapus', danger: true })) return;
+    try { await api(`/inventory/items/${item.id}`, { method: 'DELETE' }); reload(); toast.success('Bahan baku berhasil dihapus.'); } catch (e) { toast.error((e as Error).message); }
   }
   async function photo(file?: File) {
     if (!file || !edit) return;
-    if (!['image/jpeg', 'image/png'].includes(file.type)) return alert('Foto harus JPG atau PNG.');
-    if (file.size > 2 * 1024 * 1024) return alert('Maksimal ukuran foto 2MB.');
+    if (!['image/jpeg', 'image/png'].includes(file.type)) return appAlert('Foto harus JPG atau PNG.', { title: 'Format foto tidak valid', tone: 'warning' });
+    if (file.size > 2 * 1024 * 1024) return appAlert('Maksimal ukuran foto 2MB.', { title: 'Ukuran foto terlalu besar', tone: 'warning' });
     const data = await new Promise<string>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = reject; r.readAsDataURL(file); });
     setEdit({ ...edit, photoUrl: data });
   }
@@ -184,7 +185,7 @@ export default function InventoryPage({ user }: { user: User }) {
       const exact = rows.find(i => i.sku?.toLowerCase() === scanned.value.toLowerCase() || i.code.toLowerCase() === scanned.value.toLowerCase()) || rows[0];
       if (exact) return exact;
     } catch {}
-    if (confirm('Barang belum terdaftar.\n\nTambah Barang Baru?')) {
+    if (await appConfirm('Barang belum terdaftar. Tambah Barang Baru?', { title: 'Barcode belum terdaftar', confirmText: 'Tambah Barang Baru' })) {
       setEdit({ ...emptyItem, code: scanned.value, sku: scanned.value });
     }
     return null;
@@ -195,7 +196,7 @@ export default function InventoryPage({ user }: { user: User }) {
     try {
       const found = await api<Item>(`/inventory/items/by-sku/${encodeURIComponent(scanned.value)}`);
       if (found && found.id !== currentId) {
-        if (confirm(`Barcode sudah digunakan oleh:\n\n${found.name}\n\nApakah ingin membuka data tersebut?`)) setEdit(found);
+        if (await appConfirm(`Barcode sudah digunakan oleh ${found.name}. Apakah ingin membuka data tersebut?`, { title: 'Barcode sudah digunakan', confirmText: 'Buka Produk' })) setEdit(found);
         return;
       }
     } catch {}
@@ -245,12 +246,12 @@ function WarehousePage({ rows, reload }: any) {
     const f = new FormData(e.currentTarget);
     try {
       await api('/warehouses', { method: 'POST', body: JSON.stringify({ code: f.get('code'), name: f.get('name'), type: f.get('type'), address: f.get('address') || null, picName: f.get('picName') || null, phone: f.get('phone') || null, status: 'ACTIVE' }) });
-      e.currentTarget.reset(); reload(); alert('Warehouse berhasil ditambahkan.');
-    } catch (err) { alert((err as Error).message); }
+      e.currentTarget.reset(); reload(); toast.success('Warehouse berhasil ditambahkan.');
+    } catch (err) { toast.error((err as Error).message); }
   }
   async function deactivate(id: string) {
-    if (!confirm('Nonaktifkan warehouse ini?')) return;
-    try { await api(`/warehouses/${id}`, { method: 'DELETE' }); reload(); } catch (err) { alert((err as Error).message); }
+    if (!await appConfirm('Nonaktifkan warehouse ini?', { title: 'Nonaktifkan Warehouse', confirmText: 'Nonaktifkan', danger: true })) return;
+    try { await api(`/warehouses/${id}`, { method: 'DELETE' }); reload(); toast.success('Warehouse berhasil dinonaktifkan.'); } catch (err) { toast.error((err as Error).message); }
   }
   return <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
     <form onSubmit={save} className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
@@ -295,7 +296,7 @@ function Thumb({ item }: { item: Item }) { return item.photoUrl ? <img src={item
 function ItemModal({ item, categories, units, warehouses, warehouseId, save, submitting, close, photo, scanSku }: any) {
   const [sku, setSku] = useState(item.sku || '');
   useEffect(() => setSku(item.sku || ''), [item.id, item.sku]);
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"><form onSubmit={save} className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-3xl bg-white p-6 shadow-2xl"><div className="mb-5 flex justify-between"><h3 className="text-2xl font-black">{item.id ? 'Edit Bahan Baku' : 'Tambah Bahan Baku'}</h3><button type="button" onClick={close}>×</button></div><div className="mb-4 flex items-center gap-4"><Thumb item={item} /><label className="btn-soft cursor-pointer"><Camera size={16} /> Upload Foto<input type="file" accept="image/png,image/jpeg" className="hidden" onChange={e => photo(e.target.files?.[0])} /></label></div><input type="hidden" name="photoUrl" value={item.photoUrl || ''} /><div className="grid gap-3 sm:grid-cols-2"><Field name="code" label="Kode" value={item.code} /><label><span className="label">SKU / Barcode</span><div className="flex gap-2"><input className="input min-w-0 flex-1 font-mono" name="sku" value={sku} onChange={e => setSku(e.target.value)} placeholder="8991234567890" /><button type="button" onClick={async () => { await scanSku(item.id); }} className="btn-soft shrink-0"><Camera size={16} /> Scan</button></div></label><Field name="name" label="Nama" value={item.name} />{!item.id && <label><span className="label">Warehouse Stok Awal</span><select className="input" name="warehouseId" defaultValue={warehouseId}>{warehouses.map((w: InvWarehouse) => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label>}<Select name="categoryId" label="Kategori" value={item.categoryId} rows={categories} /><Select name="unitId" label="Satuan" value={item.unitId} rows={units} /><Field name="minimumStock" label="Minimum Stock" type="number" value={item.minimumStock} /><Field name="currentStock" label="Current Stock" type="number" value={item.currentStock} /><Field name="averageCost" label="Average Cost" type="number" value={item.averageCost} /><Field name="supplier" label="Supplier" value={item.supplier} /><label className="sm:col-span-2"><span className="label">Catatan</span><textarea name="notes" className="input min-h-24" defaultValue={item.notes || ''} /></label><section className="rounded-3xl border bg-slate-50 p-4 sm:col-span-2"><div className="mb-3 flex items-center gap-2 font-black"><Bell size={18} /> Stock Alert</div><label className="mb-3 flex items-center gap-3 text-sm font-bold"><input name="stockAlertEnabled" type="checkbox" defaultChecked={!!item.stockAlertEnabled} /> Aktifkan notifikasi stok</label><div className="grid gap-3 sm:grid-cols-2"><label><span className="label">Jenis Alert</span><select className="input" name="stockAlertType" defaultValue={item.stockAlertType || 'LOW_STOCK'}><option value="OUT_OF_STOCK">Stok kosong</option><option value="LOW_STOCK">Stok di bawah minimum</option><option value="CUSTOM_THRESHOLD">Custom threshold</option></select></label><Field name="stockAlertThreshold" label="Custom threshold" type="number" value={item.stockAlertThreshold ?? ''} /></div><p className="mt-2 text-xs text-slate-500">Contoh: kirim notifikasi jika stok ≤ 5 {item.unit?.name || ''}.</p></section>{item.id && <section className="rounded-3xl border bg-white p-4 sm:col-span-2"><div className="mb-3 font-black">Stock by Warehouse</div><div className="overflow-auto"><table className="w-full min-w-[520px] text-sm"><thead className="text-left text-slate-400"><tr><th className="py-2">Warehouse</th><th>Current Qty</th><th>Average Cost</th><th>Stock Value</th></tr></thead><tbody>{(item.stocks || []).length ? item.stocks.map((s: any) => <tr className="border-t" key={s.id || s.warehouseId}><td className="py-2 font-bold">{s.warehouse?.name || s.warehouseId}</td><td>{n(s.currentQty)} {item.unit?.name || ''}</td><td>{rupiah(s.averageCost)}</td><td>{rupiah(n(s.currentQty) * n(s.averageCost))}</td></tr>) : <tr><td className="py-3 text-slate-400" colSpan={4}>Belum ada stock di warehouse.</td></tr>}</tbody></table></div></section>}<label><span className="label">Status</span><select className="input" name="status" defaultValue={item.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select></label></div><button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan'}</button></form></div>;
+  return <div data-back-modal="true" className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"><form onSubmit={save} className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-3xl bg-white p-6 shadow-2xl"><div className="mb-5 flex justify-between"><h3 className="text-2xl font-black">{item.id ? 'Edit Bahan Baku' : 'Tambah Bahan Baku'}</h3><button data-back-close="true" type="button" onClick={close}>×</button></div><div className="mb-4 flex items-center gap-4"><Thumb item={item} /><label className="btn-soft cursor-pointer"><Camera size={16} /> Upload Foto<input type="file" accept="image/png,image/jpeg" className="hidden" onChange={e => photo(e.target.files?.[0])} /></label></div><input type="hidden" name="photoUrl" value={item.photoUrl || ''} /><div className="grid gap-3 sm:grid-cols-2"><Field name="code" label="Kode" value={item.code} /><label><span className="label">SKU / Barcode</span><div className="flex gap-2"><input className="input min-w-0 flex-1 font-mono" name="sku" value={sku} onChange={e => setSku(e.target.value)} placeholder="8991234567890" /><button type="button" onClick={async () => { await scanSku(item.id); }} className="btn-soft shrink-0"><Camera size={16} /> Scan</button></div></label><Field name="name" label="Nama" value={item.name} />{!item.id && <label><span className="label">Warehouse Stok Awal</span><select className="input" name="warehouseId" defaultValue={warehouseId}>{warehouses.map((w: InvWarehouse) => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label>}<Select name="categoryId" label="Kategori" value={item.categoryId} rows={categories} /><Select name="unitId" label="Satuan" value={item.unitId} rows={units} /><Field name="minimumStock" label="Minimum Stock" type="number" value={item.minimumStock} /><Field name="currentStock" label="Current Stock" type="number" value={item.currentStock} /><Field name="averageCost" label="Average Cost" type="number" value={item.averageCost} /><Field name="supplier" label="Supplier" value={item.supplier} /><label className="sm:col-span-2"><span className="label">Catatan</span><textarea name="notes" className="input min-h-24" defaultValue={item.notes || ''} /></label><section className="rounded-3xl border bg-slate-50 p-4 sm:col-span-2"><div className="mb-3 flex items-center gap-2 font-black"><Bell size={18} /> Stock Alert</div><label className="mb-3 flex items-center gap-3 text-sm font-bold"><input name="stockAlertEnabled" type="checkbox" defaultChecked={!!item.stockAlertEnabled} /> Aktifkan notifikasi stok</label><div className="grid gap-3 sm:grid-cols-2"><label><span className="label">Jenis Alert</span><select className="input" name="stockAlertType" defaultValue={item.stockAlertType || 'LOW_STOCK'}><option value="OUT_OF_STOCK">Stok kosong</option><option value="LOW_STOCK">Stok di bawah minimum</option><option value="CUSTOM_THRESHOLD">Custom threshold</option></select></label><Field name="stockAlertThreshold" label="Custom threshold" type="number" value={item.stockAlertThreshold ?? ''} /></div><p className="mt-2 text-xs text-slate-500">Contoh: kirim notifikasi jika stok ≤ 5 {item.unit?.name || ''}.</p></section>{item.id && <section className="rounded-3xl border bg-white p-4 sm:col-span-2"><div className="mb-3 font-black">Stock by Warehouse</div><div className="overflow-auto"><table className="w-full min-w-[520px] text-sm"><thead className="text-left text-slate-400"><tr><th className="py-2">Warehouse</th><th>Current Qty</th><th>Average Cost</th><th>Stock Value</th></tr></thead><tbody>{(item.stocks || []).length ? item.stocks.map((s: any) => <tr className="border-t" key={s.id || s.warehouseId}><td className="py-2 font-bold">{s.warehouse?.name || s.warehouseId}</td><td>{n(s.currentQty)} {item.unit?.name || ''}</td><td>{rupiah(s.averageCost)}</td><td>{rupiah(n(s.currentQty) * n(s.averageCost))}</td></tr>) : <tr><td className="py-3 text-slate-400" colSpan={4}>Belum ada stock di warehouse.</td></tr>}</tbody></table></div></section>}<label><span className="label">Status</span><select className="input" name="status" defaultValue={item.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select></label></div><button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan'}</button></form></div>;
 }
 function Field({ name, label, value, type = 'text' }: any) { return <label><span className="label">{label}</span><input className="input" name={name} type={type} min={type === 'number' ? 0 : undefined} step={type === 'number' ? '0.001' : undefined} defaultValue={value || ''} required={['code', 'name'].includes(name)} /></label>; }
 function Select({ name, label, value, rows }: any) { return <label><span className="label">{label}</span><select className="input" name={name} defaultValue={value || rows[0]?.id} required>{rows.filter((x: any) => x.status === 'ACTIVE').map((x: any) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>; }
@@ -353,7 +354,7 @@ function StockIn({ items, warehouses, warehouseId, onSubmit, scanForItem }: any)
   const [itemId, setItemId] = useState(items[0]?.id || '');
   const [qty, setQty] = useState(1);
   async function scanOnce(add = false) { const item = await scanForItem(); if (!item) return; setItemId(item.id); setQty(q => add && item.id === itemId ? q + 1 : Math.max(1, q)); setTimeout(() => (document.querySelector('input[name="qty"]') as HTMLInputElement | null)?.focus(), 50); }
-  async function continuous() { do { await scanOnce(true); } while (confirm('Scan item berikutnya? Tekan Batal untuk selesai.')); }
+  async function continuous() { do { await scanOnce(true); } while (await appConfirm('Scan item berikutnya?', { title: 'Continuous Scan', confirmText: 'Scan Lagi', cancelText: 'Selesai' })); }
   return <Movement title="Stok Masuk" icon={<PackagePlus />} warehouses={warehouses} warehouseId={warehouseId} onSubmit={(e: any) => { e.preventDefault(); const f = new FormData(e.currentTarget); return onSubmit('/inventory/stock-in', { warehouseId: f.get('warehouseId'), supplier: f.get('supplier'), reference: f.get('reference'), remarks: f.get('remarks'), items: [{ itemId: f.get('itemId'), qty: Number(f.get('qty')), unitCost: Number(f.get('unitCost')) }] }, e.currentTarget, 'Stok masuk berhasil disimpan.'); }}><Field name="supplier" label="Supplier" /><Field name="reference" label="Referensi" /><div className="flex gap-2 sm:col-span-2"><button type="button" onClick={() => scanOnce(false)} className="btn-soft"><Camera size={16} /> Scan Barcode</button><button type="button" onClick={continuous} className="btn-soft">Continuous Scan</button></div><label className="sm:col-span-2"><span className="label">Bahan</span><ItemSelect items={items} value={itemId} onChange={setItemId} warehouseId={warehouseId} /></label><label><span className="label">Qty</span><input className="input" name="qty" type="number" min={0} step="0.001" value={qty} onChange={e => setQty(Number(e.target.value || 0))} /></label><Field name="unitCost" label="Harga Beli" type="number" /><Field name="remarks" label="Catatan" /></Movement>;
 }
 function StockOut({ items, warehouses, warehouseId, onSubmit, scanForItem }: any) {
@@ -380,11 +381,11 @@ function TransferStock({ items, warehouses, rows, reload, warehouseId }: any) {
     const f = new FormData(e.currentTarget);
     try {
       await api('/inventory/transfers', { method: 'POST', body: JSON.stringify({ fromWarehouseId: f.get('fromWarehouseId'), toWarehouseId: f.get('toWarehouseId'), notes: String(f.get('notes') || '').trim() || undefined, autoComplete: f.get('autoComplete') === 'on', items: [{ itemId: f.get('itemId'), qty: Number(f.get('qty')), unitCost: Number(f.get('unitCost') || 0) }] }) });
-      form.reset(); reload(); alert('Transfer stock berhasil dibuat.');
-    } catch (err) { alert((err as Error).message); }
+      form.reset(); reload(); toast.success('Transfer stock berhasil dibuat.');
+    } catch (err) { toast.error((err as Error).message); }
   }
   async function complete(id: string) {
-    try { await api(`/inventory/transfers/${id}/complete`, { method: 'POST' }); reload(); alert('Transfer stock berhasil diselesaikan.'); } catch (err) { alert((err as Error).message); }
+    try { await api(`/inventory/transfers/${id}/complete`, { method: 'POST' }); reload(); toast.success('Transfer stock berhasil diselesaikan.'); } catch (err) { toast.error((err as Error).message); }
   }
   return <div className="grid gap-4 xl:grid-cols-[460px_1fr]"><form onSubmit={submit} className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5"><div className="mb-5 flex items-center gap-3 text-2xl font-black"><span className="rounded-2xl bg-brand-50 p-3 text-brand-700"><PackagePlus /></span>Transfer Stock</div><div className="grid gap-3"><label><span className="label">Dari Warehouse</span><select className="input" name="fromWarehouseId" defaultValue={warehouseId}>{warehouses.map((w: InvWarehouse) => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label><label><span className="label">Ke Warehouse</span><select className="input" name="toWarehouseId">{warehouses.map((w: InvWarehouse) => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label><label><span className="label">Bahan</span><ItemSelect items={items} value={itemId} onChange={setItemId} warehouseId={warehouseId} /></label><Field name="qty" label="Qty" type="number" value={1} /><Field name="unitCost" label="Unit Cost optional" type="number" /><Field name="notes" label="Catatan" /><label className="flex items-center gap-3 text-sm font-bold"><input type="checkbox" name="autoComplete" defaultChecked /> Langsung selesaikan transfer</label></div><button className="btn-primary mt-5 w-full">Simpan Transfer</button></form><div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5"><div className="overflow-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr>{['Tanggal', 'No Transfer', 'Dari', 'Ke', 'Item', 'Status', ''].map(x => <th className="p-4" key={x}>{x}</th>)}</tr></thead><tbody>{rows.map((r: any) => <tr className="border-t" key={r.id}><td className="p-4">{dt(r.createdAt)}</td><td className="font-mono font-bold">{r.transferNumber}</td><td>{r.fromWarehouse?.name}</td><td>{r.toWarehouse?.name}</td><td>{r.items?.map((x: any) => `${x.item?.name} (${n(x.qty)})`).join(', ')}</td><td><span className="pill bg-slate-100">{r.status}</span></td><td>{r.status !== 'COMPLETED' && r.status !== 'CANCELLED' && <button className="font-bold text-brand-700" onClick={() => complete(r.id)}>Complete</button>}</td></tr>)}</tbody></table></div>{!rows.length && <div className="p-8 text-center text-slate-400">Belum ada transfer stock.</div>}</div></div>;
 }

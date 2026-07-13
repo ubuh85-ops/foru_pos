@@ -1,5 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { api } from './api';
+import { appAlert } from './components/ui/AppDialog';
 
 type InventoryAlertCandidate = {
   inventoryItemId: string;
@@ -58,7 +59,7 @@ export async function checkInventoryStockAlerts(showPermissionWarning = false) {
   const permission = await requestInventoryNotificationPermission();
   if (!permission.granted) {
     for (const alert of alerts) await logAlert(alert, 'FAILED', permission.reason);
-    if (showPermissionWarning) alert(permission.reason);
+    if (showPermissionWarning) await appAlert(permission.reason || 'Izin notifikasi belum aktif.', { title: 'Izin Notifikasi', tone: 'warning' });
     return { checked: true, sent: 0, failed: alerts.length };
   }
 

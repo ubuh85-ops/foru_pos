@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { dt } from '../api';
 import { getSyncQueue, runManualSync, saveSyncQueue, subscribeSyncState, type SyncQueueItem, type SyncQueueStatus, type SyncState } from '../sync';
+import { appAlert, appConfirm } from '../components/ui/AppDialog';
 
 export default function SyncPage() {
   const [rows, setRows] = useState<SyncQueueItem[]>(() => getSyncQueue());
@@ -18,24 +19,26 @@ export default function SyncPage() {
 
   async function retry(ids?: string[]) {
     const retryIds = ids?.length ? ids : rows.filter(x => x.status === 'FAILED').map(x => x.id);
-    if (!retryIds.length) return alert('Tidak ada data untuk retry.');
+    if (!retryIds.length) return appAlert('Tidak ada data untuk retry.', { title: 'Sinkronisasi', tone: 'info' });
     try {
       await runManualSync(retryIds);
       reload();
     } catch (error) {
-      alert((error as Error).message);
+      appAlert((error as Error).message, { title: 'Sinkronisasi gagal', tone: 'danger' });
     }
   }
 
   function view(row: SyncQueueItem) {
-    alert(JSON.stringify(row, null, 2));
+    appAlert(JSON.stringify(row, null, 2), { title: 'Detail Sync Queue', tone: 'info' });
   }
 
   function deleteLocal(row: SyncQueueItem) {
     if (user?.role !== 'OWNER') return;
-    if (!confirm('Hapus data lokal ini dari sync queue?')) return;
-    saveSyncQueue(getSyncQueue().filter(x => x.id !== row.id));
-    reload();
+    appConfirm('Hapus data lokal ini dari sync queue?', { title: 'Delete Local Queue', confirmText: 'Hapus', danger: true }).then(ok => {
+      if (!ok) return;
+      saveSyncQueue(getSyncQueue().filter(x => x.id !== row.id));
+      reload();
+    });
   }
 
   return <div className="p-4 lg:p-8">
@@ -44,7 +47,7 @@ export default function SyncPage() {
         <h2 className="text-3xl font-black">Sinkronisasi</h2>
         <p className="text-slate-500">Pantau queue offline, retry data gagal, dan jalankan manual sync.</p>
       </div>
-      <button onClick={() => runManualSync().catch(e => alert(e.message))} disabled={state?.syncing} className="btn-primary">Sync Sekarang</button>
+      <button onClick={() => runManualSync().catch(e => appAlert(e.message, { title: 'Sinkronisasi gagal', tone: 'danger' }))} disabled={state?.syncing} className="btn-primary">Sync Sekarang</button>
     </div>
 
     <div className="mb-5 grid gap-3 sm:grid-cols-4">

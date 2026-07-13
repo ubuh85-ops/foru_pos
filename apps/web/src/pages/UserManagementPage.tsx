@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Edit, KeyRound, Plus, Search, Store, Trash2, UserCog } from 'lucide-react';
 import { api, dt } from '../api';
+import { toast } from '../toast';
+import { appConfirm } from '../components/ui/AppDialog';
 
 type Outlet = { id: string; name: string; code?: string };
 type Warehouse = { id: string; name: string; code?: string; outletId?: string | null; outlet?: Outlet | null; status?: string };
@@ -100,7 +102,7 @@ export default function UserManagementPage() {
       await api(edit.id ? `/users/${edit.id}` : '/users', { method: edit.id ? 'PUT' : 'POST', body: JSON.stringify(body) });
       setEdit(null);
       load();
-      alert(edit.id ? 'User berhasil diubah.' : 'User berhasil ditambahkan.');
+      toast.success(edit.id ? 'User berhasil diubah.' : 'User berhasil ditambahkan.');
     } catch (e) {
       setError((e as Error).message);
     }
@@ -113,7 +115,7 @@ export default function UserManagementPage() {
       const f = new FormData(e.currentTarget);
       await api(`/users/${reset.id}/reset-password`, { method: 'POST', body: JSON.stringify({ password: f.get('password'), confirmPassword: f.get('confirmPassword') }) });
       setReset(null);
-      alert('Password berhasil di-reset.');
+      toast.success('Password berhasil di-reset.');
     } catch (e) {
       setError((e as Error).message);
     }
@@ -127,7 +129,7 @@ export default function UserManagementPage() {
       await api(`/users/${assign.id}/outlets`, { method: 'PUT', body: JSON.stringify({ outletIds: f.getAll('outletIds') }) });
       setAssign(null);
       load();
-      alert('Outlet user berhasil diperbarui.');
+      toast.success('Outlet user berhasil diperbarui.');
     } catch (e) {
       setError((e as Error).message);
     }
@@ -143,10 +145,11 @@ export default function UserManagementPage() {
   }
 
   async function softDelete(user: ManagedUser) {
-    if (!confirm(`Soft delete user "${user.name}"?`)) return;
+    if (!await appConfirm(`Soft delete user "${user.name}"?`, { title: 'Soft Delete User', confirmText: 'Delete', danger: true })) return;
     try {
       await api(`/users/${user.id}`, { method: 'DELETE' });
       load();
+      toast.success('User berhasil dihapus.');
     } catch (e) {
       setError((e as Error).message);
     }

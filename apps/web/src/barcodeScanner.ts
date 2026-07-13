@@ -1,3 +1,5 @@
+import { appAlert, appPrompt } from './components/ui/AppDialog';
+
 type ScanResult = { value: string };
 
 const formats = [
@@ -17,7 +19,7 @@ function isNativeAndroid() {
 
 export async function scanInventoryBarcode(): Promise<ScanResult | null> {
   if (!isNativeAndroid()) {
-    const value = prompt('Masukkan / simulasi hasil barcode');
+    const value = await appPrompt('Masukkan / simulasi hasil barcode', '', { title: 'Scan Barcode', label: 'Barcode / SKU' });
     return value?.trim() ? { value: value.trim() } : null;
   }
 
@@ -27,7 +29,7 @@ export async function scanInventoryBarcode(): Promise<ScanResult | null> {
   const permission = await scanner.requestPermissions();
   const camera = permission?.camera;
   if (camera !== 'granted' && camera !== 'limited') {
-    alert('FORU POS membutuhkan akses kamera untuk scan barcode. Aktifkan izin kamera di pengaturan Android.');
+    await appAlert('FORU POS membutuhkan akses kamera untuk scan barcode. Aktifkan izin kamera di pengaturan Android.', { title: 'Izin Kamera', tone: 'warning' });
     return null;
   }
 

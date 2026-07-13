@@ -2,6 +2,8 @@ import { FormEvent, useEffect, useState } from 'react';
 import { Edit, Plus, Trash2 } from 'lucide-react';
 import { api, rupiah } from '../api';
 import { emitMasterDataChanged, subscribeMasterDataChanged } from '../masterEvents';
+import { toast } from '../toast';
+import { appConfirm } from '../components/ui/AppDialog';
 
 const Page = ({ children }: { children: any }) => <div className="p-4 lg:p-8">{children}</div>;
 const Err = ({ v }: { v: string }) => v ? <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{v}</div> : null;
@@ -44,7 +46,7 @@ export default function VariantGroupsPage() {
       setEditGroup(null);
       load();
       emitMasterDataChanged('variant_group_updated');
-      alert('Variant group berhasil disimpan.');
+      toast.success('Variant group berhasil disimpan.');
     } catch (e) {
       setError((e as Error).message);
     }
@@ -67,7 +69,7 @@ export default function VariantGroupsPage() {
       setOptionForm(null);
       load();
       emitMasterDataChanged(optionForm.option ? 'variant_option_updated' : 'variant_option_created', { groupId: optionForm.groupId, optionId: optionForm.option?.id });
-      alert(optionForm.option ? 'Opsi varian berhasil diubah.' : 'Opsi varian berhasil ditambahkan.');
+      toast.success(optionForm.option ? 'Opsi varian berhasil diubah.' : 'Opsi varian berhasil ditambahkan.');
     } catch (e) {
       setError((e as Error).message);
     }
@@ -75,11 +77,11 @@ export default function VariantGroupsPage() {
 
   async function removeOption(groupId: string, option: any) {
     try {
-      if (!confirm(`Hapus/nonaktifkan opsi "${option.name}"?`)) return;
+      if (!await appConfirm(`Hapus/nonaktifkan opsi "${option.name}"?`, { title: 'Hapus Opsi Varian', confirmText: 'Hapus', danger: true })) return;
       await api(`/variant-options/${option.id}`, { method: 'DELETE' });
       load();
       emitMasterDataChanged('variant_option_deleted', { groupId, optionId: option.id });
-      alert('Opsi varian berhasil dihapus/nonaktif.');
+      toast.success('Opsi varian berhasil dihapus/nonaktif.');
     } catch (e) {
       setError((e as Error).message);
     }
@@ -90,7 +92,7 @@ export default function VariantGroupsPage() {
       await api(`/variant-options/${option.id}`, { method: 'PUT', body: JSON.stringify({ status: option.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE' }) });
       load();
       emitMasterDataChanged('variant_option_updated', { groupId, optionId: option.id });
-      alert(`Opsi varian berhasil dibuat ${option.status === 'ACTIVE' ? 'inactive' : 'active'}.`);
+      toast.success(`Opsi varian berhasil dibuat ${option.status === 'ACTIVE' ? 'inactive' : 'active'}.`);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -171,7 +173,7 @@ function Field({ name, label, type = 'text', value, required, min }: { name: str
 }
 
 function Modal({ title, close, children }: { title: string; close: () => void; children: any }) {
-  return <div className="fixed inset-0 z-[60] flex items-end justify-center overflow-auto bg-black/40 p-0 sm:items-center sm:p-4">
+  return <div data-back-modal="true" className="fixed inset-0 z-[60] flex items-end justify-center overflow-auto bg-black/40 p-0 sm:items-center sm:p-4">
     <div className="max-h-[92vh] w-full max-w-lg overflow-auto rounded-t-3xl bg-white p-6 sm:rounded-3xl">
       <div className="mb-5 flex justify-between"><h3 className="section-title">{title}</h3><button onClick={close}>✕</button></div>
       {children}

@@ -504,7 +504,7 @@ function ConfigProduct({ product, close, add }: { product: Product; close: () =>
   const selectedOptions = groups.flatMap(g => g.options.filter(o => sel.includes(o.id)));
   const total = Number(product.basePrice) + selectedOptions.reduce((s, o) => s + Number(o.additionalPrice), 0);
   const errors = groups.flatMap(g => { const n = g.options.filter(o => sel.includes(o.id)).length, min = g.required ? Math.max(g.minSelect, 1) : g.minSelect; return n < min ? [`${g.name}: Minimal pilih ${min} opsi.`] : n > g.maxSelect ? [`${g.name}: Maksimal pilih ${g.maxSelect} opsi.`] : []; });
-  return <div className="fixed inset-0 z-[60] grid place-items-end bg-black/40 sm:place-items-center"><div className="max-h-[92vh] w-full max-w-lg overflow-auto rounded-t-3xl bg-white p-6 sm:rounded-3xl"><div className="mb-5 flex justify-between"><div><h3 className="section-title">{product.name}</h3><p className="text-sm text-slate-400">{rupiah(product.basePrice)}</p></div><button onClick={close}><X /></button></div><div className="space-y-5">{groups.map(g => <section key={g.id}><div className="mb-2 flex justify-between"><b>{g.name}</b><span className="text-xs text-slate-400">{g.required ? 'Wajib ' : ''}min {g.required ? Math.max(g.minSelect, 1) : g.minSelect} · max {g.maxSelect}</span></div><div className="space-y-2">{g.options.map(o => <label key={o.id} className={`flex items-center justify-between rounded-xl border p-3 text-sm ${sel.includes(o.id) ? 'border-brand-500 bg-brand-50' : ''}`}><span className="flex items-center gap-2"><input type={g.maxSelect === 1 ? 'radio' : 'checkbox'} name={g.id} checked={sel.includes(o.id)} onChange={() => toggle(g, o)} />{o.name}</span><b>{Number(o.additionalPrice) ? `+${rupiah(o.additionalPrice)}` : 'Gratis'}</b></label>)}</div></section>)}</div>{errors.length > 0 && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{errors[0]}</p>}<div className="mt-5 flex items-center justify-between border-t pt-4"><span>Total item</span><b className="text-2xl text-brand-700">{rupiah(total)}</b></div><button disabled={!!errors.length} onClick={() => { const ids = [...sel].sort(); add({ key: `${product.id}:${ids.join('|')}`, productId: product.id, selectedVariantOptionIds: ids, name: product.name, variant: selectedOptions.map(o => o.name).join(', ') || 'Base', price: total, qty: 1 }); close(); }} className="btn-primary mt-5 w-full">Add To Cart</button></div></div>;
+  return <div data-back-modal="true" className="fixed inset-0 z-[60] grid place-items-end bg-black/40 sm:place-items-center"><div className="max-h-[92vh] w-full max-w-lg overflow-auto rounded-t-3xl bg-white p-6 sm:rounded-3xl"><div className="mb-5 flex justify-between"><div><h3 className="section-title">{product.name}</h3><p className="text-sm text-slate-400">{rupiah(product.basePrice)}</p></div><button data-back-close="true" onClick={close}><X /></button></div><div className="space-y-5">{groups.map(g => <section key={g.id}><div className="mb-2 flex justify-between"><b>{g.name}</b><span className="text-xs text-slate-400">{g.required ? 'Wajib ' : ''}min {g.required ? Math.max(g.minSelect, 1) : g.minSelect} · max {g.maxSelect}</span></div><div className="space-y-2">{g.options.map(o => <label key={o.id} className={`flex items-center justify-between rounded-xl border p-3 text-sm ${sel.includes(o.id) ? 'border-brand-500 bg-brand-50' : ''}`}><span className="flex items-center gap-2"><input type={g.maxSelect === 1 ? 'radio' : 'checkbox'} name={g.id} checked={sel.includes(o.id)} onChange={() => toggle(g, o)} />{o.name}</span><b>{Number(o.additionalPrice) ? `+${rupiah(o.additionalPrice)}` : 'Gratis'}</b></label>)}</div></section>)}</div>{errors.length > 0 && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{errors[0]}</p>}<div className="mt-5 flex items-center justify-between border-t pt-4"><span>Total item</span><b className="text-2xl text-brand-700">{rupiah(total)}</b></div><button disabled={!!errors.length} onClick={() => { const ids = [...sel].sort(); add({ key: `${product.id}:${ids.join('|')}`, productId: product.id, selectedVariantOptionIds: ids, name: product.name, variant: selectedOptions.map(o => o.name).join(', ') || 'Base', price: total, qty: 1 }); close(); }} className="btn-primary mt-5 w-full">Add To Cart</button></div></div>;
 }
 
 function Row({ label, n }: { label: string; n: number }) { return <div className="flex justify-between text-slate-500"><span>{label}</span><span className="money">{rupiah(n)}</span></div>; }
@@ -519,9 +519,9 @@ function Payment({ total, initialCustomerName = '', onClose, onPay }: { total: n
   const nonCash = m !== 'CASH';
   const paidAmount = nonCash ? total : cash;
   const change = Math.max(0, paidAmount - total);
-  return <div className="fixed inset-0 z-[60] grid place-items-end bg-black/40 sm:place-items-center">
+  return <div data-back-modal="true" className="fixed inset-0 z-[60] grid place-items-end bg-black/40 sm:place-items-center">
     <div className="max-h-[94vh] w-full max-w-xl overflow-auto rounded-t-3xl bg-white p-5 sm:rounded-3xl">
-      <div className="mb-4 flex items-center justify-between"><h3 className="text-xl"><span className="text-slate-500">Metode </span><b>Pembayaran</b></h3><button onClick={onClose} className="rounded-xl p-2 text-slate-500 hover:bg-slate-50"><X /></button></div>
+      <div className="mb-4 flex items-center justify-between"><h3 className="text-xl"><span className="text-slate-500">Metode </span><b>Pembayaran</b></h3><button data-back-close="true" onClick={onClose} className="rounded-xl p-2 text-slate-500 hover:bg-slate-50"><X /></button></div>
       <div className="mb-4 grid grid-cols-2 gap-2">{methods.map(value => <button key={value} onClick={() => setM(value)} className={`rounded-xl border p-3 text-sm font-black ${m === value ? 'border-brand-500 bg-brand-50 text-brand-700' : 'bg-white'}`}>{value}</button>)}</div>
       <button className="mb-3 w-full rounded-xl bg-brand-50 px-4 py-4 font-medium text-brand-700">Edit Tanggal</button>
       <div className="mb-4 grid grid-cols-[1fr_5rem] gap-2"><input className="input" value="" readOnly placeholder="Gunakan Kupon" /><button className="rounded-xl border border-brand-300 text-2xl text-brand-500">⌄</button></div>
@@ -571,7 +571,7 @@ function Receipt({ sale, close }: { sale: any; close: () => void }) {
       toast.error((e as Error).message);
     }
   }
-  return <div className="fixed inset-0 z-[70] grid place-items-center bg-ink/80 p-4">
+  return <div data-back-modal="true" className="fixed inset-0 z-[70] grid place-items-center bg-ink/80 p-4">
     <div className="w-full max-w-sm rounded-3xl bg-white p-6 text-center">
       <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full bg-brand-100 text-brand-700"><Check size={30} /></div>
       <h2 className="text-2xl font-black">{paid ? 'Transaksi berhasil!' : 'Order tersimpan!'}</h2>
@@ -585,7 +585,7 @@ function Receipt({ sale, close }: { sale: any; close: () => void }) {
         <label className="flex items-center gap-3 py-2 text-sm font-medium"><input className="h-5 w-5 accent-brand-600" type="checkbox" checked={kitchenPrint} onChange={e => setKitchenPrint(e.target.checked)} />Print Kitchen Ticket (Struk Dapur)</label>
       </div>
       <button onClick={printSelected} className="btn-soft mb-2 w-full justify-center border-brand-600 text-brand-700">Cetak Sekarang <Printer size={18} /></button>
-      <button onClick={close} className="btn-primary w-full">Transaksi Baru</button>
+      <button data-back-close="true" onClick={close} className="btn-primary w-full">Transaksi Baru</button>
     </div>
   </div>;
 }

@@ -44,7 +44,7 @@ export function ForuDialogShell({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  return <div className="fixed inset-0 z-[90] grid place-items-center bg-slate-950/45 p-4 backdrop-blur-[2px]">
+  return <div data-back-modal="true" className="fixed inset-0 z-[90] grid place-items-center bg-slate-950/45 p-4 backdrop-blur-[2px]">
     <div className="w-full max-w-[21rem] rounded-[1.5rem] bg-white p-4 shadow-2xl ring-1 ring-slate-200 sm:max-w-xl sm:rounded-[1.75rem] sm:p-6">
       <div className="mb-4 flex items-start justify-between gap-4">
         <div className="flex min-w-0 items-start gap-3">
@@ -56,7 +56,7 @@ export function ForuDialogShell({
             {description && <p className="mt-1 text-xs font-medium leading-5 text-slate-500 sm:text-sm sm:leading-6">{description}</p>}
           </div>
         </div>
-        {onClose && <button onClick={onClose} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-slate-500 hover:bg-slate-50">
+        {onClose && <button data-back-close="true" onClick={onClose} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-slate-500 hover:bg-slate-50">
           <X size={22} />
         </button>}
       </div>
@@ -91,7 +91,7 @@ export function ConfirmDialog({
     description={description}
     onClose={onCancel}
     footer={<>
-      <button onClick={onCancel} className="h-11 min-w-24 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 sm:h-12 sm:min-w-28 sm:px-5">{cancelText}</button>
+      <button data-back-close="true" onClick={onCancel} className="h-11 min-w-24 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 sm:h-12 sm:min-w-28 sm:px-5">{cancelText}</button>
       <button onClick={onConfirm} className="h-11 min-w-24 rounded-xl bg-brand-500 px-4 text-sm font-bold text-white shadow-sm hover:bg-brand-600 sm:h-12 sm:min-w-28 sm:px-5">{confirmText}</button>
     </>}
   >
@@ -123,7 +123,7 @@ export function TextInputDialog({
     description={description}
     onClose={onCancel}
     footer={<>
-      <button onClick={onCancel} className="h-11 min-w-24 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 sm:h-12 sm:min-w-28 sm:px-5">Batal</button>
+      <button data-back-close="true" onClick={onCancel} className="h-11 min-w-24 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 sm:h-12 sm:min-w-28 sm:px-5">Batal</button>
       <button onClick={() => onSubmit(value)} className="h-11 min-w-24 rounded-xl bg-brand-500 px-4 text-sm font-bold text-white shadow-sm hover:bg-brand-600 sm:h-12 sm:min-w-28 sm:px-5">Simpan</button>
     </>}
   >
@@ -158,7 +158,7 @@ export function DiscountDialog({
     description={description}
     onClose={onCancel}
     footer={<>
-      <button onClick={onCancel} className="h-11 min-w-24 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 sm:h-12 sm:min-w-28 sm:px-5">Batal</button>
+      <button data-back-close="true" onClick={onCancel} className="h-11 min-w-24 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 sm:h-12 sm:min-w-28 sm:px-5">Batal</button>
       <button disabled={invalid} onClick={() => onSubmit({ type, value: numeric })} className="h-11 min-w-24 rounded-xl bg-brand-500 px-4 text-sm font-bold text-white shadow-sm hover:bg-brand-600 disabled:bg-slate-300 sm:h-12 sm:min-w-28 sm:px-5">OK</button>
     </>}
   >

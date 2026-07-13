@@ -5,6 +5,7 @@ import { api, dt, rupiah } from '../api';
 import { printShiftCloseReport } from '../printer';
 import { toast } from '../toast';
 import { useOutlet } from '../OutletContext';
+import { appAlert } from '../components/ui/AppDialog';
 
 type Outlet = { id: string; name: string; code?: string };
 const today = () => new Date().toLocaleDateString('en-CA');
@@ -107,10 +108,10 @@ export default function ShiftPage() {
     try {
       await printShiftCloseReport(report);
       await logPrint(report, 'SUCCESS');
-      alert('Print laporan shift berhasil.');
+      toast.success('Print laporan shift berhasil.');
     } catch (e) {
       await logPrint(report, 'FAILED', (e as Error).message);
-      alert(`Print laporan shift gagal: ${(e as Error).message}`);
+      await appAlert(`Print laporan shift gagal: ${(e as Error).message}`, { title: 'Print gagal', tone: 'danger' });
     }
   }
 

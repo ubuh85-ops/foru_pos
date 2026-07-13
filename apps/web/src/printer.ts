@@ -1,5 +1,6 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { api, dt } from './api';
+import { appAlert } from './components/ui/AppDialog';
 
 export type PrintDocType = 'customer-receipt' | 'kitchen-ticket' | 'customer-item-list' | 'shift-close-report';
 
@@ -317,13 +318,13 @@ export async function printWithBluetoothFallback(doc: any, type: PrintDocType, b
     if (printed) return;
   } catch (e) {
     if (isNativeAndroid()) {
-      alert(`Gagal print Bluetooth: ${(e as Error).message}`);
+      await appAlert(`Gagal print Bluetooth: ${(e as Error).message}`, { title: 'Print Bluetooth gagal', tone: 'danger' });
       return;
     }
-    alert(`Gagal print Bluetooth: ${(e as Error).message}. Membuka browser print fallback.`);
+    await appAlert(`Gagal print Bluetooth: ${(e as Error).message}. Membuka browser print fallback.`, { title: 'Print Bluetooth gagal', tone: 'warning' });
   }
   if (isNativeAndroid()) {
-    alert('Printer Bluetooth aktif tidak ditemukan. Buka menu Printer, pilih device, isi MAC address, centang Customer Receipt/Kitchen, lalu Simpan Printer.');
+    await appAlert('Printer Bluetooth aktif tidak ditemukan. Buka menu Printer, pilih device, isi MAC address, centang Customer Receipt/Kitchen, lalu Simpan Printer.', { title: 'Printer belum dipilih', tone: 'warning' });
     return;
   }
   window.open(browserUrl, '_blank');

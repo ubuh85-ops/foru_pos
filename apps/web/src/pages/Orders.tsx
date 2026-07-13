@@ -1,23 +1,35 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Check, Clock3, Eye, Filter, MoreHorizontal, UserRound, X } from 'lucide-react';
+import { Check, Clock3, Eye, Filter, MoreHorizontal, Package, Pencil, Printer, ReceiptText, UserRound, X, XCircle } from 'lucide-react';
 import { api, dt, rupiah } from '../api';
 import { printWithBluetoothFallback } from '../printer';
 import { useOutlet } from '../OutletContext';
+import { appAlert, appPrompt } from '../components/ui/AppDialog';
+import { CancelOrderDialog } from '../components/ui/FormDialog';
 
 const Page = ({ children }: { children: any }) => <div className="p-4 lg:p-8">{children}</div>;
 const Loading = () => <div className="p-10 text-center text-slate-400">Memuat data...</div>;
 const Err = ({ v }: { v: string }) => v ? <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{v}</div> : null;
 const Empty = () => <div className="p-10 text-center text-sm text-slate-400">Belum ada data pada periode ini.</div>;
-const statusPill = (status: string) => status === 'PAID' ? 'bg-brand-50 text-brand-700' : status === 'PENDING_PAYMENT' ? 'bg-amber-50 text-amber-700' : status === 'VOID' ? 'bg-red-50 text-red-700' : 'bg-slate-100';
 const statusMeta = (status: string) => {
-  if (status === 'PAID') return { label: 'Paid', cls: 'bg-emerald-50 text-emerald-700', icon: Check };
-  if (status === 'PENDING_PAYMENT') return { label: 'Pending', cls: 'bg-amber-50 text-amber-700', icon: Clock3 };
-  if (status === 'CANCELLED') return { label: 'Cancelled', cls: 'bg-red-50 text-red-700', icon: X };
+  if (status === 'PAID') return { label: 'PAID', cls: 'bg-emerald-50 text-emerald-700', icon: Check };
+  if (status === 'PENDING_PAYMENT') return { label: 'PENDING PAYMENT', cls: 'bg-amber-50 text-amber-700', icon: Clock3 };
+  if (status === 'CANCELLED') return { label: 'CANCELLED', cls: 'bg-slate-100 text-slate-600', icon: X };
   if (status === 'VOID') return { label: 'Void', cls: 'bg-red-50 text-red-700', icon: X };
   return { label: status, cls: 'bg-slate-100 text-slate-600', icon: Clock3 };
 };
 const itemSummary = (items?: any[]) => (items || []).map(i => `${i.qty} ${i.productName}`);
+const itemPreview = (items?: any[]) => {
+  const rows = items || [];
+  return { first: rows[0]?.productName || 'Belum ada item', more: Math.max(0, rows.length - 1) };
+};
+const orderTime = (value: string) => {
+  const date = new Date(value);
+  return {
+    date: new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Jakarta' }).format(date),
+    time: new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).format(date)
+  };
+};
 const localDate = (date = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
 const addDays = (date: Date, days: number) => { const next = new Date(date); next.setDate(next.getDate() + days); return next; };
 const startOfWeek = (date: Date) => { const next = new Date(date); const day = next.getDay() || 7; next.setDate(next.getDate() - day + 1); return next; };
@@ -44,6 +56,7 @@ export function Orders() {
   const [loading, setLoading] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [error, setError] = useState('');
+  const [cancelTarget, setCancelTarget] = useState<any>(null);
   function setQuickPreset(value: string) {
     setPreset(value);
     if (value !== 'custom') {
@@ -88,28 +101,13 @@ export function Orders() {
   };
   useEffect(() => { load(); }, [status, from, to, outletId]);
 
-  async function pay(o: any) {
-    try {
-      const paymentMethod = prompt('Payment method: CASH, QRIS, GOFOOD, GRABFOOD, SHOPEEFOOD, VOUCHER', 'CASH') || 'CASH';
-      const cashReceived = paymentMethod === 'CASH' ? Number(prompt('Cash received', String(o.grandTotal)) || 0) : undefined;
-      const active = await api<any>(`/outlets/${o.outletId}/active-shift`);
-      await api(`/orders/${o.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod, cashReceived, cashSessionId: active?.id }) });
-      load();
-    } catch (e) { alert((e as Error).message); }
-  }
   async function cancel(o: any) {
-    try {
-      const reason = prompt('Alasan cancel', 'Customer batal') || 'Customer batal';
-      await api(`/orders/${o.id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) });
-      load();
-    } catch (e) { alert((e as Error).message); }
+    setCancelTarget(o);
   }
-  async function voidOrder(o: any) {
-    try {
-      const reason = prompt('Alasan void', 'Void transaksi') || 'Void transaksi';
-      await api(`/sales/${o.id}/void`, { method: 'POST', body: JSON.stringify({ reason }) });
-      load();
-    } catch (e) { alert((e as Error).message); }
+  async function submitCancel(reason: string) {
+    if (!cancelTarget) return;
+    await api(`/orders/${cancelTarget.id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) });
+    await load();
   }
   async function print(o: any, type: 'customer-item-list' | 'kitchen-ticket' | 'customer-receipt') {
     try {
@@ -117,8 +115,32 @@ export function Orders() {
       else await api(`/orders/${o.id}/print/${type}`, { method: 'POST' });
       const doc = type === 'customer-receipt' ? await api(`/sales/${o.id}`) : await api(`/orders/${o.id}`);
       await printWithBluetoothFallback(doc, type, type === 'customer-item-list' ? `/customer-item-list/${o.id}` : type === 'customer-receipt' ? `/receipt/${o.id}` : `/kitchen-ticket/${o.id}`);
-    } catch (e) { alert((e as Error).message); }
+    } catch (e) { appAlert((e as Error).message, { tone: 'danger' }); }
   }
+  const iconBtn = 'inline-flex h-10 w-10 items-center justify-center rounded-xl border border-brand-100 bg-white text-brand-700 shadow-sm hover:bg-brand-50';
+  const dangerBtn = 'inline-flex h-10 w-10 items-center justify-center rounded-xl border border-red-100 bg-white text-red-600 shadow-sm hover:bg-red-50';
+  const menuItem = 'flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-brand-700 hover:bg-brand-50';
+  const dangerMenuItem = 'flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-red-600 hover:bg-red-50';
+  const DesktopActions = ({ o }: { o: any }) => <div className="flex flex-nowrap items-center justify-end gap-2">
+    <Link title="View" aria-label="View order" className={iconBtn} to={`/orders/${o.id}`}><Eye size={18} /></Link>
+    {o.status === 'PENDING_PAYMENT' && <Link title="Edit" aria-label="Edit order" className={iconBtn} to={`/pos?editOrderId=${o.id}`}><Pencil size={18} /></Link>}
+    <button title="Item List" aria-label="Print item list" className={iconBtn} onClick={() => print(o, 'customer-item-list')}><Package size={18} /></button>
+    <button title={o.status === 'PAID' ? 'Reprint Kitchen' : 'Kitchen'} aria-label="Print kitchen ticket" className={iconBtn} onClick={() => print(o, 'kitchen-ticket')}><Printer size={18} /></button>
+    {o.status === 'PAID' && <button title="Reprint Receipt" aria-label="Print receipt" className={iconBtn} onClick={() => print(o, 'customer-receipt')}><ReceiptText size={18} /></button>}
+    {o.status === 'PENDING_PAYMENT' && <button title="Cancel" aria-label="Cancel order" className={dangerBtn} onClick={() => cancel(o)}><XCircle size={18} /></button>}
+  </div>;
+  const MoreMenu = ({ o }: { o: any }) => <details className="relative">
+    <summary aria-label="More actions" className="inline-flex h-12 w-12 cursor-pointer list-none items-center justify-center rounded-xl bg-slate-100 text-ink shadow-sm [&::-webkit-details-marker]:hidden">
+      <MoreHorizontal size={22} />
+    </summary>
+    <div className="absolute right-0 z-20 mt-2 w-52 overflow-hidden rounded-2xl border border-slate-100 bg-white p-2 text-sm font-bold shadow-xl">
+      {o.status === 'PENDING_PAYMENT' && <Link className={menuItem} to={`/pos?editOrderId=${o.id}`}><Pencil size={16} />Edit</Link>}
+      <button className={menuItem} onClick={() => print(o, 'customer-item-list')}><Package size={16} />Item List</button>
+      <button className={menuItem} onClick={() => print(o, 'kitchen-ticket')}><Printer size={16} />Kitchen</button>
+      {o.status === 'PAID' && <button className={menuItem} onClick={() => print(o, 'customer-receipt')}><ReceiptText size={16} />Receipt</button>}
+      {o.status === 'PENDING_PAYMENT' && <button className={dangerMenuItem} onClick={() => cancel(o)}><XCircle size={16} />Cancel</button>}
+    </div>
+  </details>;
 
   return <Page>
     <div className="mb-5 flex items-start justify-between gap-3">
@@ -157,6 +179,8 @@ export function Orders() {
         const meta = statusMeta(o.status);
         const Icon = meta.icon;
         const items = itemSummary(o.items);
+        const preview = itemPreview(o.items);
+        const time = orderTime(o.createdAt);
         return <div key={o.id} className="rounded-3xl bg-white p-5 shadow-[0_10px_30px_rgba(15,23,42,0.07)] ring-1 ring-slate-100">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4">
             <div className="min-w-0">
@@ -177,48 +201,44 @@ export function Orders() {
             </div>
             <div className="text-right">
               <p className="text-base font-semibold text-ink">{rupiah(o.grandTotal)}</p>
-              <p className="mt-1 text-sm text-slate-500">{dt(o.createdAt)}</p>
+              <p className="mt-1 text-sm text-slate-500">{time.date}</p>
+              <p className="text-sm text-slate-500">{time.time}</p>
             </div>
           </div>
-          {!!items.length && <div className="mt-4 rounded-2xl bg-slate-50 px-4 py-3">
-            <div className="space-y-1.5">
-              {items.slice(0, 4).map((item, index) => <p key={`${o.id}-item-${index}`} className="truncate text-sm font-semibold text-slate-700">{item}</p>)}
-              {items.length > 4 && <p className="text-xs font-bold text-slate-400">+{items.length - 4} item lain</p>}
+          {!!items.length && <div className="mt-4 flex items-center gap-3 rounded-2xl bg-slate-50 px-4 py-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-700"><Package size={18} /></div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-black text-slate-700">{preview.first}</p>
+              {preview.more > 0 && <p className="text-xs font-bold text-slate-400">+{preview.more} item</p>}
             </div>
           </div>}
           <div className="mt-5 flex justify-end gap-3">
-            <Link aria-label="View order" className="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-pink-200 bg-white text-pink-500 shadow-sm" to={`/orders/${o.id}`}>
+            <Link aria-label="View order" className="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-brand-100 bg-white text-brand-700 shadow-sm" to={`/orders/${o.id}`}>
               <Eye size={20} />
             </Link>
-            <details className="relative">
-              <summary aria-label="More actions" className="inline-flex h-12 w-12 cursor-pointer list-none items-center justify-center rounded-xl bg-slate-100 text-ink shadow-sm [&::-webkit-details-marker]:hidden">
-                <MoreHorizontal size={22} />
-              </summary>
-              <div className="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-2xl border border-slate-100 bg-white p-2 text-sm font-bold shadow-xl">
-                {o.status === 'PENDING_PAYMENT' && <Link className="block rounded-xl px-3 py-2 text-brand-700 hover:bg-brand-50" to={`/pos?editOrderId=${o.id}`}>Edit</Link>}
-                {o.status === 'PENDING_PAYMENT' && <button className="block w-full rounded-xl px-3 py-2 text-left text-brand-700 hover:bg-brand-50" onClick={() => pay(o)}>Pay</button>}
-                {o.status === 'PENDING_PAYMENT' && <button className="block w-full rounded-xl px-3 py-2 text-left text-brand-700 hover:bg-brand-50" onClick={() => print(o, 'customer-item-list')}>Item List</button>}
-                <button className="block w-full rounded-xl px-3 py-2 text-left text-brand-700 hover:bg-brand-50" onClick={() => print(o, 'kitchen-ticket')}>Kitchen</button>
-                {o.status === 'PAID' && <button className="block w-full rounded-xl px-3 py-2 text-left text-brand-700 hover:bg-brand-50" onClick={() => print(o, 'customer-receipt')}>Receipt</button>}
-                {o.status === 'PAID' && <button className="block w-full rounded-xl px-3 py-2 text-left text-red-600 hover:bg-red-50" onClick={() => voidOrder(o)}>Void</button>}
-                {o.status === 'PENDING_PAYMENT' && <button className="block w-full rounded-xl px-3 py-2 text-left text-red-600 hover:bg-red-50" onClick={() => cancel(o)}>Cancel</button>}
-              </div>
-            </details>
+            {o.status === 'PENDING_PAYMENT' && <Link aria-label="Edit order" className="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-brand-100 bg-white text-brand-700 shadow-sm" to={`/pos?editOrderId=${o.id}`}><Pencil size={20} /></Link>}
+            <MoreMenu o={o} />
           </div>
         </div>;
       })}
       {!data.length && <Empty />}
     </div>
-    <div className="card hidden overflow-hidden lg:block"><div className="overflow-auto"><table className="w-full min-w-[1200px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr>{['Order', 'Customer', 'Items', 'Outlet', 'Cashier', 'Time', 'Total', 'Status', 'Actions'].map(x => <th className="p-4" key={x}>{x}</th>)}</tr></thead><tbody>{data.map(o => <tr className="border-t" key={o.id}><td className="p-4 font-bold">{o.orderNumber || o.transactionNumber}<p className="font-normal text-slate-400">{o.transactionNumber || '-'}</p></td><td className="font-bold">{o.customerName || 'Walk In'}</td><td className="max-w-[220px] p-4 text-xs font-semibold text-slate-500">{itemSummary(o.items).slice(0, 3).map((item, index) => <p className="truncate" key={`${o.id}-desktop-item-${index}`}>{item}</p>)}{itemSummary(o.items).length > 3 && <p className="font-bold text-slate-400">+{itemSummary(o.items).length - 3} item lain</p>}</td><td>{o.outlet.name}</td><td>{o.cashier.name}</td><td>{dt(o.createdAt)}</td><td className="font-bold">{rupiah(o.grandTotal)}</td><td><span className={`pill ${statusPill(o.status)}`}>{o.status}</span></td><td><div className="flex flex-wrap gap-2">
-        <Link className="font-bold text-brand-600" to={`/orders/${o.id}`}>View</Link>
-        {o.status === 'PENDING_PAYMENT' && <Link className="font-bold text-brand-600" to={`/pos?editOrderId=${o.id}`}>Edit</Link>}
-        {o.status === 'PENDING_PAYMENT' && <button className="font-bold text-brand-600" onClick={() => pay(o)}>Pay</button>}
-        {o.status === 'PENDING_PAYMENT' && <button className="font-bold text-brand-600" onClick={() => print(o, 'customer-item-list')}>Item List</button>}
-        <button className="font-bold text-brand-600" onClick={() => print(o, 'kitchen-ticket')}>Kitchen</button>
-        {o.status === 'PAID' && <button className="font-bold text-brand-600" onClick={() => print(o, 'customer-receipt')}>Receipt</button>}
-        {o.status === 'PAID' && <button className="font-bold text-red-600" onClick={() => voidOrder(o)}>Void</button>}
-        {o.status === 'PENDING_PAYMENT' && <button className="font-bold text-red-600" onClick={() => cancel(o)}>Cancel</button>}
-      </div></td></tr>)}</tbody></table></div>{!data.length && <Empty />}</div>
+    <div className="card hidden overflow-hidden lg:block"><div className="overflow-auto"><table className="w-full min-w-[980px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr>{['Items', 'Outlet', 'Cashier', 'Time', 'Total', 'Status', 'Actions'].map(x => <th className={`p-4 ${x === 'Total' || x === 'Actions' ? 'text-right' : ''}`} key={x}>{x}</th>)}</tr></thead><tbody>{data.map(o => {
+      const preview = itemPreview(o.items);
+      const time = orderTime(o.createdAt);
+      const meta = statusMeta(o.status);
+      const StatusIcon = meta.icon;
+      return <tr className="h-[72px] border-t align-middle" key={o.id}>
+        <td className="p-4"><div className="flex min-w-0 items-center gap-3"><div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-700"><Package size={18} /></div><div className="min-w-0"><p className="truncate font-black text-ink">{preview.first}</p>{preview.more > 0 && <p className="text-xs font-bold text-slate-400">+{preview.more} item</p>}<p className="truncate text-xs text-slate-400">{o.orderNumber || o.transactionNumber}</p></div></div></td>
+        <td className="max-w-[180px] truncate font-semibold text-slate-600">{o.outlet?.name || '-'}</td>
+        <td className="max-w-[140px] truncate font-semibold text-slate-600">{o.cashier?.name || '-'}</td>
+        <td><p className="font-semibold text-slate-700">{time.date}</p><p className="text-xs font-bold text-slate-400">{time.time}</p></td>
+        <td className="text-right text-base font-black text-ink">{rupiah(o.grandTotal)}</td>
+        <td><span className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-black ${meta.cls}`}><StatusIcon size={14} strokeWidth={3} />{meta.label}</span></td>
+        <td className="p-4 text-right"><DesktopActions o={o} /></td>
+      </tr>;
+    })}</tbody></table></div>{!data.length && <Empty />}</div>
+    <CancelOrderDialog open={!!cancelTarget} onClose={() => setCancelTarget(null)} onSubmit={submitCancel} />
   </Page>;
 }
 
@@ -227,39 +247,30 @@ export function OrderDetail() {
   const navigate = useNavigate();
   const [order, setOrder] = useState<any>();
   const [error, setError] = useState('');
+  const [cancelOpen, setCancelOpen] = useState(false);
   const load = () => api(`/orders/${id}`).then(setOrder).catch(e => setError(e.message));
   useEffect(() => { load(); }, [id]);
   if (error) return <Page><Err v={error} /></Page>;
   if (!order) return <Loading />;
 
-  async function pay() {
-    try {
-      const paymentMethod = prompt('Payment method: CASH, QRIS, GOFOOD, GRABFOOD, SHOPEEFOOD, VOUCHER', 'CASH') || 'CASH';
-      const cashReceived = paymentMethod === 'CASH' ? Number(prompt('Cash received', String(order.grandTotal)) || 0) : undefined;
-      const active = await api<any>(`/outlets/${order.outletId}/active-shift`);
-      const updated = await api<any>(`/orders/${order.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod, cashReceived, cashSessionId: active?.id }) });
-      setOrder(updated);
-    } catch (e) { alert((e as Error).message); }
-  }
   async function cancel() {
-    try {
-      const reason = prompt('Alasan cancel', 'Customer batal') || 'Customer batal';
-      await api(`/orders/${order.id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) });
-      load();
-    } catch (e) { alert((e as Error).message); }
+    setCancelOpen(true);
   }
   async function voidOrder() {
     try {
-      const reason = prompt('Alasan void', 'Void transaksi') || 'Void transaksi';
+      const reason = await appPrompt('Masukkan alasan void transaksi.', 'Void transaksi', { title: 'Void Transaction', label: 'Alasan Void', multiline: true, minLength: 3, maxLength: 250 });
+      if (!reason) return;
       await api(`/sales/${order.id}/void`, { method: 'POST', body: JSON.stringify({ reason }) });
       load();
-    } catch (e) { alert((e as Error).message); }
+    } catch (e) { appAlert((e as Error).message, { tone: 'danger' }); }
   }
   async function print(type: 'customer-item-list' | 'kitchen-ticket' | 'customer-receipt') {
     if (type === 'customer-receipt') await api(`/print/customer-receipt/${order.id}`, { method: 'POST' });
     else await api(`/orders/${order.id}/print/${type}`, { method: 'POST' });
-    await printWithBluetoothFallback(order, type, type === 'customer-item-list' ? `/customer-item-list/${order.id}` : type === 'customer-receipt' ? `/receipt/${order.id}` : `/kitchen-ticket/${order.id}`);
-    load();
+    try {
+      await printWithBluetoothFallback(order, type, type === 'customer-item-list' ? `/customer-item-list/${order.id}` : type === 'customer-receipt' ? `/receipt/${order.id}` : `/kitchen-ticket/${order.id}`);
+      load();
+    } catch (e) { appAlert((e as Error).message, { tone: 'danger' }); }
   }
 
   return <Page>
@@ -272,7 +283,6 @@ export function OrderDetail() {
       </div>
       <div className="card p-5"><h3 className="section-title mb-4">Actions</h3>
         {order.status === 'PENDING_PAYMENT' && <button onClick={() => navigate(`/pos?editOrderId=${order.id}`)} className="btn-primary mb-2 w-full">Edit Order</button>}
-        {order.status === 'PENDING_PAYMENT' && <button onClick={pay} className="btn-soft mb-2 w-full">Pay</button>}
         {order.status === 'PENDING_PAYMENT' && <button onClick={() => print('customer-item-list')} className="btn-soft mb-2 w-full">Customer Item List</button>}
         <button onClick={() => print('kitchen-ticket')} className="btn-soft mb-2 w-full">Kitchen Ticket</button>
         {order.status === 'PAID' && <button onClick={() => print('customer-receipt')} className="btn-soft mb-2 w-full">Print Receipt</button>}
@@ -280,5 +290,14 @@ export function OrderDetail() {
         {order.status === 'PENDING_PAYMENT' && <button onClick={cancel} className="mt-2 w-full rounded-xl bg-red-50 px-4 py-3 font-bold text-red-700">Cancel Order</button>}
       </div>
     </div>
+    <CancelOrderDialog
+      open={cancelOpen}
+      onClose={() => setCancelOpen(false)}
+      onSubmit={async reason => {
+        await api(`/orders/${order.id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) });
+        await load();
+      }}
+    />
   </Page>;
 }
+

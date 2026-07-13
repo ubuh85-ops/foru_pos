@@ -39,6 +39,7 @@ export function showSuccessNotice(message: string) {
 
   const overlay = document.createElement('div');
   overlay.id = 'foru-success-notice';
+  overlay.dataset.backModal = 'true';
   overlay.className = 'fixed inset-0 z-[10000] grid place-items-center bg-slate-950/45 p-4 backdrop-blur-[2px]';
 
   const card = document.createElement('div');
@@ -61,6 +62,7 @@ export function showSuccessNotice(message: string) {
 
   const ok = document.createElement('button');
   ok.type = 'button';
+  ok.dataset.backClose = 'true';
   ok.className = 'mt-5 h-11 w-full rounded-xl bg-brand-500 px-5 text-sm font-bold text-white shadow-sm hover:bg-brand-600 sm:mt-6 sm:h-12';
   ok.textContent = 'OK';
   ok.onclick = () => overlay.remove();

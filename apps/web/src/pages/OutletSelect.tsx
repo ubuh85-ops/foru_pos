@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Edit3, Eye, Filter, LogOut, Plus, Search, Store } from 'lucide-react';
 import { api, type User } from '../api';
 import { useOutlet } from '../OutletContext';
+import { appAlert } from '../components/ui/AppDialog';
 
 type Outlet = { id: string; code?: string; name: string; address?: string | null; status?: string };
 
@@ -83,7 +84,7 @@ export default function OutletSelect({ user, logout }: { user: User; logout: () 
           <p className="mb-3 truncate text-xs text-slate-400">{outlet.address || outlet.code || 'Outlet FORU'}</p>
           <button onClick={() => enter(outlet)} className="mb-2 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-black text-ink hover:bg-brand-50 hover:text-brand-700"><Eye size={16} /> Masuk Ke Outlet</button>
           <div className="grid grid-cols-2 gap-2">
-            <button onClick={() => alert(`${outlet.name}\n${outlet.address || '-'}\nStatus: ${outlet.status || 'ACTIVE'}`)} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-bold"><Eye size={15} /> Info</button>
+            <button onClick={() => appAlert(`${outlet.address || '-'}\nStatus: ${outlet.status || 'ACTIVE'}`, { title: outlet.name, tone: 'info' })} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-bold"><Eye size={15} /> Info</button>
             <button onClick={() => navigate(user.role === 'OWNER' ? '/outlets' : '/select-outlet')} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-bold text-brand-700"><Edit3 size={15} /> Edit</button>
           </div>
         </article>)}
