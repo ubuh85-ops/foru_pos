@@ -5,12 +5,14 @@ dist
 !.env.example
 !*.env.example
 .DS_Store
+*.log
 coverage
 apps/api/prisma/dev.db
 .pnpm-store/
 work/
 *.tar.gz
 *.tsbuildinfo
+**/.idea/
 
 
 # Gradle

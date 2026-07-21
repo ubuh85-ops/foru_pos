@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Edit, Plus, Search } from 'lucide-react';
-import { api, rupiah } from '../api';
+import { Download, Edit, FileDown, FileUp, Plus, Search } from 'lucide-react';
+import { API, api, handleUnauthorizedSession, rupiah } from '../api';
 import { downloadMasterData } from '../sync';
 import { emitMasterDataChanged, subscribeMasterDataChanged } from '../masterEvents';
 import { toast } from '../toast';
@@ -27,6 +27,14 @@ export default function ProductPage() {
   const [search, setSearch] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importFile, setImportFile] = useState('');
+  const [importEncoding, setImportEncoding] = useState<'text' | 'base64'>('text');
+  const [importMode, setImportMode] = useState('UPSERT');
+  const [importPreview, setImportPreview] = useState<any>(null);
+  const [importing, setImporting] = useState(false);
 
   const load = () => api<any[]>('/products').then(setData);
   useEffect(() => {
@@ -50,6 +58,106 @@ export default function ProductPage() {
     });
   }, [data, search, categoryId]);
 
+  function authHeaders(): Record<string, string> {
+    const token = localStorage.getItem('token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+  async function downloadFile(path: string, filename: string) {
+    const res = await fetch(API + path, { headers: authHeaders() });
+    if (res.status === 401) {
+      const data = await res.json().catch(() => ({}));
+      handleUnauthorizedSession(data.message);
+      throw new Error(data.message || 'Sesi tidak valid atau telah berakhir');
+    }
+    if (!res.ok) throw new Error('Download gagal');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  const exportAll = async () => {
+    try { await downloadFile('/products/export', 'foru-products-export.csv'); }
+    catch (e) { toast.error((e as Error).message); }
+  };
+  const exportSelected = async () => {
+    if (!selectedIds.length) return toast.error('Pilih produk terlebih dahulu.');
+    try { await downloadFile(`/products/export?ids=${selectedIds.join(',')}`, 'foru-products-selected.csv'); }
+    catch (e) { toast.error((e as Error).message); }
+  };
+  const downloadTemplate = async () => {
+    try { await downloadFile('/products/import-template', 'foru-product-import-template.csv'); }
+    catch (e) { toast.error((e as Error).message); }
+  };
+  async function readImportFile(file: File) {
+    setImportFile(file.name);
+    const lower = file.name.toLowerCase();
+    if (lower.endsWith('.csv')) {
+      setImportEncoding('text');
+      setImportText(await file.text());
+      setImportPreview(null);
+      return;
+    }
+    if (lower.endsWith('.xls') || lower.endsWith('.xlsx')) {
+      setImportEncoding('base64');
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('File tidak bisa dibaca.'));
+        reader.onload = () => resolve(String(reader.result || '').split(',').pop() || '');
+        reader.readAsDataURL(file);
+      });
+      setImportText(base64);
+      setImportPreview(null);
+      return;
+    }
+    toast.error('Format file tidak didukung. Gunakan CSV, XLS, atau XLSX.');
+  }
+  function importPayload(preview: boolean) {
+    return JSON.stringify({ filename: importFile, mode: importMode, preview, content: importText, encoding: importEncoding });
+  }
+  function resetImportState() {
+    setImportPreview(null);
+    setImportText('');
+    setImportFile('');
+    setImportEncoding('text');
+  }
+  async function previewImport() {
+    if (!importText.trim()) {
+      toast.error('Upload file CSV, XLS, atau XLSX terlebih dahulu.');
+      return;
+    }
+    setImporting(true);
+    try {
+      const result = await api('/products/import', { method: 'POST', body: importPayload(true) });
+      setImportPreview(result);
+    } catch (e) { toast.error((e as Error).message); }
+    finally { setImporting(false); }
+  }
+  async function commitImport() {
+    if (!importText.trim()) return toast.error('Upload file CSV, XLS, atau XLSX terlebih dahulu.');
+    setImporting(true);
+    try {
+      const result: any = await api('/products/import', { method: 'POST', body: importPayload(false) });
+      toast.success(`Import selesai. Baru ${result.summary.imported}, update ${result.summary.updated}, gagal ${result.summary.failed}.`);
+      setImportOpen(false);
+      resetImportState();
+      await downloadMasterData('ONLINE');
+      emitMasterDataChanged('product_master_updated');
+      load();
+    } catch (e) { toast.error((e as Error).message); }
+    finally { setImporting(false); }
+  }
+  function downloadErrorReport() {
+    const rows = [['Row', 'SKU', 'Product', 'Error'], ...(importPreview?.preview || []).filter((x: any) => x.status === 'ERROR').map((x: any) => [x.row, x.sku, x.product, x.message])];
+    const csv = rows.map(r => r.map((v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'foru-product-import-errors.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function save(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (submitting) return;
@@ -67,6 +175,7 @@ export default function ProductPage() {
         method: edit?.id ? 'PUT' : 'POST',
         body: JSON.stringify({
           name: f.get('name'),
+          sku: f.get('sku'),
           categoryId: f.get('categoryId'),
           description: f.get('description'),
           imageUrl: f.get('imageUrl'),
@@ -93,21 +202,50 @@ export default function ProductPage() {
   function rowFor(o: any) { return (edit?.outlets || []).find((x: any) => x.outletId === o.id); }
 
   return <Page>
-    <Head title="Master produk" sub="Produk, harga/HPP outlet, kategori, dan attached variant groups." action={() => setEdit({})} />
+    <div className="mb-6 flex flex-col justify-between gap-3 xl:flex-row xl:items-end">
+      <div><h2 className="text-3xl font-black">Master produk</h2><p className="text-slate-500">Produk, harga/HPP outlet, kategori, dan attached variant groups.</p></div>
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => setEdit({})} className="btn-primary"><Plus size={18} /> Tambah</button>
+        <button onClick={() => setImportOpen(true)} className="btn-soft"><FileUp size={18} /> Import</button>
+        <button onClick={exportAll} className="btn-soft"><Download size={18} /> Export</button>
+        <button onClick={exportSelected} className="btn-soft"><FileDown size={18} /> Export Selected</button>
+        <button onClick={downloadTemplate} className="btn-soft">Template</button>
+      </div>
+    </div>
     <Err v={error} />
     <div className="mb-4 grid gap-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5 md:grid-cols-[minmax(0,1fr)_260px]">
       <div className="relative"><Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><input className="input pl-11" placeholder="Cari produk, deskripsi, atau kategori..." value={search} onChange={e => setSearch(e.target.value)} /></div>
       <select className="input" value={categoryId} onChange={e => setCategoryId(e.target.value)}><option value="">Semua kategori</option>{categories.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}</select>
     </div>
 
-    <div className="space-y-3 md:hidden">{filtered.map(p => <ProductCard key={p.id} p={p} setEdit={setEdit} />)}{!filtered.length && <EmptyProduct />}</div>
-    <div className="card hidden overflow-hidden md:block"><div className="overflow-x-auto"><table className="w-full min-w-[920px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-4">Produk</th><th>Kategori</th><th>Base Price</th><th>Base HPP</th><th>Variant Groups</th><th>Outlet aktif</th><th>Status</th><th></th></tr></thead><tbody>{filtered.map(p => <tr className="border-t" key={p.id}><td className="p-4 font-bold">{p.name}<p className="font-normal text-slate-400">{p.description}</p></td><td>{p.categoryRef?.name || p.category}</td><td>{rupiah(p.basePrice)}</td><td>{rupiah(p.baseHpp)}</td><td>{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</td><td>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</td><td><span className="pill bg-brand-50 text-brand-700">{p.status}</span></td><td><button onClick={() => setEdit(p)} className="text-brand-600"><Edit size={17} /></button></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyProduct />}</div>
+    <div className="space-y-3 md:hidden">{filtered.map(p => <ProductCard key={p.id} p={p} setEdit={setEdit} selected={selectedIds.includes(p.id)} toggle={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} />)}{!filtered.length && <EmptyProduct />}</div>
+    <div className="card hidden overflow-hidden md:block"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-4"><input type="checkbox" checked={!!filtered.length && filtered.every(p => selectedIds.includes(p.id))} onChange={e => setSelectedIds(e.target.checked ? filtered.map(p => p.id) : [])} /></th><th>Produk</th><th>SKU</th><th>Kategori</th><th>Base Price</th><th>Base HPP</th><th>Variant Groups</th><th>Outlet aktif</th><th>Status</th><th></th></tr></thead><tbody>{filtered.map(p => <tr className="border-t" key={p.id}><td className="p-4"><input type="checkbox" checked={selectedIds.includes(p.id)} onChange={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} /></td><td className="font-bold">{p.name}<p className="font-normal text-slate-400">{p.description}</p></td><td>{p.sku || '-'}</td><td>{p.categoryRef?.name || p.category}</td><td>{rupiah(p.basePrice)}</td><td>{rupiah(p.baseHpp)}</td><td>{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</td><td>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</td><td><span className="pill bg-brand-50 text-brand-700">{p.status}</span></td><td><button onClick={() => setEdit(p)} className="text-brand-600"><Edit size={17} /></button></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyProduct />}</div>
 
-    {edit && <Modal title={edit.id ? 'Edit produk' : 'Produk baru'} close={() => setEdit(null)}><form onSubmit={save}><Fields values={edit} items={[['name', 'Nama produk'], ['description', 'Deskripsi'], ['imageUrl', 'Image URL'], ['basePrice', 'Base selling price', 'number'], ['baseHpp', 'Base HPP', 'number']]} /><label className="label">Kategori</label><select className="input mb-3" name="categoryId" defaultValue={edit.categoryId || categories[0]?.id} required>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><label className="label">Status produk master</label><select className="input mb-3" name="status" defaultValue={edit.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select><CheckList title="Variant Groups" name="variantGroupIds" rows={groups.map(g => [g.id, g.name])} checked={(edit.variantGroups || []).map((x: any) => x.variantGroupId)} /><div className="mt-5"><label className="label">Outlet Availability & Pricing</label><div className="overflow-auto rounded-2xl border"><table className="w-full min-w-[640px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Outlet</th><th>Available</th><th>Price</th><th>HPP</th><th>Status</th></tr></thead><tbody>{outlets.map(o => { const r = rowFor(o), isNew = !edit.id; return <tr className="border-t" key={o.id}><td className="p-3 font-bold">{o.name}<p className="text-xs font-normal text-slate-400">{o.code}</p></td><td className="text-center"><input name={`available_${o.id}`} type="checkbox" defaultChecked={isNew ? true : !!r?.isAvailable} /></td><td className="p-2"><input className="input" name={`price_${o.id}`} type="number" min="0" placeholder={`Base ${edit.basePrice ?? 0}`} defaultValue={r?.outletPrice ?? ''} /></td><td className="p-2"><input className="input" name={`hpp_${o.id}`} type="number" min="0" placeholder={`Base ${edit.baseHpp ?? 0}`} defaultValue={r?.outletHpp ?? ''} /></td><td className="p-2"><select className="input" name={`status_${o.id}`} defaultValue={r?.status || (isNew ? 'ACTIVE' : 'INACTIVE')}><option>ACTIVE</option><option>INACTIVE</option></select></td></tr>; })}</tbody></table></div><p className="mt-2 text-xs text-slate-400">Kosongkan Price/HPP outlet untuk memakai Base Price/Base HPP produk.</p></div><button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan Produk'}</button></form></Modal>}
+    {edit && <Modal title={edit.id ? 'Edit produk' : 'Produk baru'} close={() => setEdit(null)}><form onSubmit={save}><Fields values={edit} items={[['sku', 'SKU / Product Code'], ['name', 'Nama produk'], ['description', 'Deskripsi'], ['imageUrl', 'Image URL'], ['basePrice', 'Base selling price', 'number'], ['baseHpp', 'Base HPP', 'number']]} /><label className="label">Kategori</label><select className="input mb-3" name="categoryId" defaultValue={edit.categoryId || categories[0]?.id} required>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><label className="label">Status produk master</label><select className="input mb-3" name="status" defaultValue={edit.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select><CheckList title="Variant Groups" name="variantGroupIds" rows={groups.map(g => [g.id, g.name])} checked={(edit.variantGroups || []).map((x: any) => x.variantGroupId)} /><div className="mt-5"><label className="label">Outlet Availability & Pricing</label><div className="overflow-auto rounded-2xl border"><table className="w-full min-w-[640px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Outlet</th><th>Available</th><th>Price</th><th>HPP</th><th>Status</th></tr></thead><tbody>{outlets.map(o => { const r = rowFor(o), isNew = !edit.id; return <tr className="border-t" key={o.id}><td className="p-3 font-bold">{o.name}<p className="text-xs font-normal text-slate-400">{o.code}</p></td><td className="text-center"><input name={`available_${o.id}`} type="checkbox" defaultChecked={isNew ? true : !!r?.isAvailable} /></td><td className="p-2"><input className="input" name={`price_${o.id}`} type="number" min="0" placeholder={`Base ${edit.basePrice ?? 0}`} defaultValue={r?.outletPrice ?? ''} /></td><td className="p-2"><input className="input" name={`hpp_${o.id}`} type="number" min="0" placeholder={`Base ${edit.baseHpp ?? 0}`} defaultValue={r?.outletHpp ?? ''} /></td><td className="p-2"><select className="input" name={`status_${o.id}`} defaultValue={r?.status || (isNew ? 'ACTIVE' : 'INACTIVE')}><option>ACTIVE</option><option>INACTIVE</option></select></td></tr>; })}</tbody></table></div><p className="mt-2 text-xs text-slate-400">Kosongkan Price/HPP outlet untuk memakai Base Price/Base HPP produk.</p></div><button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan Produk'}</button></form></Modal>}
+    {importOpen && <Modal title="Import Produk" close={() => setImportOpen(false)}>
+      <div className="space-y-4">
+        <div className="rounded-2xl bg-brand-50 p-4 text-sm text-brand-800">Gunakan template yang tersedia. Import mendukung CSV, XLS, dan XLSX. SKU boleh kosong, nanti dibuat otomatis dari nama produk. Category kosong akan masuk ke kategori Lainnya; category baru akan dibuat otomatis.</div>
+        <div className="grid gap-3 md:grid-cols-[1fr_220px]">
+          <label className="block rounded-2xl border border-dashed border-slate-300 p-5 text-center">
+            <FileUp className="mx-auto mb-2 text-brand-600" />
+            <b>{importFile || 'Upload CSV / XLS / XLSX produk'}</b>
+            <input className="hidden" type="file" accept=".csv,text/csv,.xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={e => e.target.files?.[0] && readImportFile(e.target.files[0])} />
+            <p className="mt-1 text-xs text-slate-400">Klik untuk pilih file</p>
+          </label>
+          <label><span className="label">Mode Import</span><select className="input" value={importMode} onChange={e => setImportMode(e.target.value)}><option value="UPSERT">Insert + Update</option><option value="INSERT_ONLY">Insert Only</option><option value="UPDATE_ONLY">Update Existing</option></select></label>
+        </div>
+        <div className="flex flex-wrap gap-2"><button className="btn-soft" onClick={downloadTemplate}>Download Template</button><button disabled={importing || !importText} className="btn-soft" onClick={previewImport}>{importing ? 'Memvalidasi...' : 'Preview Validasi'}</button>{importPreview?.summary?.error > 0 && <button className="btn-soft" onClick={downloadErrorReport}>Download Error Report</button>}</div>
+        {importPreview && <div className="rounded-2xl border">
+          <div className="grid grid-cols-3 gap-2 border-b bg-slate-50 p-3 text-center text-sm"><div><b>{importPreview.summary.totalRows}</b><p className="text-slate-400">Rows</p></div><div><b className="text-emerald-600">{importPreview.summary.success}</b><p className="text-slate-400">Valid</p></div><div><b className="text-red-600">{importPreview.summary.error}</b><p className="text-slate-400">Error</p></div></div>
+          <div className="max-h-72 overflow-auto"><table className="w-full min-w-[680px] text-sm"><thead className="bg-white text-slate-500"><tr><th className="p-3 text-left">Row</th><th>SKU</th><th>Product</th><th>Status</th><th>Message</th></tr></thead><tbody>{importPreview.preview.map((r: any) => <tr key={r.row} className="border-t"><td className="p-3">{r.row}</td><td>{r.sku}</td><td>{r.product}</td><td><span className={`pill ${r.status === 'OK' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>{r.status}</span></td><td className="text-red-600">{r.message || '-'}</td></tr>)}</tbody></table></div>
+        </div>}
+        <button disabled={importing || !importPreview || importPreview.summary.success < 1} onClick={commitImport} className="btn-primary w-full">{importing ? 'Importing...' : `Import ${importPreview?.summary?.success || 0} Produk`}</button>
+      </div>
+    </Modal>}
   </Page>;
 }
 
-function ProductCard({ p, setEdit }: any) {
-  return <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="line-clamp-2 font-black text-ink">{p.name}</h3><p className="text-sm text-slate-400">{p.categoryRef?.name || p.category}</p></div><button onClick={() => setEdit(p)} className="shrink-0 rounded-xl bg-brand-50 p-2 text-brand-600"><Edit size={17} /></button></div><div className="mt-4 grid grid-cols-2 gap-2 text-sm"><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Harga</p><b>{rupiah(p.basePrice)}</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">HPP</p><b>{rupiah(p.baseHpp)}</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Outlet aktif</p><b>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Status</p><span className="pill bg-brand-50 text-brand-700">{p.status}</span></div></div><div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm"><p className="text-xs text-slate-400">Variant Groups</p><p className="mt-1 line-clamp-2">{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</p></div></div>;
+function ProductCard({ p, setEdit, selected, toggle }: any) {
+  return <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 gap-2"><input type="checkbox" checked={selected} onChange={toggle} /><div className="min-w-0"><h3 className="line-clamp-2 font-black text-ink">{p.name}</h3><p className="text-sm text-slate-400">{p.sku || 'Tanpa SKU'} · {p.categoryRef?.name || p.category}</p></div></div><button onClick={() => setEdit(p)} className="shrink-0 rounded-xl bg-brand-50 p-2 text-brand-600"><Edit size={17} /></button></div><div className="mt-4 grid grid-cols-2 gap-2 text-sm"><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Harga</p><b>{rupiah(p.basePrice)}</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">HPP</p><b>{rupiah(p.baseHpp)}</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Outlet aktif</p><b>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Status</p><span className="pill bg-brand-50 text-brand-700">{p.status}</span></div></div><div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm"><p className="text-xs text-slate-400">Variant Groups</p><p className="mt-1 line-clamp-2">{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</p></div></div>;
 }
 function EmptyProduct() { return <div className="p-8 text-center text-slate-400">Produk tidak ditemukan.</div>; }

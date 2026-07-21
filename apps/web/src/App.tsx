@@ -3,7 +3,7 @@ import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'reac
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { BarChart3, Boxes, Calculator, ChevronDown, ClipboardList, Clock3, Layers, LayoutDashboard, LogOut, Menu, Package, PackageSearch, Printer, Settings, ShoppingCart, Smartphone, Store, Tags, TrendingUp, Users, Wallet, Warehouse, X } from 'lucide-react';
-import { api, type User } from './api';
+import { api, clearAuthSession, SESSION_EXPIRED_EVENT, type User } from './api';
 import HeaderOutletSelector from './components/HeaderOutletSelector';
 import { ConfirmDialog } from './components/ForuDialog';
 import { OutletProvider } from './OutletContext';
@@ -24,6 +24,7 @@ import UserManagementPage from './pages/UserManagementPage';
 import { initSyncService, recordLocalAudit } from './sync';
 import { checkInventoryStockAlerts } from './inventoryAlerts';
 import ShiftBanner from './components/ShiftBanner';
+import { AppDialog } from './components/ui/AppDialog';
 
 type NavItem = readonly [path: string, label: string, Icon: typeof LayoutDashboard];
 type NavGroup = { key: string; label: string; items: NavItem[] };
@@ -110,7 +111,7 @@ const knownRoutes = new Set([
 ]);
 
 const inventoryRoutePermissions: Record<string, string> = {
-  '/inventory': 'inventory.report',
+  '/inventory': 'inventory.view',
   '/inventory/warehouses': 'inventory.warehouse',
   '/inventory/items': 'inventory.item_management',
   '/inventory/stock-in': 'inventory.stock_in',
@@ -204,7 +205,13 @@ const rootPages = new Set([
 
 export default function App() {
   const [user, setUser] = useState<User | null>(() => JSON.parse(localStorage.getItem('user') || 'null'));
+  const [sessionExpiredOpen, setSessionExpiredOpen] = useState(false);
   useEffect(() => { initSyncService(); }, []);
+  useEffect(() => {
+    const onSessionExpired = () => setSessionExpiredOpen(true);
+    window.addEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+  }, []);
   useEffect(() => {
     if (!localStorage.getItem('token')) return;
     const refreshUser = () => api<any>('/auth/me').then(me => {
@@ -223,8 +230,22 @@ export default function App() {
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
-  if (!user) return <Login onLogin={setUser} />;
-  return <OutletProvider user={user}><Routes><Route path="*" element={<Shell user={user} logout={() => { recordLocalAudit('LOGOUT','USER',user.id,{name:user.name}); localStorage.removeItem('token'); localStorage.removeItem('user'); setUser(null); }} />} /></Routes></OutletProvider>;
+  const sessionExpiredDialog = sessionExpiredOpen ? <AppDialog
+    title="Sesi Berakhir"
+    description="Silakan login kembali untuk melanjutkan."
+    tone="warning"
+    buttons={[{
+      label: 'Login Ulang',
+      variant: 'primary',
+      onClick: () => {
+        clearAuthSession();
+        setSessionExpiredOpen(false);
+        setUser(null);
+      }
+    }]}
+  /> : null;
+  if (!user) return <>{sessionExpiredDialog}<Login onLogin={setUser} /></>;
+  return <OutletProvider user={user}><Routes><Route path="*" element={<Shell user={user} logout={() => { recordLocalAudit('LOGOUT','USER',user.id,{name:user.name}); clearAuthSession(); setUser(null); }} />} /></Routes>{sessionExpiredDialog}</OutletProvider>;
 }
 
 function Shell({ user, logout }: { user: User; logout: () => void }) {
@@ -320,7 +341,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
           to={dashboardNav[0]}
           title={dashboardNav[1]}
           onClick={() => setOpen(false)}
-          className={({ isActive }) => `flex items-center gap-3 rounded-xl font-semibold ${sidebarHidden ? 'justify-center px-0 py-3' : 'px-3 py-3'} ${isActive ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-brand-50 hover:text-brand-700'}`}
+          className={({ isActive }) => `flex items-center gap-3 rounded-xl font-semibold ${sidebarHidden ? 'justify-center px-0 py-3' : 'justify-start px-3 py-3 text-left'} ${isActive ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-brand-50 hover:text-brand-700'}`}
         >
           <LayoutDashboard className="shrink-0 text-brand-600" size={20} />
           <span className={`truncate ${sidebarHidden ? 'md:hidden' : 'md:inline'}`}>Dashboard</span>
@@ -348,7 +369,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
                 title={label}
                 end={path === '/inventory'}
                 onClick={() => setOpen(false)}
-                className={({ isActive }) => `flex items-center gap-3 rounded-xl font-semibold ${sidebarHidden ? 'justify-center px-0 py-3' : 'px-3 py-2.5'} ${isActive ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-brand-50 hover:text-brand-700'}`}
+                className={({ isActive }) => `flex items-center gap-3 rounded-xl font-semibold ${sidebarHidden ? 'justify-center px-0 py-3' : 'justify-start px-3 py-2.5 text-left'} ${isActive ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-brand-50 hover:text-brand-700'}`}
               >
                 <Icon className="shrink-0 text-brand-600" size={20} />
                 <span className={`truncate ${sidebarHidden ? 'md:hidden' : 'md:inline'}`}>{label}</span>

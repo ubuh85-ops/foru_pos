@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
+import * as XLSX from 'xlsx';
 import { allow, ApiError, assertOutlet, asyncRoute, auth, dayRange, defaultInventoryPermissions, hasPermission, money, prisma, requirePermission } from './lib.js';
 import { discountAmount, priceCart, validateCoupon } from './discount.js';
 
@@ -221,10 +222,93 @@ api.put('/variant-options/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,
 api.delete('/variant-options/:id',allow('OWNER'),asyncRoute(async(req,res)=>res.json(await prisma.variantOption.update({where:{id:String(req.params.id)},data:{status:'INACTIVE'}}))));
 
 const outletPricingInput=z.object({outletId:z.string(),isAvailable:z.coerce.boolean().default(true),outletPrice:z.coerce.number().nonnegative().nullable().optional(),outletHpp:z.coerce.number().nonnegative().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
-const productInput=z.object({name:z.string().min(2),categoryId:z.string().optional(),category:z.string().optional(),description:z.string().optional(),imageUrl:z.string().url().optional().or(z.literal('')),basePrice:z.coerce.number().nonnegative().optional(),baseHpp:z.coerce.number().nonnegative().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE'),variantGroupIds:z.array(z.string()).default([]),outletIds:z.array(z.string()).default([]),outletPricing:z.array(outletPricingInput).optional(),variants:z.array(z.object({variantName:z.string(),sellingPrice:z.coerce.number().nonnegative(),hpp:z.coerce.number().nonnegative()})).optional()});
+const productInput=z.object({sku:z.string().trim().optional().nullable(),name:z.string().min(2),categoryId:z.string().optional(),category:z.string().optional(),description:z.string().optional(),imageUrl:z.string().url().optional().or(z.literal('')),basePrice:z.coerce.number().nonnegative().optional(),baseHpp:z.coerce.number().nonnegative().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE'),variantGroupIds:z.array(z.string()).default([]),outletIds:z.array(z.string()).default([]),outletPricing:z.array(outletPricingInput).optional(),variants:z.array(z.object({variantName:z.string(),sellingPrice:z.coerce.number().nonnegative(),hpp:z.coerce.number().nonnegative()})).optional()});
 const productInclude={categoryRef:true,variants:true,addons:true,outlets:{include:{outlet:true},orderBy:{outlet:{name:'asc' as const}}},variantGroups:{orderBy:{sortOrder:'asc' as const},include:{group:{include:{options:{orderBy:{sortOrder:'asc' as const},include:{outlets:{include:{outlet:true}}}}}}}}};
 async function categoryName(categoryId?:string,category?:string){if(categoryId){const c=await prisma.category.findUnique({where:{id:categoryId}});if(!c)throw new ApiError(400,'Kategori tidak ditemukan');return c.name;} if(category)return category; throw new ApiError(400,'Kategori wajib diisi');}
 api.get('/products',asyncRoute(async(_q,res)=>res.json(await prisma.product.findMany({include:productInclude,orderBy:{name:'asc'}}))));
+const productImportHeaders=['SKU','Product Name','Description','Category','Image URL','Status','Base Price','Base HPP','Variant Groups','Outlet','Available','Outlet Status','Outlet Price','Outlet HPP'];
+function csvCell(v:any){const s=String(v??'');return /[",\n\r]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;}
+function toCsv(rows:any[][]){return rows.map(r=>r.map(csvCell).join(',')).join('\n');}
+function parseCsv(text:string){const rows:string[][]=[];let row:string[]=[],cell='',q=false;for(let i=0;i<text.length;i++){const c=text[i],n=text[i+1];if(q){if(c==='"'&&n==='"'){cell+='"';i++;}else if(c==='"')q=false;else cell+=c;}else{if(c==='"')q=true;else if(c===','){row.push(cell);cell='';}else if(c==='\n'){row.push(cell);rows.push(row);row=[];cell='';}else if(c!=='\r')cell+=c;}}row.push(cell);if(row.some(x=>x.trim()))rows.push(row);return rows;}
+function parseExcelBase64(content:string){const clean=content.includes(',')?content.split(',').pop()!:content;const buffer=Buffer.from(clean,'base64');let workbook:XLSX.WorkBook;try{workbook=XLSX.read(buffer,{type:'buffer',cellDates:false});}catch{throw new ApiError(400,'File Excel tidak bisa dibaca. Gunakan format .xls, .xlsx, atau CSV template.');}const firstSheet=workbook.SheetNames[0];if(!firstSheet)throw new ApiError(400,'File Excel kosong');const sheet=workbook.Sheets[firstSheet];if(!sheet)throw new ApiError(400,'Sheet Excel tidak ditemukan');const rows=XLSX.utils.sheet_to_json<any[]>(sheet,{header:1,defval:'',raw:false,blankrows:false});return rows.map(row=>row.map(cell=>String(cell??'').trim())).filter(row=>row.some(cell=>cell));}
+function parseProductImportRows(filename:string|undefined,content:string,encoding?:'text'|'base64'){const lower=String(filename||'').toLowerCase();if(encoding==='base64'||lower.endsWith('.xls')||lower.endsWith('.xlsx'))return parseExcelBase64(content);return parseCsv(content);}
+function normHeader(s:string){return s.trim().toLowerCase().replace(/[^a-z0-9]+/g,'');}
+function parseMoneyInput(v:any){const raw=String(v??'').trim();if(!raw)return 0;let s=raw.replace(/\s/g,'');if(/^\d{1,3}(\.\d{3})+$/.test(s))s=s.replace(/\./g,'');else if(s.includes(',')&&!s.includes('.'))s=s.replace(',','.');else if(s.includes(',')&&s.includes('.'))s=s.replace(/\./g,'').replace(',','.');const n=Number(s);if(!Number.isFinite(n)||n<0)throw new Error(`Invalid price: ${raw}`);return n;}
+function parseStatusInput(v:any){const s=String(v??'ACTIVE').trim().toUpperCase();if(['ACTIVE','TRUE','YES','Y','1'].includes(s))return 'ACTIVE' as const;if(['INACTIVE','FALSE','NO','N','0'].includes(s))return 'INACTIVE' as const;throw new Error(`Invalid status: ${v}`);}
+function parseBoolInput(v:any){const s=String(v??'TRUE').trim().toUpperCase();if(['TRUE','YES','Y','1','ACTIVE'].includes(s))return true;if(['FALSE','NO','N','0','INACTIVE'].includes(s))return false;throw new Error(`Invalid boolean: ${v}`);}
+function pick(row:Record<string,string>,names:string[]){for(const n of names){const v=row[normHeader(n)];if(v!==undefined)return v;}return '';}
+function skuBaseFromName(name:string){const base=name.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,24);return base||'PRODUCT';}
+function generateImportSku(name:string,rowNumber:number,used:Set<string>){const base=skuBaseFromName(name);let sku=`${base}-${String(rowNumber).padStart(3,'0')}`,i=2;while(used.has(sku.toLowerCase()))sku=`${base}-${String(rowNumber).padStart(3,'0')}-${i++}`;used.add(sku.toLowerCase());return sku;}
+async function validateProductImportRows(text:string,mode='UPSERT',filename?:string,encoding?:'text'|'base64'){
+  const parsed=parseProductImportRows(filename,text,encoding); if(parsed.length<2)throw new ApiError(400,'File import kosong');
+  const headers=parsed[0]!.map(normHeader), rows=parsed.slice(1).map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]??''])));
+  let [categories,outlets,groups,existing]=await Promise.all([
+    prisma.category.findMany(),
+    prisma.outlet.findMany(),
+    prisma.variantGroup.findMany(),
+    prisma.product.findMany({select:{id:true,sku:true,name:true}})
+  ]);
+  const existingCategoryNames=new Set(categories.map(c=>c.name.trim().toLowerCase()));
+  const categoryNames=[...new Map(rows.map(r=>(pick(r,['Category','Kategori']).trim()||'Lainnya')).filter(Boolean).map(name=>[name.toLowerCase(),name])).values()];
+  const missingCategoryNames=categoryNames.filter(name=>!existingCategoryNames.has(name.toLowerCase()));
+  if(missingCategoryNames.length){
+    await prisma.category.createMany({data:missingCategoryNames.map(name=>({name,status:'ACTIVE'})),skipDuplicates:true});
+    categories=await prisma.category.findMany();
+  }
+  const catByName=new Map(categories.map(c=>[c.name.trim().toLowerCase(),c]));
+  const outletByName=new Map(outlets.flatMap(o=>[[o.name.trim().toLowerCase(),o],[o.code.trim().toLowerCase(),o]]));
+  const groupByName=new Map(groups.map(g=>[g.name.trim().toLowerCase(),g]));
+  const existingBySku=new Map(existing.filter(p=>p.sku).map(p=>[p.sku!.trim().toLowerCase(),p]));
+  const usedAutoSkus=new Set(existingBySku.keys());
+  const autoSkuByProductName=new Map<string,string>();
+  const seen=new Set<string>(), grouped=new Map<string,any>();
+  const preview=rows.map((r,idx)=>{
+    const errors:string[]=[];
+    const rawSku=pick(r,['SKU','Product Code','Product SKU']).trim();
+    const name=pick(r,['Product Name','Name','Produk']).trim();
+    const category=pick(r,['Category','Kategori']).trim()||'Lainnya';
+    const outletName=pick(r,['Outlet','Outlet Name']).trim();
+    if(!name)errors.push('Product Name wajib diisi');
+    let sku=rawSku;
+    if(!sku&&name){
+      const nameKey=name.toLowerCase();
+      sku=autoSkuByProductName.get(nameKey)||generateImportSku(name,idx+2,usedAutoSkus);
+      autoSkuByProductName.set(nameKey,sku);
+    }
+    const categoryRow=category?catByName.get(category.toLowerCase()):undefined;
+    if(category&&!categoryRow)errors.push(`Category not found: ${category}`);
+    const outlet=outletName?outletByName.get(outletName.toLowerCase()):undefined;
+    if(outletName&&!outlet)errors.push(`Outlet not found: ${outletName}`);
+    let status:'ACTIVE'|'INACTIVE'='ACTIVE', outletStatus:'ACTIVE'|'INACTIVE'='ACTIVE', available=true, basePrice=0, baseHpp=0, outletPrice:null|number=null, outletHpp:null|number=null;
+    try{status=parseStatusInput(pick(r,['Status'])||'ACTIVE');}catch(e){errors.push((e as Error).message);}
+    try{outletStatus=parseStatusInput(pick(r,['Outlet Status'])||'ACTIVE');}catch(e){errors.push((e as Error).message);}
+    try{available=parseBoolInput(pick(r,['Available'])||'TRUE');}catch(e){errors.push((e as Error).message);}
+    try{basePrice=parseMoneyInput(pick(r,['Base Price','Base Selling Price']));}catch(e){errors.push((e as Error).message);}
+    try{baseHpp=parseMoneyInput(pick(r,['Base HPP','Base Cost']));}catch(e){errors.push((e as Error).message);}
+    try{const v=pick(r,['Outlet Price']);outletPrice=v.trim()?parseMoneyInput(v):null;}catch(e){errors.push((e as Error).message);}
+    try{const v=pick(r,['Outlet HPP']);outletHpp=v.trim()?parseMoneyInput(v):null;}catch(e){errors.push((e as Error).message);}
+    const variantGroupNames=(pick(r,['Variant Groups','Variant Group'])||'').split('|').map(x=>x.trim()).filter(Boolean);
+    const variantGroupIds:string[]=[];
+    for(const g of variantGroupNames){const found=groupByName.get(g.toLowerCase());if(!found)errors.push(`Variant group not found: ${g}`);else variantGroupIds.push(found.id);}
+    if(sku){
+      const key=sku.toLowerCase();
+      const seenKey=`${key}|${outletName.toLowerCase()}`;
+      if(seen.has(seenKey))errors.push('Duplicate SKU + Outlet inside file');
+      seen.add(seenKey);
+      const exists=existingBySku.get(key);
+      if(mode==='INSERT_ONLY'&&exists)errors.push('Duplicate SKU database');
+      if(mode==='UPDATE_ONLY'&&!exists)errors.push('SKU tidak ditemukan untuk update');
+      if(!grouped.has(key))grouped.set(key,{sku,name,description:pick(r,['Description','Deskripsi']),categoryId:categoryRow?.id,category:categoryRow?.name,imageUrl:pick(r,['Image URL','Image']),status,basePrice,baseHpp,variantGroupIds,outletPricing:[]});
+      const product=grouped.get(key);
+      if(outlet)product.outletPricing.push({outletId:outlet.id,isAvailable:available,status:outletStatus,outletPrice,outletHpp});
+    }
+    return {row:idx+2,sku,product:name,status:errors.length?'ERROR':'OK',message:errors.join('; ')};
+  });
+  return {preview,products:[...grouped.values()],summary:{totalRows:rows.length,success:preview.filter(x=>x.status==='OK').length,error:preview.filter(x=>x.status==='ERROR').length}};
+}
+api.get('/products/import-template',allow('OWNER','SUPERVISOR'),asyncRoute(async(_req,res)=>{res.setHeader('Content-Type','text/csv; charset=utf-8');res.setHeader('Content-Disposition','attachment; filename="foru-product-import-template.csv"');res.send(toCsv([productImportHeaders,['AMB001','American Breakfast','Menu breakfast','American Breakfast','','ACTIVE','18000','9000','Size|Sugar','FORU HUIS','TRUE','ACTIVE','20000','10000']]));}));
+api.get('/products/export',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const ids=String(req.query.ids||'').split(',').map(x=>x.trim()).filter(Boolean);const products=await prisma.product.findMany({where:ids.length?{id:{in:ids}}:{},include:productInclude,orderBy:{name:'asc'}});const rows:any[][]=[productImportHeaders];for(const p of products){const groups=p.variantGroups.map(x=>x.group.name).join('|');const base:any[]=[p.sku||'',p.name,p.description||'',p.categoryRef?.name||p.category,p.imageUrl||'',p.status,Number(p.basePrice),Number(p.baseHpp),groups];if(p.outlets.length){for(const po of p.outlets)rows.push([...base,po.outlet.name,po.isAvailable?'TRUE':'FALSE',po.status,po.outletPrice??'',po.outletHpp??'']);}else rows.push([...base,'','','','','']);}res.setHeader('Content-Type','text/csv; charset=utf-8');res.setHeader('Content-Disposition','attachment; filename="foru-products-export.csv"');res.send(toCsv(rows));}));
+api.post('/products/import',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const d=z.object({filename:z.string().optional(),mode:z.enum(['INSERT_ONLY','UPDATE_ONLY','UPSERT']).default('UPSERT'),preview:z.coerce.boolean().default(true),content:z.string().min(1),encoding:z.enum(['text','base64']).default('text')}).parse(req.body);const validated=await validateProductImportRows(d.content,d.mode,d.filename,d.encoding);if(d.preview)return res.json(validated);let imported=0,updated=0,failed=0;const results=[] as any[];for(const p of validated.products){const rowErrors=validated.preview.filter(x=>x.sku===p.sku&&x.status==='ERROR');if(rowErrors.length){failed++;results.push({sku:p.sku,status:'ERROR',message:rowErrors.map(x=>x.message).join('; ')});continue;}try{await prisma.$transaction(async tx=>{const existing=p.sku?await tx.product.findUnique({where:{sku:p.sku}}):null;if(existing){if(d.mode==='INSERT_ONLY')throw new Error('Duplicate SKU database');if(p.variantGroupIds){await tx.productVariantGroup.deleteMany({where:{productId:existing.id}});await tx.productVariantGroup.createMany({data:p.variantGroupIds.map((variantGroupId:string,i:number)=>({productId:existing.id,variantGroupId,sortOrder:i})),skipDuplicates:true});}for(const x of p.outletPricing)await tx.productOutlet.upsert({where:{productId_outletId:{productId:existing.id,outletId:x.outletId}},update:{isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp},create:{productId:existing.id,outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}});const updatedProduct=await tx.product.update({where:{id:existing.id},data:{name:p.name,category:p.category,categoryId:p.categoryId,description:p.description||null,imageUrl:p.imageUrl||null,basePrice:p.basePrice,baseHpp:p.baseHpp,status:p.status}});const baseVariant=await tx.productVariant.findFirst({where:{productId:existing.id,variantName:'Base'}});if(baseVariant)await tx.productVariant.update({where:{id:baseVariant.id},data:{sellingPrice:p.basePrice,hpp:p.baseHpp}});else await tx.productVariant.create({data:{productId:existing.id,variantName:'Base',sellingPrice:p.basePrice,hpp:p.baseHpp}});updated++;return updatedProduct;}else{if(d.mode==='UPDATE_ONLY')throw new Error('SKU tidak ditemukan untuk update');await tx.product.create({data:{sku:p.sku,name:p.name,category:p.category,categoryId:p.categoryId,description:p.description||null,imageUrl:p.imageUrl||null,basePrice:p.basePrice,baseHpp:p.baseHpp,status:p.status,variants:{create:{variantName:'Base',sellingPrice:p.basePrice,hpp:p.baseHpp}},variantGroups:{create:p.variantGroupIds.map((variantGroupId:string,i:number)=>({variantGroupId,sortOrder:i}))},outlets:{create:p.outletPricing.map((x:any)=>({outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))}}});imported++;}});results.push({sku:p.sku,status:'OK'});}catch(e){failed++;results.push({sku:p.sku,status:'ERROR',message:(e as Error).message});}}await prisma.auditLog.create({data:{entityType:'PRODUCT_IMPORT',entityId:`import-${Date.now()}`,action:'PRODUCT_IMPORT',oldValue:Prisma.JsonNull,newValue:{filename:d.filename,imported,updated,failed,total:validated.products.length},changedBy:req.user!.id}});res.json({summary:{imported,updated,failed,total:validated.products.length},results});}));
 api.get('/pos/products',asyncRoute(async(req,res)=>{ const outletId=String(req.query.outlet_id||''); assertOutlet(req,outletId); const products=await prisma.product.findMany({where:{status:'ACTIVE',outlets:{some:{outletId,isAvailable:true,isActive:true,status:'ACTIVE'}}},include:{categoryRef:true,outlets:{where:{outletId}},variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId}}}}}}}}},orderBy:{name:'asc'}});res.json(products.map(p=>{const po=p.outlets[0];return {...p,basePrice:po?.outletPrice??p.basePrice,baseHpp:po?.outletHpp??p.baseHpp,masterBasePrice:p.basePrice,masterBaseHpp:p.baseHpp,variantGroups:p.variantGroups.map(vg=>({...vg,group:{...vg.group,options:vg.group.options.filter(o=>!o.outlets[0]||o.outlets[0].status==='ACTIVE').map(o=>({...o,additionalPrice:o.outlets[0]?.additionalPrice??o.additionalPrice,hpp:o.outlets[0]?.hpp??o.hpp,masterAdditionalPrice:o.additionalPrice,masterHpp:o.hpp}))}}))};})); }));
 api.post('/products',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const d=productInput.parse(req.body);
@@ -235,7 +319,7 @@ api.post('/products',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
     const outlets=await prisma.outlet.findMany({where:{status:'ACTIVE'},select:{id:true}});
     outletRows=outlets.map(o=>({outletId:o.id,isAvailable:true,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}));
   }
-  res.status(201).json(await prisma.product.create({data:{name:d.name,category,categoryId:d.categoryId,description:d.description,imageUrl:d.imageUrl||null,basePrice,baseHpp,status:d.status,variants:{create:d.variants?.length?d.variants:[{variantName:'Base',sellingPrice:basePrice,hpp:baseHpp}]},variantGroups:{create:d.variantGroupIds.map((variantGroupId,i)=>({variantGroupId,sortOrder:i}))},outlets:{create:outletRows.map(x=>({outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))}},include:productInclude}));
+  res.status(201).json(await prisma.product.create({data:{sku:d.sku?.trim()||null,name:d.name,category,categoryId:d.categoryId,description:d.description,imageUrl:d.imageUrl||null,basePrice,baseHpp,status:d.status,variants:{create:d.variants?.length?d.variants:[{variantName:'Base',sellingPrice:basePrice,hpp:baseHpp}]},variantGroups:{create:d.variantGroupIds.map((variantGroupId,i)=>({variantGroupId,sortOrder:i}))},outlets:{create:outletRows.map(x=>({outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))}},include:productInclude}));
 }));
 api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const d=productInput.partial().parse(req.body);
@@ -255,7 +339,7 @@ api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
         await tx.productOutlet.upsert({where:{productId_outletId:{productId:id,outletId:x.outletId}},update:{isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice,outletHpp},create:{productId:id,outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice,outletHpp}});
       }
     }else if(d.outletIds){await tx.productOutlet.deleteMany({where:{productId:id}});await tx.productOutlet.createMany({data:d.outletIds.map(outletId=>({productId:id,outletId,isAvailable:true,isActive:true,status:'ACTIVE'})),skipDuplicates:true});}
-    const updated=await tx.product.update({where:{id},data:{name:d.name,category,categoryId:d.categoryId,description:d.description,imageUrl:d.imageUrl||undefined,basePrice:d.basePrice,baseHpp:d.baseHpp,status:d.status},include:productInclude});
+    const updated=await tx.product.update({where:{id},data:{sku:d.sku===undefined?undefined:(d.sku?.trim()||null),name:d.name,category,categoryId:d.categoryId,description:d.description,imageUrl:d.imageUrl||undefined,basePrice:d.basePrice,baseHpp:d.baseHpp,status:d.status},include:productInclude});
     if(d.basePrice!==undefined||d.baseHpp!==undefined){
       const baseVariant=updated.variants.find(v=>v.variantName==='Base');
       if(baseVariant)await tx.productVariant.update({where:{id:baseVariant.id},data:{sellingPrice:d.basePrice??baseVariant.sellingPrice,hpp:d.baseHpp??baseVariant.hpp}});

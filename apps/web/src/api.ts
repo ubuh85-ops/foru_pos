@@ -8,6 +8,19 @@ console.log('API URL =', apiUrl);
 
 export const API = apiUrl;
 export const SERVER_UNAVAILABLE_MESSAGE = 'Server tidak tersedia. Silakan cek koneksi atau backend.';
+export const SESSION_EXPIRED_EVENT = 'foru:session-expired';
+
+export function clearAuthSession() {
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  localStorage.removeItem('outletId');
+  localStorage.removeItem('foru:must_select_outlet');
+}
+
+export function handleUnauthorizedSession(message = 'Sesi tidak valid atau telah berakhir') {
+  clearAuthSession();
+  window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT, { detail: { message } }));
+}
 
 export type User = {
   id: string;
@@ -36,10 +49,7 @@ export async function api<T = any>(path: string, options: RequestInit = {}) {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (res.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-    }
+    if (res.status === 401 && path !== '/auth/login') handleUnauthorizedSession(data.message);
     throw new Error(data.message || 'Permintaan gagal');
   }
 

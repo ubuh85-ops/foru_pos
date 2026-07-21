@@ -77,6 +77,7 @@ model UserOutlet {
 
 model Product {
   id             String                @id @default(cuid())
+  sku            String?               @unique
   name           String
   category       String
   categoryId     String?               @map("category_id")

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Check, Clock3, Eye, Filter, MoreHorizontal, Package, Pencil, Printer, ReceiptText, UserRound, X, XCircle } from 'lucide-react';
+import { CalendarDays, Check, Clock3, CreditCard, Eye, Filter, MoreHorizontal, Package, Pencil, Printer, ReceiptText, UserRound, WalletCards, X, XCircle } from 'lucide-react';
 import { api, dt, rupiah } from '../api';
 import { printWithBluetoothFallback } from '../printer';
 import { useOutlet } from '../OutletContext';
@@ -42,6 +42,12 @@ const datePresetRange = (preset: string) => {
   return { from: localDate(now), to: localDate(now) };
 };
 const zeroSummary = { totalOrders: 0, paidOrders: 0, pendingOrders: 0, cancelledOrders: 0, totalItemsSold: 0, totalNominal: 0, topSellingProduct: null as null | { productId: string; productName: string; qty: number; nominal: number } };
+const moneyNumber = (value: any) => Number(value || 0);
+const paidLabel = (status: string) => status === 'PAID' ? 'Lunas' : status === 'PENDING_PAYMENT' ? 'Pending' : status === 'CANCELLED' ? 'Batal' : status;
+const compactDate = (value: string) => {
+  const d = new Date(value);
+  return `${d.getDate()}-${d.getMonth() + 1}-${d.getFullYear()} ${new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).format(d)}`;
+};
 
 export function Orders() {
   const tabs = ['PENDING_PAYMENT', 'PAID', 'CANCELLED', 'VOID'];
@@ -142,104 +148,93 @@ export function Orders() {
     </div>
   </details>;
 
-  return <Page>
-    <div className="mb-5 flex items-start justify-between gap-3">
-      <div>
-        <h2 className="text-4xl font-black tracking-tight text-ink lg:text-3xl">Orders</h2>
-        <p className="mt-1 text-base text-slate-500">Pending order, paid, cancelled, dan void.</p>
+  return <div className="flex h-[calc(100dvh-4.5rem)] min-h-0 flex-col overflow-hidden bg-soft/40 p-3 pb-20 lg:h-[calc(100dvh-5rem)] lg:p-6">
+    <div className="sticky top-0 z-20 shrink-0 bg-soft/95 pb-3 backdrop-blur">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-3xl font-black tracking-tight text-ink lg:text-3xl">Orders</h2>
+          <p className="mt-1 text-sm leading-relaxed text-slate-500">Pending order, paid, cancelled, dan void.</p>
+        </div>
+        <button onClick={() => setFilterOpen(v => !v)} className="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-pink-50 px-4 py-3 text-sm font-black text-pink-600 shadow-sm ring-1 ring-pink-100">
+          <Filter size={18} fill="currentColor" />
+          Saring
+        </button>
       </div>
-      <button onClick={() => setFilterOpen(v => !v)} className="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-pink-50 px-5 py-3 text-sm font-black text-pink-600 shadow-sm ring-1 ring-pink-100">
-        <Filter size={18} fill="currentColor" />
-        Saring
-      </button>
-    </div>
-    {filterOpen && <div className="mb-4 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-100">
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {[['today', 'Hari ini'], ['yesterday', 'Kemarin'], ['week', 'Minggu ini'], ['month', 'Bulan ini'], ['custom', 'Custom']].map(([value, label]) => <button key={value} onClick={() => setQuickPreset(value)} className={`min-w-fit whitespace-nowrap rounded-full px-4 py-2 text-xs font-black transition ${preset === value ? 'bg-ink text-white' : 'bg-slate-50 text-slate-500'}`}>{label}</button>)}
-      </div>
-      {preset === 'custom' && <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <label className="text-sm font-bold text-slate-600">Dari tanggal<input className="input mt-1" type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
-        <label className="text-sm font-bold text-slate-600">Sampai tanggal<input className="input mt-1" type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
+      {filterOpen && <div className="mb-3 rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-100">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {[['today', 'Hari ini'], ['yesterday', 'Kemarin'], ['week', 'Minggu ini'], ['month', 'Bulan ini'], ['custom', 'Custom']].map(([value, label]) => <button key={value} onClick={() => setQuickPreset(value)} className={`min-w-fit whitespace-nowrap rounded-full px-4 py-2 text-xs font-black transition ${preset === value ? 'bg-ink text-white' : 'bg-slate-50 text-slate-500'}`}>{label}</button>)}
+        </div>
+        {preset === 'custom' && <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label className="text-sm font-bold text-slate-600">Dari tanggal<input className="input mt-1" type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
+          <label className="text-sm font-bold text-slate-600">Sampai tanggal<input className="input mt-1" type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
+        </div>}
       </div>}
-    </div>}
-    <div className="mb-4 inline-flex rounded-full bg-brand-50 px-4 py-2 text-sm font-black text-brand-700">Data Outlet Aktif</div>
-    <div className="mb-5 grid grid-cols-2 gap-x-5 gap-y-7 rounded-2xl bg-slate-50 p-5 lg:grid-cols-4 lg:gap-x-10">
-      <div className="min-w-0"><p className="text-sm font-black text-slate-500">Total Order</p><p className="mt-2 text-base text-slate-800">{summary.totalOrders}</p></div>
-      <div className="min-w-0"><p className="text-sm font-black leading-tight text-slate-500">Total Item Terjual</p><p className="mt-2 text-base text-slate-800">{summary.totalItemsSold}</p></div>
-      <div className="min-w-0"><p className="text-sm font-black text-slate-500">Total Nominal</p><p className="mt-2 text-base text-slate-800">{rupiah(summary.totalNominal)}</p></div>
-      <div className="min-w-0"><p className="text-sm font-black leading-tight text-slate-500">Penjualan Terbanyak</p><p className="mt-2 line-clamp-2 break-words text-base leading-snug text-slate-800">{summary.topSellingProduct ? `${summary.topSellingProduct.productName} ${summary.topSellingProduct.qty}x` : '-'}</p></div>
-    </div>
-    <div className="mb-6 flex gap-3 overflow-x-auto pb-1">
-      {tabs.map(t => <button key={t} onClick={() => setStatus(t)} className={`min-w-fit whitespace-nowrap rounded-full px-4 py-3 text-[11px] font-black shadow-sm transition sm:px-6 sm:text-xs lg:px-4 lg:py-2 ${status === t ? 'bg-ink text-white shadow-ink/15' : 'bg-white text-slate-500 ring-1 ring-slate-100'}`}>{t.replace('_', ' ')}</button>)}
+      <div className="grid grid-cols-2 gap-x-5 gap-y-5 rounded-sm bg-slate-50 p-4 shadow-sm ring-1 ring-slate-100 lg:grid-cols-4">
+        <div className="min-w-0"><p className="text-xs font-black text-slate-500">Total Order</p><p className="mt-1 text-sm text-slate-800">{summary.totalOrders}</p></div>
+        <div className="min-w-0"><p className="text-xs font-black leading-tight text-slate-500">Total Item Terjual</p><p className="mt-1 text-sm text-slate-800">{summary.totalItemsSold}</p></div>
+        <div className="min-w-0"><p className="text-xs font-black text-slate-500">Total Nominal</p><p className="mt-1 text-sm text-slate-800">{rupiah(summary.totalNominal)}</p></div>
+        <div className="min-w-0"><p className="text-xs font-black leading-tight text-slate-500">Penjualan Terbanyak</p><p className="mt-1 line-clamp-2 break-words text-sm leading-snug text-slate-800">{summary.topSellingProduct ? `${summary.topSellingProduct.productName} ${summary.topSellingProduct.qty}x` : '-'}</p></div>
+      </div>
+      <div className="mt-3 flex gap-3 overflow-x-auto pb-1">
+        {tabs.map(t => <button key={t} onClick={() => setStatus(t)} className={`min-w-fit whitespace-nowrap rounded-full px-4 py-2.5 text-[11px] font-black shadow-sm transition sm:px-6 sm:text-xs ${status === t ? 'bg-ink text-white shadow-ink/15' : 'bg-white text-slate-500 ring-1 ring-slate-100'}`}>{t.replace('_', ' ')}</button>)}
+      </div>
     </div>
     <Err v={error} />
-    {loading && <div className="mb-4 rounded-2xl bg-white p-3 text-sm font-bold text-slate-500 shadow-sm ring-1 ring-slate-100">Memuat orders...</div>}
-    <div className="space-y-3 lg:hidden">
+    {loading && <div className="mb-3 rounded-2xl bg-white p-3 text-sm font-bold text-slate-500 shadow-sm ring-1 ring-slate-100">Memuat orders...</div>}
+    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
       {data.map(o => {
         const meta = statusMeta(o.status);
         const Icon = meta.icon;
         const items = itemSummary(o.items);
-        const preview = itemPreview(o.items);
-        const time = orderTime(o.createdAt);
-        return <div key={o.id} className="rounded-3xl bg-white p-5 shadow-[0_10px_30px_rgba(15,23,42,0.07)] ring-1 ring-slate-100">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4">
-            <div className="min-w-0">
-              <h3 className="truncate text-lg font-black text-ink">{o.orderNumber || o.transactionNumber}</h3>
-              <p className="mt-1 truncate text-base font-semibold text-slate-400">{o.transactionNumber || o.orderNumber || '-'}</p>
-            </div>
-            <span className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-bold ${meta.cls}`}>
-              <Icon size={16} strokeWidth={3} />
-              {meta.label}
+        const received = moneyNumber(o.amountPaid ?? o.paidAmount ?? o.receivedAmount ?? (o.status === 'PAID' ? o.grandTotal : 0));
+        const change = Math.max(0, received - moneyNumber(o.grandTotal));
+        return <div key={o.id} className="rounded-lg bg-white p-4 shadow-sm ring-1 ring-slate-100">
+          <div className="mb-3 flex items-center justify-end gap-2">
+            <span className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-black ${meta.cls}`}>
+              <Icon size={14} strokeWidth={3} />
+              {paidLabel(o.status)}
             </span>
-          </div>
-          <div className="mt-5 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4">
-            <div className="min-w-0">
-              <p className="inline-flex max-w-full items-center gap-2 truncate text-sm font-medium text-slate-700">
-                <UserRound size={16} className="shrink-0 text-pink-500" />
-                <span className="truncate">{o.customerName || 'Walk In customer'}</span>
-              </p>
-            </div>
-            <div className="text-right">
-              <p className="text-base font-semibold text-ink">{rupiah(o.grandTotal)}</p>
-              <p className="mt-1 text-sm text-slate-500">{time.date}</p>
-              <p className="text-sm text-slate-500">{time.time}</p>
-            </div>
-          </div>
-          {!!items.length && <div className="mt-4 flex items-center gap-3 rounded-2xl bg-slate-50 px-4 py-3">
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-700"><Package size={18} /></div>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-black text-slate-700">{preview.first}</p>
-              {preview.more > 0 && <p className="text-xs font-bold text-slate-400">+{preview.more} item</p>}
-            </div>
-          </div>}
-          <div className="mt-5 flex justify-end gap-3">
-            <Link aria-label="View order" className="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-brand-100 bg-white text-brand-700 shadow-sm" to={`/orders/${o.id}`}>
-              <Eye size={20} />
+            <Link aria-label="View order" className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-pink-100 bg-pink-50 text-pink-600" to={`/orders/${o.id}`}>
+              <Eye size={17} />
             </Link>
-            {o.status === 'PENDING_PAYMENT' && <Link aria-label="Edit order" className="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-brand-100 bg-white text-brand-700 shadow-sm" to={`/pos?editOrderId=${o.id}`}><Pencil size={20} /></Link>}
             <MoreMenu o={o} />
+          </div>
+          <div className="grid grid-cols-2 gap-x-5 gap-y-4 text-xs">
+            <div className="min-w-0">
+              <p className="mb-1 flex items-center gap-1.5 font-semibold text-slate-500"><CalendarDays size={13} className="text-pink-500" />Tanggal Transaksi</p>
+              <p className="font-medium text-slate-800">{compactDate(o.createdAt)}</p>
+            </div>
+            <div className="min-w-0">
+              <p className="mb-1 flex items-center gap-1.5 font-semibold text-slate-500"><CreditCard size={13} className="text-pink-500" />Nominal Transaksi</p>
+              <p className="font-medium text-slate-800">{moneyNumber(o.grandTotal).toLocaleString('id-ID')}</p>
+              <p className="text-slate-500">Dibayar : <span className="text-pink-600">{received.toLocaleString('id-ID')}</span></p>
+              <p className="text-slate-500">Kembalian : <span className="text-pink-600">{change.toLocaleString('id-ID')}</span></p>
+            </div>
+            <div className="min-w-0">
+              <p className="mb-1 flex items-center gap-1.5 font-semibold text-slate-500"><UserRound size={13} className="text-pink-500" />Pelanggan</p>
+              <p className="truncate font-medium text-slate-800">{o.customerName || 'Walk In customer'}</p>
+              <p className="truncate text-slate-500">Kasir : <span className="text-pink-600">{o.cashier?.name || 'Kasir'}</span></p>
+            </div>
+            <div className="min-w-0">
+              <p className="mb-1 flex items-center gap-1.5 font-semibold text-slate-500"><Pencil size={13} className="text-pink-500" />Transaksi Ditempat</p>
+              <p className="font-medium text-slate-800">{o.orderType || '-'}</p>
+            </div>
+            <div className="min-w-0">
+              <p className="mb-1 flex items-center gap-1.5 font-semibold text-slate-500"><Package size={13} className="text-pink-500" />Items</p>
+              {(items.length ? items.slice(0, 3) : ['Belum ada item']).map((item, idx) => <p key={idx} className="truncate font-medium text-slate-800">{item}</p>)}
+              {items.length > 3 && <p className="text-slate-400">+{items.length - 3} item</p>}
+            </div>
+            <div className="min-w-0">
+              <p className="mb-1 flex items-center gap-1.5 font-semibold text-slate-500"><WalletCards size={13} className="text-pink-500" />Pembayaran</p>
+              <p className="font-medium text-slate-800">{o.paymentMethod || (o.status === 'PAID' ? 'Tunai' : '-')}</p>
+            </div>
           </div>
         </div>;
       })}
       {!data.length && <Empty />}
     </div>
-    <div className="card hidden overflow-hidden lg:block"><div className="overflow-auto"><table className="w-full min-w-[980px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr>{['Items', 'Outlet', 'Cashier', 'Time', 'Total', 'Status', 'Actions'].map(x => <th className={`p-4 ${x === 'Total' || x === 'Actions' ? 'text-right' : ''}`} key={x}>{x}</th>)}</tr></thead><tbody>{data.map(o => {
-      const preview = itemPreview(o.items);
-      const time = orderTime(o.createdAt);
-      const meta = statusMeta(o.status);
-      const StatusIcon = meta.icon;
-      return <tr className="h-[72px] border-t align-middle" key={o.id}>
-        <td className="p-4"><div className="flex min-w-0 items-center gap-3"><div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-700"><Package size={18} /></div><div className="min-w-0"><p className="truncate font-black text-ink">{preview.first}</p>{preview.more > 0 && <p className="text-xs font-bold text-slate-400">+{preview.more} item</p>}<p className="truncate text-xs text-slate-400">{o.orderNumber || o.transactionNumber}</p></div></div></td>
-        <td className="max-w-[180px] truncate font-semibold text-slate-600">{o.outlet?.name || '-'}</td>
-        <td className="max-w-[140px] truncate font-semibold text-slate-600">{o.cashier?.name || '-'}</td>
-        <td><p className="font-semibold text-slate-700">{time.date}</p><p className="text-xs font-bold text-slate-400">{time.time}</p></td>
-        <td className="text-right text-base font-black text-ink">{rupiah(o.grandTotal)}</td>
-        <td><span className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-black ${meta.cls}`}><StatusIcon size={14} strokeWidth={3} />{meta.label}</span></td>
-        <td className="p-4 text-right"><DesktopActions o={o} /></td>
-      </tr>;
-    })}</tbody></table></div>{!data.length && <Empty />}</div>
     <CancelOrderDialog open={!!cancelTarget} onClose={() => setCancelTarget(null)} onSubmit={submitCancel} />
-  </Page>;
+  </div>;
 }
 
 export function OrderDetail() {
