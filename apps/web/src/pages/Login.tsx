@@ -29,19 +29,19 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
     }
   }
 
-  return <div className="grid min-h-screen lg:grid-cols-2">
-    <section className="hidden overflow-hidden bg-brand-900 p-14 text-white lg:flex lg:flex-col lg:justify-between">
+  return <div className="grid min-h-screen md:grid-cols-2">
+    <section className="hidden overflow-hidden bg-brand-900 p-10 text-white md:flex md:flex-col md:justify-between xl:p-14">
       <div className="flex items-center gap-3 text-2xl font-black"><span className="grid h-12 w-12 place-items-center rounded-2xl bg-brand-500">F</span>FORU POS</div>
       <div>
         <p className="mb-5 text-sm font-bold uppercase tracking-[.25em] text-brand-500">Point of Sale</p>
-        <h1 className="max-w-xl text-6xl font-black leading-[1.05]">Lebih cepat jualan, lebih jernih melihat usaha.</h1>
-        <p className="mt-6 max-w-md text-lg text-white/55">Kasir, multi-outlet, kupon, dan laporan profit dalam satu ruang kerja.</p>
+        <h1 className="max-w-xl text-4xl font-black leading-[1.05] xl:text-6xl">Lebih cepat jualan, lebih jernih melihat usaha.</h1>
+        <p className="mt-5 max-w-md text-base text-white/55 xl:mt-6 xl:text-lg">Kasir, multi-outlet, kupon, dan laporan profit dalam satu ruang kerja.</p>
       </div>
       <small className="text-white/35">FORU operational system</small>
     </section>
     <section className="flex items-center justify-center p-6">
       <form onSubmit={submit} className="w-full max-w-md">
-        <div className="mb-9 lg:hidden"><div className="mb-3 flex items-center gap-2 text-2xl font-black"><span className="grid h-10 w-10 place-items-center rounded-xl bg-brand-600 text-white">F</span>FORU POS</div></div>
+        <div className="mb-9 md:hidden"><div className="mb-3 flex items-center gap-2 text-2xl font-black"><span className="grid h-10 w-10 place-items-center rounded-xl bg-brand-600 text-white">F</span>FORU POS</div></div>
         <div className="mb-8">
           <span className="mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-brand-50 text-brand-600"><LockKeyhole /></span>
           <h2 className="text-3xl font-black">Selamat datang</h2>

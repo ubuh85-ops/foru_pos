@@ -10,6 +10,8 @@ type BluetoothPrinterPlugin = {
 
 const NativeBluetoothPrinter = registerPlugin<BluetoothPrinterPlugin>('BluetoothPrinter');
 const LAST_BT_PRINTER_KEY = 'foru:lastBluetoothPrinter';
+const BT_PRINTER_CACHE_PREFIX = 'foru:btPrinters:';
+const BT_PRINTER_CACHE_TTL_MS = 5 * 60 * 1000;
 const BT_PRINT_CHUNK_SIZE = 700;
 const SHIFT_DETAIL_LIMIT = 30;
 
@@ -131,17 +133,14 @@ function buildItemLine(item: any, width: number, showAmount: boolean) {
   const selected = item.selectedVariantsJson;
   if (Array.isArray(selected)) selected.forEach((v: any) => v?.optionName && lines.push(`  Varian ${v.optionName}`));
   if (item.itemNote) wrap(`NOTE: ${String(item.itemNote).toUpperCase()}`, width - 2).forEach(line => lines.push(`  ${line}`));
-  if (!showAmount) lines.push(`  Harga ${printMoney(itemUnitPrice(item))}`);
   return lines;
 }
 
 function receiptText(doc: any, width: number) {
   const line = '-'.repeat(width);
   const lines = [
-    center('FORU POS', width),
     center(outletNameOf(doc), width),
     docNumberOf(doc),
-    doc.orderNumber && doc.transactionNumber ? `Order: ${doc.orderNumber}` : '',
     dt(doc.createdAt || doc.paidAt || new Date().toISOString()),
     `Customer: ${customerNameOf(doc)}`,
     `Kasir   : ${cashierNameOf(doc)}`,
@@ -181,7 +180,6 @@ function kitchenText(doc: any, width: number) {
 function customerItemListText(doc: any, width: number) {
   const line = '-'.repeat(width);
   const lines = [
-    center('FORU POS', width),
     center('CUSTOMER ITEM LIST', width),
     outletNameOf(doc),
     docNumberOf(doc),
@@ -285,16 +283,56 @@ function lastBluetoothPrinter() {
   }
 }
 
-export async function tryNativeBluetoothPrint(doc: any, type: PrintDocType) {
-  if (!isNativeAndroid()) return false;
-  const oid = outletIdOf(doc);
-  const printers = await api<any[]>(oid ? `/printers?outlet_id=${oid}` : '/printers');
+function cachedBluetoothPrinters(outletId?: string) {
+  if (!outletId) return null;
+  try {
+    const raw = localStorage.getItem(`${BT_PRINTER_CACHE_PREFIX}${outletId}`);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    if (!Array.isArray(cached?.printers)) return null;
+    if (Date.now() - Number(cached.cachedAt || 0) > BT_PRINTER_CACHE_TTL_MS) return null;
+    return cached.printers as any[];
+  } catch {
+    return null;
+  }
+}
+
+function rememberBluetoothPrinters(outletId: string | undefined, printers: any[]) {
+  if (!outletId) return;
+  localStorage.setItem(`${BT_PRINTER_CACHE_PREFIX}${outletId}`, JSON.stringify({
+    cachedAt: Date.now(),
+    printers
+  }));
+}
+
+export function clearBluetoothPrinterCache(outletId?: string) {
+  if (outletId) {
+    localStorage.removeItem(`${BT_PRINTER_CACHE_PREFIX}${outletId}`);
+    return;
+  }
+  Object.keys(localStorage)
+    .filter(key => key.startsWith(BT_PRINTER_CACHE_PREFIX))
+    .forEach(key => localStorage.removeItem(key));
+}
+
+async function bluetoothPrintersForOutlet(outletId?: string) {
+  const cached = cachedBluetoothPrinters(outletId);
+  if (cached) return cached;
+  const printers = await api<any[]>(outletId ? `/printers?outlet_id=${outletId}` : '/printers');
   const activeBluetoothPrinters = printers.filter(p =>
     p.status === 'ACTIVE' &&
     p.connectionType === 'BLUETOOTH' &&
     p.bluetoothAddress &&
-    (!oid || p.outletId === oid || p.outlet?.id === oid)
+    (!outletId || p.outletId === outletId || p.outlet?.id === outletId)
   );
+  rememberBluetoothPrinters(outletId, activeBluetoothPrinters);
+  return activeBluetoothPrinters;
+}
+
+export async function tryNativeBluetoothPrint(doc: any, type: PrintDocType) {
+  if (!isNativeAndroid()) return false;
+  const oid = outletIdOf(doc);
+  const activeBluetoothPrinters = await bluetoothPrintersForOutlet(oid);
   const printer = activeBluetoothPrinters.find(p =>
     (type === 'kitchen-ticket' ? p.isKitchenPrinter : p.isCustomerReceipt)
   ) || activeBluetoothPrinters[0] || lastBluetoothPrinter();

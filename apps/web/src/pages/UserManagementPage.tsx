@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Edit, KeyRound, Plus, Search, Store, Trash2, UserCog } from 'lucide-react';
+import { Edit, KeyRound, MoreHorizontal, Plus, Search, Store, Trash2, UserCog } from 'lucide-react';
 import { api, dt } from '../api';
 import { toast } from '../toast';
 import { appConfirm } from '../components/ui/AppDialog';
@@ -49,6 +49,7 @@ export default function UserManagementPage() {
   const [outletId, setOutletId] = useState('');
   const [outletsLoading, setOutletsLoading] = useState(false);
   const [outletsError, setOutletsError] = useState('');
+  const [busyAction, setBusyAction] = useState('');
 
   const query = useMemo(() => {
     const p = new URLSearchParams();
@@ -83,7 +84,8 @@ export default function UserManagementPage() {
 
   async function saveUser(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!edit) return;
+    if (!edit || busyAction) return;
+    setBusyAction(edit.id ? 'save-user' : 'add-user');
     setError('');
     try {
       const f = new FormData(e.currentTarget);
@@ -105,12 +107,16 @@ export default function UserManagementPage() {
       toast.success(edit.id ? 'User berhasil diubah.' : 'User berhasil ditambahkan.');
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusyAction('');
     }
   }
 
   async function resetPassword(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!reset) return;
+    if (!reset || busyAction) return;
+    setBusyAction('password');
+    setError('');
     try {
       const f = new FormData(e.currentTarget);
       await api(`/users/${reset.id}/reset-password`, { method: 'POST', body: JSON.stringify({ password: f.get('password'), confirmPassword: f.get('confirmPassword') }) });
@@ -118,12 +124,16 @@ export default function UserManagementPage() {
       toast.success('Password berhasil di-reset.');
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusyAction('');
     }
   }
 
   async function saveAssignment(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!assign) return;
+    if (!assign || busyAction) return;
+    setBusyAction('assignment');
+    setError('');
     try {
       const f = new FormData(e.currentTarget);
       await api(`/users/${assign.id}/outlets`, { method: 'PUT', body: JSON.stringify({ outletIds: f.getAll('outletIds') }) });
@@ -132,26 +142,39 @@ export default function UserManagementPage() {
       toast.success('Outlet user berhasil diperbarui.');
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusyAction('');
     }
   }
 
   async function setUserStatus(user: ManagedUser, next: 'ACTIVE' | 'INACTIVE') {
+    if (busyAction) return;
+    setBusyAction(`status-${user.id}`);
+    setError('');
     try {
       await api(`/users/${user.id}`, { method: 'PUT', body: JSON.stringify({ status: next }) });
       load();
+      toast.success(next === 'ACTIVE' ? 'User berhasil diaktifkan.' : 'User berhasil dinonaktifkan.');
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusyAction('');
     }
   }
 
   async function softDelete(user: ManagedUser) {
-    if (!await appConfirm(`Soft delete user "${user.name}"?`, { title: 'Soft Delete User', confirmText: 'Delete', danger: true })) return;
+    if (busyAction) return;
+    if (!await appConfirm(`Hapus akses user "${user.name}"? User akan dinonaktifkan dan tidak bisa login.`, { title: 'Hapus User', confirmText: 'Hapus User', danger: true })) return;
+    setBusyAction(`delete-${user.id}`);
+    setError('');
     try {
       await api(`/users/${user.id}`, { method: 'DELETE' });
       load();
       toast.success('User berhasil dihapus.');
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusyAction('');
     }
   }
 
@@ -174,7 +197,7 @@ export default function UserManagementPage() {
     <div className="hidden overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5 lg:block">
       <table className="w-full text-left text-sm">
         <thead className="bg-slate-50 text-slate-500"><tr><th className="p-4">Name</th><th>Username</th><th>Role</th><th>Assigned Outlets</th><th>Warehouse</th><th>Status</th><th>Last Login</th><th className="p-4 text-right">Actions</th></tr></thead>
-        <tbody>{users.map(user => <tr className="border-t" key={user.id}><td className="p-4 font-bold">{user.name}</td><td>{user.username}</td><td><span className="pill bg-slate-100">{user.role}</span></td><td>{outletText(user)}</td><td>{warehouseText(user)}</td><td><span className={`pill ${user.status === 'ACTIVE' ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500'}`}>{user.status}</span></td><td>{user.lastLogin ? dt(user.lastLogin) : '-'}</td><td className="p-4"><Actions user={user} edit={setEdit} reset={setReset} assign={setAssign} setStatus={setUserStatus} softDelete={softDelete} /></td></tr>)}</tbody>
+        <tbody>{users.map(user => <tr className="border-t" key={user.id}><td className="p-4 font-bold">{user.name}</td><td>{user.username}</td><td><span className="pill bg-slate-100">{user.role}</span></td><td>{outletText(user)}</td><td>{warehouseText(user)}</td><td><span className={`pill ${user.status === 'ACTIVE' ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500'}`}>{user.status}</span></td><td>{user.lastLogin ? dt(user.lastLogin) : '-'}</td><td className="p-4"><Actions user={user} busyAction={busyAction} edit={setEdit} reset={setReset} assign={setAssign} setStatus={setUserStatus} softDelete={softDelete} /></td></tr>)}</tbody>
       </table>
     </div>
 
@@ -185,25 +208,25 @@ export default function UserManagementPage() {
         <p className="mt-1 text-sm"><b>Outlet:</b> {outletText(user)}</p>
         <p className="mt-1 text-sm"><b>Warehouse:</b> {warehouseText(user)}</p>
         <p className="mt-1 text-sm text-slate-500">Last Login: {user.lastLogin ? dt(user.lastLogin) : '-'}</p>
-        <div className="mt-3"><Actions user={user} edit={setEdit} reset={setReset} assign={setAssign} setStatus={setUserStatus} softDelete={softDelete} /></div>
+        <div className="mt-3"><Actions user={user} busyAction={busyAction} edit={setEdit} reset={setReset} assign={setAssign} setStatus={setUserStatus} softDelete={softDelete} /></div>
       </article>)}
     </div>
 
     {edit && <Modal title={edit.id ? 'Edit User' : 'Tambah User'} close={() => setEdit(null)}>
-      <UserForm user={edit} outlets={outlets} warehouses={warehouses} outletsLoading={outletsLoading} outletsError={outletsError} reloadOutlets={loadOutlets} onSubmit={saveUser} />
+      <UserForm user={edit} outlets={outlets} warehouses={warehouses} outletsLoading={outletsLoading} outletsError={outletsError} reloadOutlets={loadOutlets} busy={busyAction === 'save-user' || busyAction === 'add-user'} onSubmit={saveUser} />
     </Modal>}
-    {reset && <Modal title={`Reset Password - ${reset.name}`} close={() => setReset(null)}>
+    {reset && <Modal title={`Update Password - ${reset.name}`} close={() => setReset(null)}>
       <form onSubmit={resetPassword}>
         <Field name="password" label="Password baru" type="password" required minLength={8} />
         <Field name="confirmPassword" label="Confirm password" type="password" required minLength={8} />
-        <button className="btn-primary mt-3 w-full">Reset Password</button>
+        <button className="btn-primary mt-3 w-full" disabled={busyAction === 'password'}>{busyAction === 'password' ? 'Menyimpan...' : 'Update Password'}</button>
       </form>
     </Modal>}
     {assign && <Modal title={`Assign Outlet - ${assign.name}`} close={() => setAssign(null)}>
       <form onSubmit={saveAssignment}>
         <OutletChecks outlets={outlets} selected={(assign.outlets || []).map(x => x.outlet.id)} loading={outletsLoading} error={outletsError} reload={loadOutlets} single={assign.role === 'CASHIER'} />
         {assign.role === 'CASHIER' && <p className="mt-2 text-xs text-amber-700">Cashier hanya boleh memiliki 1 outlet aktif.</p>}
-        <button className="btn-primary mt-5 w-full">Simpan Outlet</button>
+        <button className="btn-primary mt-5 w-full" disabled={busyAction === 'assignment'}>{busyAction === 'assignment' ? 'Menyimpan...' : 'Simpan Outlet'}</button>
       </form>
     </Modal>}
   </Page>;
@@ -220,17 +243,27 @@ function warehouseText(user: ManagedUser) {
   return user.assignedWarehouse?.name || 'Ikuti outlet';
 }
 
-function Actions({ user, edit, reset, assign, setStatus, softDelete }: { user: ManagedUser; edit: (u: ManagedUser) => void; reset: (u: ManagedUser) => void; assign: (u: ManagedUser) => void; setStatus: (u: ManagedUser, s: 'ACTIVE' | 'INACTIVE') => void; softDelete: (u: ManagedUser) => void }) {
-  return <div className="flex flex-wrap justify-end gap-2">
-    <button onClick={() => edit(user)} className="rounded-xl border px-3 py-2 text-xs font-bold text-brand-700"><Edit size={14} className="inline" /> Edit</button>
-    <button onClick={() => reset(user)} className="rounded-xl border px-3 py-2 text-xs font-bold text-slate-700"><KeyRound size={14} className="inline" /> Reset</button>
-    <button onClick={() => assign(user)} className="rounded-xl border px-3 py-2 text-xs font-bold text-slate-700"><Store size={14} className="inline" /> Outlet</button>
-    <button onClick={() => setStatus(user, user.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE')} className="rounded-xl border px-3 py-2 text-xs font-bold text-amber-700">{user.status === 'ACTIVE' ? 'Inactive' : 'Active'}</button>
-    <button onClick={() => softDelete(user)} className="rounded-xl border px-3 py-2 text-xs font-bold text-red-600"><Trash2 size={14} className="inline" /> Delete</button>
-  </div>;
+function Actions({ user, busyAction, edit, reset, assign, setStatus, softDelete }: { user: ManagedUser; busyAction: string; edit: (u: ManagedUser) => void; reset: (u: ManagedUser) => void; assign: (u: ManagedUser) => void; setStatus: (u: ManagedUser, s: 'ACTIVE' | 'INACTIVE') => void; softDelete: (u: ManagedUser) => void }) {
+  const statusBusy = busyAction === `status-${user.id}`;
+  const deleteBusy = busyAction === `delete-${user.id}`;
+  const disabled = !!busyAction;
+  const itemClass = 'flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-bold hover:bg-slate-50 disabled:opacity-50';
+  return <details className="group relative ml-auto w-full max-w-[13rem] lg:w-auto">
+    <summary className="flex cursor-pointer list-none items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-brand-50 hover:text-brand-700 [&::-webkit-details-marker]:hidden">
+      <MoreHorizontal size={16} /> Kelola
+    </summary>
+    <div className="absolute right-0 z-20 mt-2 w-56 rounded-2xl border border-slate-200 bg-white p-2 text-left shadow-xl lg:right-0">
+      <button disabled={disabled} onClick={() => edit(user)} className={`${itemClass} text-brand-700`}><Edit size={15} /> Edit User</button>
+      <button disabled={disabled} onClick={() => assign(user)} className={`${itemClass} text-slate-700`}><Store size={15} /> Atur Outlet</button>
+      <button disabled={disabled} onClick={() => reset(user)} className={`${itemClass} text-slate-700`}><KeyRound size={15} /> Update Password</button>
+      <button disabled={disabled} onClick={() => setStatus(user, user.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE')} className={`${itemClass} text-amber-700`}>{statusBusy ? 'Memproses...' : user.status === 'ACTIVE' ? 'Nonaktifkan User' : 'Aktifkan User'}</button>
+      <div className="my-1 border-t border-slate-100" />
+      <button disabled={disabled} onClick={() => softDelete(user)} className={`${itemClass} text-red-600`}><Trash2 size={15} /> {deleteBusy ? 'Menghapus...' : 'Hapus User'}</button>
+    </div>
+  </details>;
 }
 
-function UserForm({ user, outlets, warehouses, outletsLoading, outletsError, reloadOutlets, onSubmit }: { user: ManagedUser; outlets: Outlet[]; warehouses: Warehouse[]; outletsLoading: boolean; outletsError: string; reloadOutlets: () => void; onSubmit: (e: FormEvent<HTMLFormElement>) => void }) {
+function UserForm({ user, outlets, warehouses, outletsLoading, outletsError, reloadOutlets, busy, onSubmit }: { user: ManagedUser; outlets: Outlet[]; warehouses: Warehouse[]; outletsLoading: boolean; outletsError: string; reloadOutlets: () => void; busy: boolean; onSubmit: (e: FormEvent<HTMLFormElement>) => void }) {
   const selected = (user.outlets || []).map(x => x.outlet.id);
   const [role, setRole] = useState<ManagedUser['role']>(user.role || 'CASHIER');
   const initialPermissions = user.id ? (user.inventoryPermissions || []) : (role === 'CASHIER' ? [] : allInventoryPermissionKeys);
@@ -290,7 +323,7 @@ function UserForm({ user, outlets, warehouses, outletsLoading, outletsError, rel
       </div>
       <p className="mt-2 text-xs text-slate-400">Jika View Inventory OFF, permission Inventory lainnya otomatis nonaktif.</p>
     </section>
-    <button className="btn-primary mt-5 w-full">Simpan User</button>
+    <button className="btn-primary mt-5 w-full" disabled={busy}>{busy ? 'Menyimpan...' : user.id ? 'Simpan User' : 'Tambah User'}</button>
   </form>;
 }
 

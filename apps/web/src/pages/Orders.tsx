@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { CalendarDays, Check, Clock3, CreditCard, Eye, Filter, MoreHorizontal, Package, Pencil, Printer, ReceiptText, UserRound, WalletCards, X, XCircle } from 'lucide-react';
+import { CalendarDays, Check, Clock3, CreditCard, Eye, Filter, MoreHorizontal, Package, Pencil, Printer, ReceiptText, ShoppingCart, UserRound, WalletCards, X, XCircle } from 'lucide-react';
 import { api, dt, rupiah } from '../api';
 import { printWithBluetoothFallback } from '../printer';
 import { useOutlet } from '../OutletContext';
@@ -51,6 +51,7 @@ const compactDate = (value: string) => {
 
 export function Orders() {
   const tabs = ['PENDING_PAYMENT', 'PAID', 'CANCELLED', 'VOID'];
+  const navigate = useNavigate();
   const { selectedOutletId: outletId } = useOutlet();
   const [status, setStatus] = useState('PENDING_PAYMENT');
   const [preset, setPreset] = useState('today');
@@ -117,10 +118,18 @@ export function Orders() {
   }
   async function print(o: any, type: 'customer-item-list' | 'kitchen-ticket' | 'customer-receipt') {
     try {
-      if (type === 'customer-receipt') await api(`/print/customer-receipt/${o.id}`, { method: 'POST' });
-      else await api(`/orders/${o.id}/print/${type}`, { method: 'POST' });
       const doc = type === 'customer-receipt' ? await api(`/sales/${o.id}`) : await api(`/orders/${o.id}`);
       await printWithBluetoothFallback(doc, type, type === 'customer-item-list' ? `/customer-item-list/${o.id}` : type === 'customer-receipt' ? `/receipt/${o.id}` : `/kitchen-ticket/${o.id}`);
+      if (type === 'customer-receipt') await api(`/print/customer-receipt/${o.id}`, { method: 'POST' }).catch(() => {});
+      else await api(`/orders/${o.id}/print/${type}`, { method: 'POST' }).catch(() => {});
+    } catch (e) { appAlert((e as Error).message, { tone: 'danger' }); }
+  }
+  async function voidOrder(o: any) {
+    try {
+      const reason = await appPrompt('Masukkan alasan void transaksi.', 'Void transaksi', { title: 'Void Transaction', label: 'Alasan Void', multiline: true, minLength: 3, maxLength: 250 });
+      if (!reason) return;
+      await api(`/sales/${o.id}/void`, { method: 'POST', body: JSON.stringify({ reason }) });
+      await load();
     } catch (e) { appAlert((e as Error).message, { tone: 'danger' }); }
   }
   const iconBtn = 'inline-flex h-10 w-10 items-center justify-center rounded-xl border border-brand-100 bg-white text-brand-700 shadow-sm hover:bg-brand-50';
@@ -133,6 +142,7 @@ export function Orders() {
     <button title="Item List" aria-label="Print item list" className={iconBtn} onClick={() => print(o, 'customer-item-list')}><Package size={18} /></button>
     <button title={o.status === 'PAID' ? 'Reprint Kitchen' : 'Kitchen'} aria-label="Print kitchen ticket" className={iconBtn} onClick={() => print(o, 'kitchen-ticket')}><Printer size={18} /></button>
     {o.status === 'PAID' && <button title="Reprint Receipt" aria-label="Print receipt" className={iconBtn} onClick={() => print(o, 'customer-receipt')}><ReceiptText size={18} /></button>}
+    {o.status === 'PAID' && <button title="Void" aria-label="Void transaction" className={dangerBtn} onClick={() => voidOrder(o)}><XCircle size={18} /></button>}
     {o.status === 'PENDING_PAYMENT' && <button title="Cancel" aria-label="Cancel order" className={dangerBtn} onClick={() => cancel(o)}><XCircle size={18} /></button>}
   </div>;
   const MoreMenu = ({ o }: { o: any }) => <details className="relative">
@@ -144,21 +154,28 @@ export function Orders() {
       <button className={menuItem} onClick={() => print(o, 'customer-item-list')}><Package size={16} />Item List</button>
       <button className={menuItem} onClick={() => print(o, 'kitchen-ticket')}><Printer size={16} />Kitchen</button>
       {o.status === 'PAID' && <button className={menuItem} onClick={() => print(o, 'customer-receipt')}><ReceiptText size={16} />Receipt</button>}
+      {o.status === 'PAID' && <button className={dangerMenuItem} onClick={() => voidOrder(o)}><XCircle size={16} />Void</button>}
       {o.status === 'PENDING_PAYMENT' && <button className={dangerMenuItem} onClick={() => cancel(o)}><XCircle size={16} />Cancel</button>}
     </div>
   </details>;
 
-  return <div className="flex h-[calc(100dvh-4.5rem)] min-h-0 flex-col overflow-hidden bg-soft/40 p-3 pb-20 lg:h-[calc(100dvh-5rem)] lg:p-6">
-    <div className="sticky top-0 z-20 shrink-0 bg-soft/95 pb-3 backdrop-blur">
-      <div className="mb-3 flex items-start justify-between gap-3">
+  return <div className="flex h-[calc(100dvh-4.5rem)] min-h-0 flex-col overflow-hidden bg-soft/40 p-3 pb-20 md:pb-3 lg:h-[calc(100dvh-5rem)] lg:p-6">
+    <div className="sticky top-0 z-20 shrink-0 bg-soft/95 pb-1.5 backdrop-blur md:pb-1.5">
+      <div className="mb-2 flex items-start justify-between gap-3">
         <div>
           <h2 className="text-3xl font-black tracking-tight text-ink lg:text-3xl">Orders</h2>
           <p className="mt-1 text-sm leading-relaxed text-slate-500">Pending order, paid, cancelled, dan void.</p>
         </div>
-        <button onClick={() => setFilterOpen(v => !v)} className="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-pink-50 px-4 py-3 text-sm font-black text-pink-600 shadow-sm ring-1 ring-pink-100">
-          <Filter size={18} fill="currentColor" />
-          Saring
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button onClick={() => navigate('/pos')} className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-black text-brand-700 shadow-sm ring-1 ring-brand-100 hover:bg-brand-50">
+            <ShoppingCart size={18} />
+            Kasir
+          </button>
+          <button onClick={() => setFilterOpen(v => !v)} className="inline-flex items-center gap-2 rounded-2xl bg-pink-50 px-4 py-3 text-sm font-black text-pink-600 shadow-sm ring-1 ring-pink-100">
+            <Filter size={18} fill="currentColor" />
+            Saring
+          </button>
+        </div>
       </div>
       {filterOpen && <div className="mb-3 rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-100">
         <div className="flex gap-2 overflow-x-auto pb-1">
@@ -169,35 +186,46 @@ export function Orders() {
           <label className="text-sm font-bold text-slate-600">Sampai tanggal<input className="input mt-1" type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
         </div>}
       </div>}
-      <div className="grid grid-cols-2 gap-x-5 gap-y-5 rounded-sm bg-slate-50 p-4 shadow-sm ring-1 ring-slate-100 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-x-5 gap-y-2 rounded-2xl bg-slate-50 px-4 py-3 shadow-sm ring-1 ring-slate-100 md:grid-cols-4">
         <div className="min-w-0"><p className="text-xs font-black text-slate-500">Total Order</p><p className="mt-1 text-sm text-slate-800">{summary.totalOrders}</p></div>
         <div className="min-w-0"><p className="text-xs font-black leading-tight text-slate-500">Total Item Terjual</p><p className="mt-1 text-sm text-slate-800">{summary.totalItemsSold}</p></div>
         <div className="min-w-0"><p className="text-xs font-black text-slate-500">Total Nominal</p><p className="mt-1 text-sm text-slate-800">{rupiah(summary.totalNominal)}</p></div>
         <div className="min-w-0"><p className="text-xs font-black leading-tight text-slate-500">Penjualan Terbanyak</p><p className="mt-1 line-clamp-2 break-words text-sm leading-snug text-slate-800">{summary.topSellingProduct ? `${summary.topSellingProduct.productName} ${summary.topSellingProduct.qty}x` : '-'}</p></div>
       </div>
-      <div className="mt-3 flex gap-3 overflow-x-auto pb-1">
-        {tabs.map(t => <button key={t} onClick={() => setStatus(t)} className={`min-w-fit whitespace-nowrap rounded-full px-4 py-2.5 text-[11px] font-black shadow-sm transition sm:px-6 sm:text-xs ${status === t ? 'bg-ink text-white shadow-ink/15' : 'bg-white text-slate-500 ring-1 ring-slate-100'}`}>{t.replace('_', ' ')}</button>)}
+      <div className="mt-1.5 flex gap-2 overflow-x-auto pb-1">
+        {tabs.map(t => <button key={t} onClick={() => setStatus(t)} className={`min-w-fit whitespace-nowrap rounded-full px-4 py-2 text-[11px] font-black shadow-sm transition sm:px-5 sm:text-xs ${status === t ? 'bg-ink text-white shadow-ink/15' : 'bg-white text-slate-500 ring-1 ring-slate-100'}`}>{t.replace('_', ' ')}</button>)}
       </div>
     </div>
     <Err v={error} />
     {loading && <div className="mb-3 rounded-2xl bg-white p-3 text-sm font-bold text-slate-500 shadow-sm ring-1 ring-slate-100">Memuat orders...</div>}
-    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
+    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1 md:space-y-3">
       {data.map(o => {
         const meta = statusMeta(o.status);
         const Icon = meta.icon;
         const items = itemSummary(o.items);
+        const preview = itemPreview(o.items);
+        const time = orderTime(o.createdAt);
         const received = moneyNumber(o.amountPaid ?? o.paidAmount ?? o.receivedAmount ?? (o.status === 'PAID' ? o.grandTotal : 0));
         const change = Math.max(0, received - moneyNumber(o.grandTotal));
-        return <div key={o.id} className="rounded-lg bg-white p-4 shadow-sm ring-1 ring-slate-100">
-          <div className="mb-3 flex items-center justify-end gap-2">
-            <span className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-black ${meta.cls}`}>
-              <Icon size={14} strokeWidth={3} />
-              {paidLabel(o.status)}
-            </span>
-            <Link aria-label="View order" className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-pink-100 bg-pink-50 text-pink-600" to={`/orders/${o.id}`}>
-              <Eye size={17} />
-            </Link>
-            <MoreMenu o={o} />
+        return <article key={o.id} className="w-full overflow-visible rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-100 md:px-4 md:py-3 xl:px-5 xl:py-4">
+          <div className="md:hidden">
+          <div className="mb-4 flex min-w-0 items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h3 className="truncate text-base font-black text-ink">{o.orderNumber || o.transactionNumber}</h3>
+              <p className="mt-0.5 truncate text-xs font-bold text-slate-400">{o.transactionNumber || o.orderNumber}</p>
+              <div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-slate-500">
+                <Package size={14} className="shrink-0 text-pink-500" />
+                <span className="truncate">{preview.first}</span>
+                {preview.more > 0 && <span className="shrink-0 font-bold text-slate-400">+{preview.more} item</span>}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-start gap-2">
+              <span className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-black ${meta.cls}`}>
+                <Icon size={14} strokeWidth={3} />
+                {paidLabel(o.status)}
+              </span>
+              <MoreMenu o={o} />
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-x-5 gap-y-4 text-xs">
             <div className="min-w-0">
@@ -206,7 +234,7 @@ export function Orders() {
             </div>
             <div className="min-w-0">
               <p className="mb-1 flex items-center gap-1.5 font-semibold text-slate-500"><CreditCard size={13} className="text-pink-500" />Nominal Transaksi</p>
-              <p className="font-medium text-slate-800">{moneyNumber(o.grandTotal).toLocaleString('id-ID')}</p>
+              <p className="text-sm font-black text-slate-900">{rupiah(o.grandTotal)}</p>
               <p className="text-slate-500">Dibayar : <span className="text-pink-600">{received.toLocaleString('id-ID')}</span></p>
               <p className="text-slate-500">Kembalian : <span className="text-pink-600">{change.toLocaleString('id-ID')}</span></p>
             </div>
@@ -221,15 +249,48 @@ export function Orders() {
             </div>
             <div className="min-w-0">
               <p className="mb-1 flex items-center gap-1.5 font-semibold text-slate-500"><Package size={13} className="text-pink-500" />Items</p>
-              {(items.length ? items.slice(0, 3) : ['Belum ada item']).map((item, idx) => <p key={idx} className="truncate font-medium text-slate-800">{item}</p>)}
-              {items.length > 3 && <p className="text-slate-400">+{items.length - 3} item</p>}
+              <div className="space-y-0.5">
+                {(items.length ? items : ['Belum ada item']).map((item, idx) => <p key={idx} className="truncate text-[11px] font-medium leading-tight text-slate-800">{item}</p>)}
+              </div>
             </div>
             <div className="min-w-0">
               <p className="mb-1 flex items-center gap-1.5 font-semibold text-slate-500"><WalletCards size={13} className="text-pink-500" />Pembayaran</p>
               <p className="font-medium text-slate-800">{o.paymentMethod || (o.status === 'PAID' ? 'Tunai' : '-')}</p>
             </div>
           </div>
-        </div>;
+          </div>
+
+          <div className="hidden min-w-0 items-center gap-3 md:grid md:grid-cols-[minmax(140px,1fr)_minmax(160px,1.1fr)_minmax(105px,0.75fr)_minmax(100px,0.7fr)_auto] xl:gap-4 xl:grid-cols-[minmax(170px,1.1fr)_minmax(200px,1.25fr)_minmax(130px,0.8fr)_minmax(120px,0.75fr)_auto]">
+            <div className="min-w-0">
+              <h3 className="truncate text-sm font-black text-ink">{o.orderNumber || o.transactionNumber}</h3>
+              <p className="mt-1 truncate text-xs font-semibold text-slate-500">{o.customerName || 'Walk In customer'} - {o.cashier?.name || 'Kasir'}</p>
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-xs font-bold text-slate-400">Items</p>
+              <div className="mt-1 space-y-0.5">
+                {(items.length ? items : ['Belum ada item']).map((item, idx) => <p key={idx} className="truncate text-[11px] font-semibold leading-tight text-slate-800">{item}</p>)}
+              </div>
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-xs font-bold text-slate-400">Pembayaran</p>
+              <p className="truncate text-sm font-semibold text-slate-800">{o.paymentMethod || (o.status === 'PAID' ? 'Tunai' : '-')}</p>
+              <p className="truncate text-xs text-slate-400">{o.orderType || '-'}</p>
+            </div>
+            <div className="min-w-0 text-right">
+              <p className="text-sm font-black text-ink">{rupiah(o.grandTotal)}</p>
+              <p className="text-xs text-slate-400">{time.date}</p>
+              <p className="text-xs font-semibold text-slate-500">{time.time}</p>
+            </div>
+            <div className="flex shrink-0 items-center justify-end gap-2">
+              <span className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-black ${meta.cls}`}>
+                <Icon size={14} strokeWidth={3} />
+                {paidLabel(o.status)}
+              </span>
+              <div className="hidden xl:block"><DesktopActions o={o} /></div>
+              <div className="xl:hidden"><MoreMenu o={o} /></div>
+            </div>
+          </div>
+        </article>;
       })}
       {!data.length && <Empty />}
     </div>
@@ -260,16 +321,16 @@ export function OrderDetail() {
     } catch (e) { appAlert((e as Error).message, { tone: 'danger' }); }
   }
   async function print(type: 'customer-item-list' | 'kitchen-ticket' | 'customer-receipt') {
-    if (type === 'customer-receipt') await api(`/print/customer-receipt/${order.id}`, { method: 'POST' });
-    else await api(`/orders/${order.id}/print/${type}`, { method: 'POST' });
     try {
       await printWithBluetoothFallback(order, type, type === 'customer-item-list' ? `/customer-item-list/${order.id}` : type === 'customer-receipt' ? `/receipt/${order.id}` : `/kitchen-ticket/${order.id}`);
+      if (type === 'customer-receipt') await api(`/print/customer-receipt/${order.id}`, { method: 'POST' }).catch(() => {});
+      else await api(`/orders/${order.id}/print/${type}`, { method: 'POST' }).catch(() => {});
       load();
     } catch (e) { appAlert((e as Error).message, { tone: 'danger' }); }
   }
 
   return <Page>
-    <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row"><div><h2 className="text-3xl font-black">{order.orderNumber || order.transactionNumber}</h2><p className="text-slate-500">{order.outlet.name} · {dt(order.createdAt)} · {order.status}</p></div><Link to="/orders" className="btn-soft">Kembali</Link></div>
+    <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row"><div><h2 className="text-3xl font-black">{order.orderNumber || order.transactionNumber}</h2><p className="text-slate-500">{order.outlet.name} - {dt(order.createdAt)} - {order.status}</p></div><Link to="/orders" className="btn-soft">Kembali</Link></div>
     <div className="grid gap-5 xl:grid-cols-3">
       <div className="card p-5 xl:col-span-2">
         <div className="mb-5 grid gap-3 sm:grid-cols-2"><div><p className="text-sm text-slate-400">Customer</p><h3 className="text-2xl font-black">{order.customerName || 'Walk In'}</h3></div><div className="text-sm text-slate-500"><p>Transaction: <b>{order.transactionNumber || '-'}</b></p><p>Cashier: <b>{order.cashier?.name}</b></p>{order.paidAt && <p>Paid: <b>{dt(order.paidAt)}</b></p>}{order.paymentMethod && <p>Payment: <b>{order.paymentMethod}</b></p>}{order.couponCode && <p>Coupon: <b>{order.couponCode}</b></p>}</div></div>

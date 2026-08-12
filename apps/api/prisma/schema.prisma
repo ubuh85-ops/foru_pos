@@ -42,6 +42,12 @@ model Outlet {
   name           String
   address        String?
   phone          String?
+  inventoryWarehouseId String?         @map("inventory_warehouse_id")
+  blockSaleWhenIngredientOutOfStock Boolean @default(true) @map("block_sale_when_ingredient_out_of_stock")
+  allowSaleWithoutRecipe Boolean       @default(true) @map("allow_sale_without_recipe")
+  autoPrintReceipt Boolean             @default(false) @map("auto_print_receipt")
+  autoPrintKitchen Boolean             @default(false) @map("auto_print_kitchen")
+  autoPrintCustomerItemList Boolean    @default(false) @map("auto_print_customer_item_list")
   status         Status                @default(ACTIVE)
   createdAt      DateTime              @default(now()) @map("created_at")
   updatedAt      DateTime              @updatedAt @map("updated_at")
@@ -57,6 +63,7 @@ model Outlet {
   users          UserOutlet[]
   variantOptions VariantOptionOutlet[]
   warehouses      InventoryWarehouse[]
+  defaultInventoryWarehouse InventoryWarehouse? @relation("OutletDefaultInventoryWarehouse", fields: [inventoryWarehouseId], references: [id], onDelete: SetNull)
 
   @@map("outlets")
 }
@@ -95,6 +102,8 @@ model Product {
   variantGroups  ProductVariantGroup[]
   variants       ProductVariant[]
   saleItems      SaleItem[]
+  recipes        ProductRecipe[]
+  inventoryMovements InventoryMovement[]
 
   @@map("products")
 }
@@ -215,6 +224,26 @@ model ProductOutlet {
 
   @@unique([productId, outletId])
   @@map("product_outlets")
+}
+
+model ProductRecipe {
+  id              String        @id @default(cuid())
+  productId       String        @map("product_id")
+  inventoryItemId String        @map("inventory_item_id")
+  usageQty        Decimal       @map("usage_qty") @db.Decimal(14, 3)
+  usageUnitId     String        @map("usage_unit_id")
+  wastePercent    Decimal       @default(0) @map("waste_percent") @db.Decimal(5, 2)
+  isActive        Boolean       @default(true) @map("is_active")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  product         Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  item            InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  usageUnit       InventoryUnit @relation(fields: [usageUnitId], references: [id])
+
+  @@unique([productId, inventoryItemId])
+  @@index([inventoryItemId])
+  @@index([usageUnitId])
+  @@map("product_recipes")
 }
 
 model Bundle {
@@ -404,6 +433,7 @@ model SaleItem {
   variantHppTotal       Decimal         @default(0) @map("variant_hpp_total") @db.Decimal(14, 2)
   finalUnitHpp          Decimal         @default(0) @map("final_unit_hpp") @db.Decimal(14, 2)
   addons                SaleItemAddon[]
+  inventoryMovements    InventoryMovement[]
   outlet                Outlet          @relation(fields: [outletId], references: [id])
   product               Product         @relation(fields: [productId], references: [id])
   variant               ProductVariant? @relation(fields: [productVariantId], references: [id])
@@ -481,6 +511,9 @@ model InventoryUnit {
   createdAt DateTime        @default(now()) @map("created_at")
   updatedAt DateTime        @updatedAt @map("updated_at")
   items     InventoryItem[]
+  productRecipes ProductRecipe[]
+  fromUnitConversions InventoryUnitConversion[] @relation("InventoryUnitConversionFrom")
+  toUnitConversions   InventoryUnitConversion[] @relation("InventoryUnitConversionTo")
 
   @@map("inventory_units")
 }
@@ -513,12 +546,32 @@ model InventoryItem {
   alertLogs    InventoryAlertLog[]
   stocks       InventoryStock[]
   transferItems StockTransferItem[]
+  productRecipes ProductRecipe[]
+  unitConversions InventoryUnitConversion[]
 
   @@index([name])
   @@index([sku])
   @@index([barcode])
   @@index([categoryId])
   @@map("inventory_items")
+}
+
+model InventoryUnitConversion {
+  id              String        @id @default(cuid())
+  inventoryItemId String        @map("inventory_item_id")
+  fromUnitId      String        @map("from_unit_id")
+  toUnitId        String        @map("to_unit_id")
+  multiplier      Decimal       @db.Decimal(18, 6)
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  item            InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  fromUnit        InventoryUnit @relation("InventoryUnitConversionFrom", fields: [fromUnitId], references: [id])
+  toUnit          InventoryUnit @relation("InventoryUnitConversionTo", fields: [toUnitId], references: [id])
+
+  @@unique([inventoryItemId, fromUnitId, toUnitId])
+  @@index([fromUnitId])
+  @@index([toUnitId])
+  @@map("inventory_unit_conversions")
 }
 
 model InventoryWarehouse {
@@ -534,6 +587,7 @@ model InventoryWarehouse {
   createdAt   DateTime            @default(now()) @map("created_at")
   updatedAt   DateTime            @updatedAt @map("updated_at")
   outlet      Outlet?             @relation(fields: [outletId], references: [id], onDelete: SetNull)
+  defaultForOutlets Outlet[]       @relation("OutletDefaultInventoryWarehouse")
   stocks      InventoryStock[]
   movements   InventoryMovement[]
   transferFrom StockTransfer[]    @relation("StockTransferFromWarehouse")
@@ -594,15 +648,21 @@ model InventoryMovement {
   referenceType   String?               @map("reference_type")
   reference       String?
   referenceId     String?               @map("reference_id")
+  productId       String?               @map("product_id")
+  orderItemId     String?               @map("order_item_id")
   remarks         String?
   createdBy       String                @map("created_by")
   createdAt       DateTime              @default(now()) @map("created_at")
   item            InventoryItem         @relation(fields: [inventoryItemId], references: [id])
   warehouse       InventoryWarehouse?   @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  product         Product?              @relation(fields: [productId], references: [id], onDelete: SetNull)
+  orderItem       SaleItem?             @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
   user            User                  @relation(fields: [createdBy], references: [id])
 
   @@index([inventoryItemId, createdAt])
   @@index([warehouseId, createdAt])
+  @@index([productId, createdAt])
+  @@index([orderItemId, createdAt])
   @@index([movementType, createdAt])
   @@map("inventory_movements")
 }
@@ -799,6 +859,9 @@ enum InventoryMovementType {
   ADJUSTMENT_OUT
   ADJUSTMENT
   OPNAME
+  SALE_DEDUCTION
+  SALE_VOID_RETURN
+  SALE_REFUND_RETURN
 }
 
 enum InventoryWarehouseType {

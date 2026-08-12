@@ -31,6 +31,13 @@ import java.util.UUID;
 )
 public class BluetoothPrinterPlugin extends Plugin {
     private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
+    private static final long SOCKET_IDLE_TIMEOUT_MS = 60 * 60 * 1000L;
+
+    private final Object socketLock = new Object();
+    private BluetoothSocket currentSocket = null;
+    private OutputStream currentOutput = null;
+    private String currentAddress = null;
+    private long lastSocketUseAt = 0L;
 
     @PluginMethod
     public void listPairedDevices(PluginCall call) {
@@ -105,6 +112,31 @@ public class BluetoothPrinterPlugin extends Plugin {
         runWithSocket(call, address, payload);
     }
 
+    @PluginMethod
+    public void disconnect(PluginCall call) {
+        synchronized (socketLock) {
+            closeSocketLocked();
+        }
+        JSObject result = new JSObject();
+        result.put("success", true);
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void isConnected(PluginCall call) {
+        boolean connected;
+        String address;
+        synchronized (socketLock) {
+            closeIfIdleLocked();
+            connected = currentSocket != null && currentSocket.isConnected() && currentOutput != null;
+            address = currentAddress;
+        }
+        JSObject result = new JSObject();
+        result.put("connected", connected);
+        result.put("address", address);
+        call.resolve(result);
+    }
+
     @PermissionCallback
     private void permissionCallback(PluginCall call) {
         if (!hasBluetoothPermission()) {
@@ -120,6 +152,10 @@ public class BluetoothPrinterPlugin extends Plugin {
             testPrint(call);
         } else if ("printText".equals(method)) {
             printText(call);
+        } else if ("disconnect".equals(method)) {
+            disconnect(call);
+        } else if ("isConnected".equals(method)) {
+            isConnected(call);
         } else {
             call.reject("Method Bluetooth tidak dikenali.");
         }
@@ -139,33 +175,94 @@ public class BluetoothPrinterPlugin extends Plugin {
             return;
         }
         new Thread(() -> {
-            BluetoothSocket socket = null;
+            JSObject[] resultHolder = new JSObject[1];
+            Exception[] errorHolder = new Exception[1];
             try {
                 BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
                 if (adapter == null) throw new Exception("Bluetooth tidak tersedia di device ini.");
                 if (!adapter.isEnabled()) throw new Exception("Bluetooth belum aktif.");
                 BluetoothDevice device = adapter.getRemoteDevice(address);
                 adapter.cancelDiscovery();
-                socket = device.createRfcommSocketToServiceRecord(SPP_UUID);
-                socket.connect();
-                if (payload != null) {
-                    OutputStream out = socket.getOutputStream();
-                    out.write(payload);
-                    out.flush();
+                synchronized (socketLock) {
+                    try {
+                        ensureSocketLocked(device, address);
+                        if (payload != null) writePayloadLocked(payload);
+                    } catch (Exception firstWriteOrConnectError) {
+                        closeSocketLocked();
+                        ensureSocketLocked(device, address);
+                        if (payload != null) writePayloadLocked(payload);
+                    }
+                    lastSocketUseAt = System.currentTimeMillis();
                 }
                 JSObject result = new JSObject();
                 result.put("success", true);
                 result.put("name", safeName(device));
                 result.put("address", address);
-                getActivity().runOnUiThread(() -> call.resolve(result));
+                resultHolder[0] = result;
             } catch (Exception ex) {
-                getActivity().runOnUiThread(() -> call.reject("Gagal koneksi Bluetooth printer: " + ex.getMessage()));
-            } finally {
-                if (socket != null) {
-                    try { socket.close(); } catch (Exception ignored) {}
+                synchronized (socketLock) {
+                    closeSocketLocked();
                 }
+                errorHolder[0] = ex;
+            }
+            if (errorHolder[0] != null) {
+                getActivity().runOnUiThread(() -> call.reject("Gagal koneksi Bluetooth printer: " + errorHolder[0].getMessage()));
+            } else {
+                getActivity().runOnUiThread(() -> call.resolve(resultHolder[0]));
             }
         }).start();
+    }
+
+    private void ensureSocketLocked(BluetoothDevice device, String address) throws Exception {
+        closeIfIdleLocked();
+        if (currentSocket != null
+            && currentSocket.isConnected()
+            && currentOutput != null
+            && address.equals(currentAddress)) {
+            return;
+        }
+        closeSocketLocked();
+        currentSocket = device.createRfcommSocketToServiceRecord(SPP_UUID);
+        currentSocket.connect();
+        currentOutput = currentSocket.getOutputStream();
+        currentAddress = address;
+        lastSocketUseAt = System.currentTimeMillis();
+    }
+
+    private void writePayloadLocked(byte[] payload) throws Exception {
+        if (currentOutput == null) throw new Exception("Output printer belum siap.");
+        currentOutput.write(payload);
+        currentOutput.flush();
+        lastSocketUseAt = System.currentTimeMillis();
+    }
+
+    private void closeIfIdleLocked() {
+        if (currentSocket == null) return;
+        long now = System.currentTimeMillis();
+        if (lastSocketUseAt > 0 && now - lastSocketUseAt >= SOCKET_IDLE_TIMEOUT_MS) {
+            closeSocketLocked();
+        }
+    }
+
+    private void closeSocketLocked() {
+        if (currentOutput != null) {
+            try { currentOutput.close(); } catch (Exception ignored) {}
+        }
+        if (currentSocket != null) {
+            try { currentSocket.close(); } catch (Exception ignored) {}
+        }
+        currentOutput = null;
+        currentSocket = null;
+        currentAddress = null;
+        lastSocketUseAt = 0L;
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        synchronized (socketLock) {
+            closeSocketLocked();
+        }
+        super.handleOnDestroy();
     }
 
     private String safeName(BluetoothDevice device) {

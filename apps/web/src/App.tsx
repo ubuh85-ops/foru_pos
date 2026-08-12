@@ -13,11 +13,12 @@ import POS from './pages/POS';
 import Shift from './pages/ShiftPage';
 import InventoryPage from './pages/InventoryPage';
 import ProductPage from './pages/ProductPage';
+import OutletPage from './pages/OutletPage';
 import DashboardPage from './pages/DashboardPage';
 import ReportsPage from './pages/ReportsPage';
 import ExpensesPage from './pages/ExpensesPage';
 import SalesHistoryPage from './pages/SalesHistoryPage';
-import { Categories, Coupons, CustomerItemListPrint, KitchenTicketPrint, Outlets, PrinterSettings, ReceiptPrint, SaleDetail } from './pages/Pages';
+import { Categories, Coupons, CustomerItemListPrint, KitchenTicketPrint, PrinterSettings, ReceiptPrint, SaleDetail } from './pages/Pages';
 import { OrderDetail, Orders } from './pages/Orders';
 import VariantGroupsPage from './pages/VariantGroupsPage';
 import UserManagementPage from './pages/UserManagementPage';
@@ -40,8 +41,7 @@ const navGroups: NavGroup[] = [
       ['/variant-groups', 'Variant Group', Layers],
       ['/inventory/items', 'Bahan Baku', Boxes],
       ['/inventory/warehouses', 'Warehouse', Warehouse],
-      ['/outlets', 'Outlet', Store],
-      ['/users', 'User Management', Users]
+      ['/outlets', 'Outlet', Store]
     ]
   },
   {
@@ -70,6 +70,7 @@ const navGroups: NavGroup[] = [
     label: 'PENGATURAN',
     items: [
       ['/printers', 'Printer', Printer],
+      ['/users', 'User & Akses', Users],
       ['/device', 'Device', Smartphone],
       ['/settings', 'Settings', Settings]
     ]
@@ -381,7 +382,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
       <div className={`mt-4 shrink-0 rounded-2xl border border-slate-200 bg-slate-50 ${sidebarHidden ? 'p-2 text-center' : 'p-4 text-left'}`}><b className={`block truncate font-semibold ${sidebarHidden ? 'md:hidden' : 'md:block'}`}>{user.name}</b><div className={`mb-3 truncate text-xs text-slate-500 ${sidebarHidden ? 'md:hidden' : 'md:block'}`}>{user.role}</div><button onClick={logout} title="Keluar" className={`flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-brand-700 ${sidebarHidden ? 'justify-center' : 'justify-start'}`}><LogOut size={16} /><span className={sidebarHidden ? 'md:hidden' : 'md:inline'}>Keluar</span></button></div>
     </aside>
     <main className="min-w-0 max-w-full flex-1 overflow-x-hidden pb-20 md:pb-0">
-      <header className="sticky top-0 z-30 flex h-16 max-w-full items-center justify-between gap-3 overflow-hidden border-b border-slate-200 bg-white px-4 md:px-6 lg:px-8"><button onClick={() => setOpen(true)} className="shrink-0 text-slate-700 md:hidden"><Menu /></button><button onClick={toggleSidebar} title={sidebarHidden?'Tampilkan menu':'Sembunyikan menu'} className="hidden shrink-0 rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:bg-brand-50 hover:text-brand-700 md:block"><Menu size={20}/></button><HeaderOutletSelector /><ShiftBanner /><div className="ml-auto flex min-w-0 shrink-0 items-center gap-2"><span className="pill bg-brand-100 text-brand-700">{user.role}</span></div></header>
+      <header className="sticky top-0 z-30 flex h-16 max-w-full items-center justify-between gap-3 overflow-hidden border-b border-slate-200 bg-white px-4 md:px-6 lg:px-8"><button onClick={() => setOpen(true)} className="shrink-0 text-slate-700 md:hidden"><Menu /></button><button onClick={toggleSidebar} title={sidebarHidden?'Tampilkan menu':'Sembunyikan menu'} className="hidden shrink-0 rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:bg-brand-50 hover:text-brand-700 md:block"><Menu size={20}/></button><HeaderOutletSelector /><ShiftBanner /><div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">{user.role === 'OWNER' && <button onClick={() => navigate('/users')} className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-brand-50 hover:text-brand-700 sm:flex"><Users size={16} /> User</button>}<span className="pill bg-brand-100 text-brand-700">{user.role}</span></div></header>
       <Routes>
         <Route path="/pos" element={<POS />} />
         <Route path="/select-outlet" element={<OutletSelect user={user} logout={logout} />} />
@@ -398,7 +399,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
         <Route path="/printers" element={user.role === 'OWNER' ? <PrinterSettings /> : <Navigate to="/pos" />} />
         <Route path="/users" element={user.role === 'OWNER' ? <UserManagementPage /> : <Navigate to="/pos" />} />
         <Route path="/products" element={<ProductPage />} />
-        <Route path="/outlets" element={user.role === 'OWNER' ? <Outlets /> : <Navigate to="/pos" />} />
+        <Route path="/outlets" element={user.role === 'OWNER' ? <OutletPage /> : <Navigate to="/pos" />} />
         <Route path="/reports" element={user.role === 'OWNER' ? <ReportsPage /> : <Navigate to="/pos" />} />
         <Route path="/inventory/*" element={hasInventoryPermission(user, 'inventory.view') ? <InventoryPage user={user} /> : <Navigate to="/pos" />} />
         <Route path="/receipt/:saleId" element={<ReceiptPrint />} />

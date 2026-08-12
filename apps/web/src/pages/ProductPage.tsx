@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Download, Edit, FileDown, FileUp, Plus, Search } from 'lucide-react';
+import { Download, Edit, FileDown, FileUp, Plus, Search, Trash2 } from 'lucide-react';
 import { API, api, handleUnauthorizedSession, rupiah } from '../api';
 import { downloadMasterData } from '../sync';
 import { emitMasterDataChanged, subscribeMasterDataChanged } from '../masterEvents';
@@ -22,6 +22,8 @@ export default function ProductPage() {
   const [categories, setCategories] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   const [outlets, setOutlets] = useState<any[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<any[]>([]);
+  const [inventoryUnits, setInventoryUnits] = useState<any[]>([]);
   const [edit, setEdit] = useState<any>(null);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -42,6 +44,8 @@ export default function ProductPage() {
     api<any[]>('/categories').then(setCategories);
     api<any[]>('/variant-groups').then(setGroups);
     api<any[]>('/outlets').then(setOutlets);
+    api<any[]>('/inventory/items').then(setInventoryItems).catch(() => setInventoryItems([]));
+    api<any[]>('/inventory/units').then(setInventoryUnits).catch(() => setInventoryUnits([]));
     return subscribeMasterDataChanged(() => {
       load();
       api<any[]>('/variant-groups').then(setGroups);
@@ -171,7 +175,7 @@ export default function ProductPage() {
         outletHpp: f.get(`hpp_${o.id}`) ? Number(f.get(`hpp_${o.id}`)) : null,
         status: f.get(`status_${o.id}`) || 'ACTIVE'
       }));
-      await api(edit?.id ? `/products/${edit.id}` : '/products', {
+      const saved:any = await api(edit?.id ? `/products/${edit.id}` : '/products', {
         method: edit?.id ? 'PUT' : 'POST',
         body: JSON.stringify({
           name: f.get('name'),
@@ -186,6 +190,18 @@ export default function ProductPage() {
           outletPricing
         })
       });
+      const productId = edit?.id || saved?.id;
+      const recipeItemIds = f.getAll('recipeInventoryItemId').map(String);
+      const recipeRows = recipeItemIds.map((inventoryItemId, i) => ({
+        inventoryItemId,
+        usageQty: Number(f.getAll('recipeUsageQty')[i] || 0),
+        usageUnitId: String(f.getAll('recipeUsageUnitId')[i] || ''),
+        wastePercent: Number(f.getAll('recipeWastePercent')[i] || 0),
+        isActive: true
+      })).filter(row => row.inventoryItemId && row.usageUnitId && row.usageQty > 0);
+      if (productId && (recipeRows.length || edit?.recipes?.length)) {
+        await api(`/products/${productId}/recipe`, { method: 'PUT', body: JSON.stringify({ items: recipeRows }) });
+      }
       await downloadMasterData('ONLINE');
       emitMasterDataChanged('product_master_updated');
       setEdit(null);
@@ -204,7 +220,7 @@ export default function ProductPage() {
   return <Page>
     <div className="mb-6 flex flex-col justify-between gap-3 xl:flex-row xl:items-end">
       <div><h2 className="text-3xl font-black">Master produk</h2><p className="text-slate-500">Produk, harga/HPP outlet, kategori, dan attached variant groups.</p></div>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex max-w-full gap-2 overflow-x-auto pb-1">
         <button onClick={() => setEdit({})} className="btn-primary"><Plus size={18} /> Tambah</button>
         <button onClick={() => setImportOpen(true)} className="btn-soft"><FileUp size={18} /> Import</button>
         <button onClick={exportAll} className="btn-soft"><Download size={18} /> Export</button>
@@ -218,10 +234,10 @@ export default function ProductPage() {
       <select className="input" value={categoryId} onChange={e => setCategoryId(e.target.value)}><option value="">Semua kategori</option>{categories.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}</select>
     </div>
 
-    <div className="space-y-3 md:hidden">{filtered.map(p => <ProductCard key={p.id} p={p} setEdit={setEdit} selected={selectedIds.includes(p.id)} toggle={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} />)}{!filtered.length && <EmptyProduct />}</div>
-    <div className="card hidden overflow-hidden md:block"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-4"><input type="checkbox" checked={!!filtered.length && filtered.every(p => selectedIds.includes(p.id))} onChange={e => setSelectedIds(e.target.checked ? filtered.map(p => p.id) : [])} /></th><th>Produk</th><th>SKU</th><th>Kategori</th><th>Base Price</th><th>Base HPP</th><th>Variant Groups</th><th>Outlet aktif</th><th>Status</th><th></th></tr></thead><tbody>{filtered.map(p => <tr className="border-t" key={p.id}><td className="p-4"><input type="checkbox" checked={selectedIds.includes(p.id)} onChange={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} /></td><td className="font-bold">{p.name}<p className="font-normal text-slate-400">{p.description}</p></td><td>{p.sku || '-'}</td><td>{p.categoryRef?.name || p.category}</td><td>{rupiah(p.basePrice)}</td><td>{rupiah(p.baseHpp)}</td><td>{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</td><td>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</td><td><span className="pill bg-brand-50 text-brand-700">{p.status}</span></td><td><button onClick={() => setEdit(p)} className="text-brand-600"><Edit size={17} /></button></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyProduct />}</div>
+    <div className="grid gap-3 md:grid-cols-2 xl:hidden">{filtered.map(p => <ProductCard key={p.id} p={p} setEdit={setEdit} selected={selectedIds.includes(p.id)} toggle={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} />)}{!filtered.length && <EmptyProduct />}</div>
+    <div className="card hidden overflow-hidden xl:block"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-4"><input type="checkbox" checked={!!filtered.length && filtered.every(p => selectedIds.includes(p.id))} onChange={e => setSelectedIds(e.target.checked ? filtered.map(p => p.id) : [])} /></th><th>Produk</th><th>SKU</th><th>Kategori</th><th>Base Price</th><th>Base HPP</th><th>Variant Groups</th><th>Outlet aktif</th><th>Status</th><th></th></tr></thead><tbody>{filtered.map(p => <tr className="border-t" key={p.id}><td className="p-4"><input type="checkbox" checked={selectedIds.includes(p.id)} onChange={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} /></td><td className="font-bold">{p.name}<p className="font-normal text-slate-400">{p.description}</p></td><td>{p.sku || '-'}</td><td>{p.categoryRef?.name || p.category}</td><td>{rupiah(p.basePrice)}</td><td>{rupiah(p.baseHpp)}</td><td>{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</td><td>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</td><td><span className="pill bg-brand-50 text-brand-700">{p.status}</span></td><td><button onClick={() => setEdit(p)} className="text-brand-600"><Edit size={17} /></button></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyProduct />}</div>
 
-    {edit && <Modal title={edit.id ? 'Edit produk' : 'Produk baru'} close={() => setEdit(null)}><form onSubmit={save}><Fields values={edit} items={[['sku', 'SKU / Product Code'], ['name', 'Nama produk'], ['description', 'Deskripsi'], ['imageUrl', 'Image URL'], ['basePrice', 'Base selling price', 'number'], ['baseHpp', 'Base HPP', 'number']]} /><label className="label">Kategori</label><select className="input mb-3" name="categoryId" defaultValue={edit.categoryId || categories[0]?.id} required>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><label className="label">Status produk master</label><select className="input mb-3" name="status" defaultValue={edit.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select><CheckList title="Variant Groups" name="variantGroupIds" rows={groups.map(g => [g.id, g.name])} checked={(edit.variantGroups || []).map((x: any) => x.variantGroupId)} /><div className="mt-5"><label className="label">Outlet Availability & Pricing</label><div className="overflow-auto rounded-2xl border"><table className="w-full min-w-[640px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Outlet</th><th>Available</th><th>Price</th><th>HPP</th><th>Status</th></tr></thead><tbody>{outlets.map(o => { const r = rowFor(o), isNew = !edit.id; return <tr className="border-t" key={o.id}><td className="p-3 font-bold">{o.name}<p className="text-xs font-normal text-slate-400">{o.code}</p></td><td className="text-center"><input name={`available_${o.id}`} type="checkbox" defaultChecked={isNew ? true : !!r?.isAvailable} /></td><td className="p-2"><input className="input" name={`price_${o.id}`} type="number" min="0" placeholder={`Base ${edit.basePrice ?? 0}`} defaultValue={r?.outletPrice ?? ''} /></td><td className="p-2"><input className="input" name={`hpp_${o.id}`} type="number" min="0" placeholder={`Base ${edit.baseHpp ?? 0}`} defaultValue={r?.outletHpp ?? ''} /></td><td className="p-2"><select className="input" name={`status_${o.id}`} defaultValue={r?.status || (isNew ? 'ACTIVE' : 'INACTIVE')}><option>ACTIVE</option><option>INACTIVE</option></select></td></tr>; })}</tbody></table></div><p className="mt-2 text-xs text-slate-400">Kosongkan Price/HPP outlet untuk memakai Base Price/Base HPP produk.</p></div><button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan Produk'}</button></form></Modal>}
+    {edit && <Modal title={edit.id ? 'Edit produk' : 'Produk baru'} close={() => setEdit(null)}><form onSubmit={save}><Fields values={edit} items={[['sku', 'SKU / Product Code'], ['name', 'Nama produk'], ['description', 'Deskripsi'], ['imageUrl', 'Image URL'], ['basePrice', 'Base selling price', 'number'], ['baseHpp', 'Base HPP', 'number']]} /><label className="label">Kategori</label><select className="input mb-3" name="categoryId" defaultValue={edit.categoryId || categories[0]?.id} required>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><label className="label">Status produk master</label><select className="input mb-3" name="status" defaultValue={edit.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select><CheckList title="Variant Groups" name="variantGroupIds" rows={groups.map(g => [g.id, g.name])} checked={(edit.variantGroups || []).map((x: any) => x.variantGroupId)} /><RecipeSection product={edit} items={inventoryItems} units={inventoryUnits} /><div className="mt-5"><label className="label">Outlet Availability & Pricing</label><div className="overflow-auto rounded-2xl border"><table className="w-full min-w-[640px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Outlet</th><th>Available</th><th>Price</th><th>HPP</th><th>Status</th></tr></thead><tbody>{outlets.map(o => { const r = rowFor(o), isNew = !edit.id; return <tr className="border-t" key={o.id}><td className="p-3 font-bold">{o.name}<p className="text-xs font-normal text-slate-400">{o.code}</p></td><td className="text-center"><input name={`available_${o.id}`} type="checkbox" defaultChecked={isNew ? true : !!r?.isAvailable} /></td><td className="p-2"><input className="input" name={`price_${o.id}`} type="number" min="0" placeholder={`Base ${edit.basePrice ?? 0}`} defaultValue={r?.outletPrice ?? ''} /></td><td className="p-2"><input className="input" name={`hpp_${o.id}`} type="number" min="0" placeholder={`Base ${edit.baseHpp ?? 0}`} defaultValue={r?.outletHpp ?? ''} /></td><td className="p-2"><select className="input" name={`status_${o.id}`} defaultValue={r?.status || (isNew ? 'ACTIVE' : 'INACTIVE')}><option>ACTIVE</option><option>INACTIVE</option></select></td></tr>; })}</tbody></table></div><p className="mt-2 text-xs text-slate-400">Kosongkan Price/HPP outlet untuk memakai Base Price/Base HPP produk.</p></div><button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan Produk'}</button></form></Modal>}
     {importOpen && <Modal title="Import Produk" close={() => setImportOpen(false)}>
       <div className="space-y-4">
         <div className="rounded-2xl bg-brand-50 p-4 text-sm text-brand-800">Gunakan template yang tersedia. Import mendukung CSV, XLS, dan XLSX. SKU boleh kosong, nanti dibuat otomatis dari nama produk. Category kosong akan masuk ke kategori Lainnya; category baru akan dibuat otomatis.</div>
@@ -243,6 +259,38 @@ export default function ProductPage() {
       </div>
     </Modal>}
   </Page>;
+}
+
+function RecipeSection({ product, items, units }: { product: any; items: any[]; units: any[] }) {
+  const initialRows = (product.recipes || []).filter((x: any) => x.isActive !== false).map((x: any) => ({
+    key: x.id,
+    inventoryItemId: x.inventoryItemId,
+    usageQty: Number(x.usageQty || 0),
+    usageUnitId: x.usageUnitId,
+    wastePercent: Number(x.wastePercent || 0)
+  }));
+  const [rows, setRows] = useState<any[]>(initialRows.length ? initialRows : []);
+  const add = () => setRows(v => [...v, { key: `new-${Date.now()}`, inventoryItemId: items[0]?.id || '', usageQty: 1, usageUnitId: items[0]?.unitId || units[0]?.id || '', wastePercent: 0 }]);
+  const remove = (key: string) => setRows(v => v.filter(x => x.key !== key));
+  return <section className="mt-5 rounded-3xl border bg-slate-50 p-4">
+    <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+      <div><p className="label mb-1">Recipe / Bahan terpakai</p><p className="text-xs text-slate-400">Opsional. Dipakai untuk potong stok bahan saat transaksi paid. HPP laporan tetap dari produk.</p></div>
+      <button type="button" onClick={add} className="btn-soft shrink-0"><Plus size={16} /> Tambah Bahan</button>
+    </div>
+    {!items.length || !units.length ? <div className="mt-4 rounded-2xl bg-amber-50 p-3 text-sm text-amber-700">Master bahan baku / satuan belum tersedia atau user tidak memiliki akses inventory.</div> : null}
+    <div className="mt-4 space-y-3">
+      {rows.map((row, idx) => <div className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-black/5" key={row.key}>
+        <div className="mb-2 flex items-center justify-between gap-3"><b className="text-sm">Bahan #{idx + 1}</b><button type="button" onClick={() => remove(row.key)} className="rounded-xl bg-red-50 p-2 text-red-600"><Trash2 size={15} /></button></div>
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_130px_150px_120px]">
+          <label><span className="label">Bahan</span><select className="input" name="recipeInventoryItemId" defaultValue={row.inventoryItemId}>{items.map(item => <option key={item.id} value={item.id}>{item.name} ({item.code})</option>)}</select></label>
+          <label><span className="label">Qty</span><input className="input" name="recipeUsageQty" type="number" min="0.001" step="0.001" defaultValue={row.usageQty} /></label>
+          <label><span className="label">Satuan</span><select className="input" name="recipeUsageUnitId" defaultValue={row.usageUnitId}>{units.map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label>
+          <label><span className="label">Waste %</span><input className="input" name="recipeWastePercent" type="number" min="0" max="100" step="0.01" defaultValue={row.wastePercent} /></label>
+        </div>
+      </div>)}
+      {!rows.length && <div className="rounded-2xl border border-dashed p-4 text-center text-sm text-slate-400">Belum ada recipe. Produk tetap bisa dijual tanpa potong stok bahan jika outlet mengizinkan.</div>}
+    </div>
+  </section>;
 }
 
 function ProductCard({ p, setEdit, selected, toggle }: any) {

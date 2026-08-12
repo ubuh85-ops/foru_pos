@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Check, LayoutGrid, List, Minus, Plus, Power, Printer, Search, ShoppingBag, Tag, Trash2, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, ClipboardList, LayoutGrid, List, Minus, Plus, Power, Printer, Search, ShoppingBag, Tag, Trash2, X } from 'lucide-react';
 import { api, rupiah } from '../api';
 import { printWithBluetoothFallback } from '../printer';
 import { subscribeMasterDataChanged } from '../masterEvents';
@@ -27,13 +27,14 @@ export default function POS() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const editOrderId = params.get('editOrderId');
-  const { selectedOutletId: outlet, setSelectedOutletId } = useOutlet();
+  const { selectedOutletId: outlet, selectedOutlet, setSelectedOutletId } = useOutlet();
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<Line[]>([]);
   const [config, setConfig] = useState<Product | null>(null);
   const [q, setQ] = useState('');
   const [cat, setCat] = useState('Semua');
   const [menuView, setMenuView] = useState<'grid' | 'list'>(() => localStorage.getItem('foru:pos_menu_view') === 'list' ? 'list' : 'grid');
+  const [cartCollapsed, setCartCollapsed] = useState(() => localStorage.getItem('foru:pos_cart_collapsed') === '1');
   const [pageSize, setPageSize] = useState(() => Number(localStorage.getItem('foru:pos_page_size') || 20));
   const [page, setPage] = useState(1);
   const [expandedCart, setExpandedCart] = useState<Record<string, boolean>>({});
@@ -63,6 +64,11 @@ export default function POS() {
 
   function askDiscount(options: Omit<Extract<PosDialog, { kind: 'discount' }>, 'kind' | 'resolve'>) {
     return new Promise<{ type: DiscountKind; value: number } | null>(resolve => setDialog({ kind: 'discount', ...options, resolve }));
+  }
+
+  function changeCartCollapsed(next: boolean) {
+    setCartCollapsed(next);
+    localStorage.setItem('foru:pos_cart_collapsed', next ? '1' : '0');
   }
 
   async function loadProductsForOutlet(outletId = outlet) {
@@ -188,6 +194,33 @@ export default function POS() {
   }, [cart, trxDisc, couponDiscount]);
   const itemPayload = (x: Line) => ({ productId: x.productId, variantId: x.variantId, selectedVariantOptionIds: x.selectedVariantOptionIds, qty: x.qty, itemNote: x.itemNote, discount: x.discount });
 
+  async function printOrderDoc(doc: any, type: 'customer-receipt' | 'kitchen-ticket' | 'customer-item-list') {
+    if (!doc?.id) return;
+    await printWithBluetoothFallback(doc, type, type === 'customer-receipt' ? `/receipt/${doc.id}` : type === 'kitchen-ticket' ? `/kitchen-ticket/${doc.id}` : `/customer-item-list/${doc.id}`);
+    if (type === 'customer-item-list') await api(`/orders/${doc.id}/print/customer-item-list`, { method: 'POST' }).catch(() => {});
+    else if (type === 'kitchen-ticket') {
+      const path = doc.status === 'PAID' ? `/print/kitchen-ticket/${doc.id}` : `/orders/${doc.id}/print/kitchen-ticket`;
+      await api(path, { method: 'POST' }).catch(() => {});
+    } else {
+      await api(`/print/customer-receipt/${doc.id}`, { method: 'POST' }).catch(() => {});
+    }
+  }
+
+  async function runAutoPrint(doc: any, event: 'pending-order' | 'paid-sale') {
+    const jobs: Array<['customer-receipt' | 'kitchen-ticket' | 'customer-item-list', string]> = [];
+    if (event === 'paid-sale' && selectedOutlet?.autoPrintReceipt) jobs.push(['customer-receipt', 'Receipt']);
+    if (selectedOutlet?.autoPrintKitchen) jobs.push(['kitchen-ticket', 'Kitchen ticket']);
+    if (event === 'pending-order' && selectedOutlet?.autoPrintCustomerItemList) jobs.push(['customer-item-list', 'Customer item list']);
+    if (!jobs.length) return;
+    for (const [type, label] of jobs) {
+      try {
+        await printOrderDoc(doc, type);
+      } catch (e) {
+        toast.error(`${label} gagal dicetak: ${(e as Error).message}`);
+      }
+    }
+  }
+
   function changeMenuView(view: 'grid' | 'list') { setMenuView(view); localStorage.setItem('foru:pos_menu_view', view); }
   function changePageSize(size: number) { setPageSize(size); setPage(1); localStorage.setItem('foru:pos_page_size', String(size)); }
   function addLine(line: Line) { if (!shiftOpen) { toast.error('Shift belum dibuka. Silakan buka kasir terlebih dahulu.'); return; } setCart(c => { const i = c.findIndex(x => x.key === line.key && !x.discount && !x.itemNote); return i < 0 ? [...c, line] : c.map((x, j) => j === i ? { ...x, qty: x.qty + 1 } : x); }); setCouponDiscount(0); }
@@ -265,6 +298,7 @@ export default function POS() {
       if (editingOrder) {
         const result = await api(`/orders/${editingOrder.id}`, { method: 'PUT', body: JSON.stringify(orderPayload(active)) });
         toast.success('Data berhasil disimpan.');
+        await runAutoPrint(result, 'pending-order');
         navigate(`/orders/${(result as any).id}`);
         return;
       }
@@ -272,6 +306,7 @@ export default function POS() {
       setReceipt(result);
       resetCart();
       toast.success('Data berhasil disimpan.');
+      await runAutoPrint(result, 'pending-order');
     } catch (e) {
       const msg = (e as Error).message;
       setError(msg);
@@ -281,31 +316,32 @@ export default function POS() {
     }
   }
 
-  return <div className="grid min-h-[calc(100vh-4rem)] min-w-0 max-w-full overflow-x-hidden bg-[#f7f4ec] md:h-[calc(100vh-4rem)]  
+  return <div className={`grid min-h-[calc(100vh-4rem)] min-w-0 max-w-full overflow-x-hidden bg-[#f7f4ec] md:h-[calc(100vh-4rem)]  
   md:overflow-hidden 
-md:grid-cols-[minmax(0,1fr)_320px]
-lg:grid-cols-[minmax(0,1fr)_340px]
-xl:grid-cols-[minmax(0,1fr)_360px]
-2xl:grid-cols-[minmax(0,1fr)_380px]
-  ">
+${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,1fr)_320px] lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_380px]'}
+  `}>
     <section className="flex min-h-0 min-w-0 flex-col p-3 sm:p-4 md:overflow-hidden md:p-4 2xl:p-5">
-      <div className="mb-3 rounded-[2rem] bg-white/95 p-3 shadow-sm ring-1 ring-black/5 sm:p-4">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-
-          <div className="flex shrink-0 rounded-2xl bg-slate-100 p-1">
-            <button aria-label="Tampilan grid" onClick={() => changeMenuView('grid')} className={`grid h-10 w-10 place-items-center rounded-xl ${menuView === 'grid' ? 'bg-ink text-white shadow-sm' : 'text-slate-500'}`}><LayoutGrid size={18} /></button>
-            <button aria-label="Tampilan list" onClick={() => changeMenuView('list')} className={`grid h-10 w-10 place-items-center rounded-xl ${menuView === 'list' ? 'bg-ink text-white shadow-sm' : 'text-slate-500'}`}><List size={19} /></button>
-                    <div className="relative min-w-0 flex-1">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-            <input className="input h-12 rounded-2xl pl-12 text-base" value={q} onChange={e => setQ(e.target.value)} placeholder="Cari nama produk..." />
+      <div className="mb-3 rounded-[2rem] bg-white/95 p-2.5 shadow-sm ring-1 ring-black/5 sm:p-3">
+        <div className="flex min-w-0 flex-col gap-2 md:flex-row md:items-center">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="hidden h-10 w-7 shrink-0 place-items-center rounded-xl text-2xl font-bold text-slate-500 sm:grid">‹</span>
+            <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto py-0.5">
+              {cats.map(c => <button key={c} onClick={() => setCat(c)} className={`shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-extrabold transition ${cat === c ? 'bg-ink text-white shadow-sm' : 'bg-white text-slate-600 ring-1 ring-slate-100 hover:bg-brand-50 hover:text-brand-700'}`}>{c}</button>)}
+            </div>
+            <span className="hidden h-10 w-7 shrink-0 place-items-center rounded-xl text-2xl font-bold text-slate-500 sm:grid">›</span>
           </div>
+          <div className="flex min-w-0 shrink-0 items-center gap-2 md:w-[min(43%,30rem)]">
+            <div className="flex shrink-0 rounded-2xl bg-slate-100 p-1">
+              <button aria-label="Tampilan grid" onClick={() => changeMenuView('grid')} className={`grid h-10 w-10 place-items-center rounded-xl ${menuView === 'grid' ? 'bg-ink text-white shadow-sm' : 'text-slate-500'}`}><LayoutGrid size={18} /></button>
+              <button aria-label="Tampilan list" onClick={() => changeMenuView('list')} className={`grid h-10 w-10 place-items-center rounded-xl ${menuView === 'list' ? 'bg-ink text-white shadow-sm' : 'text-slate-500'}`}><List size={19} /></button>
+            </div>
+            <div className="relative min-w-0 flex-1">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={19} />
+              <input className="input h-11 rounded-2xl pl-11 text-sm" value={q} onChange={e => setQ(e.target.value)} placeholder="Cari nama produk..." />
+            </div>
           </div>
         </div>
         {editingOrder && <div className="mt-3 rounded-2xl bg-brand-50 p-3 text-sm text-brand-800"><b>Editing Order:</b> {editingOrder.orderNumber}</div>}
-      </div>
-
-      <div className="mb-3 flex min-w-0 gap-2 overflow-x-auto rounded-2xl bg-white/40 p-1">
-        {cats.map(c => <button key={c} onClick={() => setCat(c)} className={`shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-extrabold transition ${cat === c ? 'bg-ink text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-brand-50 hover:text-brand-700'}`}>{c}</button>)}
       </div>
 
       {error && <p className="mb-3 rounded-2xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
@@ -343,7 +379,7 @@ xl:grid-cols-[minmax(0,1fr)_360px]
               </div>
             </button>;
           })}
-        </div> : <div className="grid gap-2 xl:grid-cols-2">
+        </div> : <div className={`grid gap-2 ${cartCollapsed ? 'md:grid-cols-2 xl:grid-cols-3' : 'xl:grid-cols-2'}`}>
           {pagedProducts.map(p => {
             const price = Number(p.basePrice || p.variants[0]?.sellingPrice || 0);
             return <button key={p.id} onClick={() => quickAdd(p)} disabled={!shiftOpen} className="flex min-w-0 items-center gap-3 rounded-2xl bg-white p-3 text-left shadow-sm ring-1 ring-black/5 disabled:opacity-60">
@@ -355,64 +391,46 @@ xl:grid-cols-[minmax(0,1fr)_360px]
         </div>}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[1.75rem] bg-white p-3 text-sm shadow-sm ring-1 ring-black/5">
-        <div className="flex items-center gap-2">
-          <span className="text-slate-400">Page</span>
-          <select className="rounded-xl border px-3 py-2" value={pageSize} onChange={e => changePageSize(Number(e.target.value))}>{[10,20].map(n => <option key={n} value={n}>{n} produk</option>)}</select>
+      <div className="mt-3 flex flex-nowrap items-center justify-between gap-2 rounded-[1.75rem] bg-white p-2 text-xs shadow-sm ring-1 ring-black/5 sm:p-3 sm:text-sm">
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="hidden text-slate-400 xl:inline">Page</span>
+          <select className="rounded-xl border px-2 py-2 font-semibold sm:px-3" value={pageSize} onChange={e => changePageSize(Number(e.target.value))}>{[10,20].map(n => <option key={n} value={n}>{n} produk</option>)}</select>
         </div>
-        <div className="flex items-center gap-2">
-          <button disabled={currentPage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))} className="rounded-xl border px-4 py-2 font-bold disabled:opacity-40">Prev</button>
-          <b>{currentPage} / {totalPages}</b>
-          <button disabled={currentPage >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))} className="rounded-xl border px-4 py-2 font-bold disabled:opacity-40">Next</button>
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <button disabled={currentPage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))} className="rounded-xl border px-3 py-2 font-bold disabled:opacity-40 sm:px-4">Prev</button>
+          <b className="whitespace-nowrap">{currentPage} / {totalPages}</b>
+          <button disabled={currentPage >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))} className="rounded-xl border px-3 py-2 font-bold disabled:opacity-40 sm:px-4">Next</button>
+          <button onClick={() => navigate('/orders?status=PENDING_PAYMENT')} className="hidden items-center gap-1.5 rounded-xl border border-brand-200 px-3 py-2 font-bold text-brand-700 hover:bg-brand-50 md:flex lg:gap-2 lg:px-4"><ClipboardList size={16} /> Orders</button>
         </div>
       </div>
     </section>
 
-    <aside className="flex min-w-0 flex-col border-t bg-slate-50 shadow-[-8px_0_24px_rgba(15,23,42,0.06)] md:sticky md:top-16 md:h-[calc(100vh-4rem)] md:min-h-0 md:gap-3 md:overflow-y-auto md:overscroll-contain md:border-l md:border-t-0 md:bg-[#f8faf6] md:p-3">
-      <div className="shrink-0 bg-white p-4 shadow-sm ring-1 ring-black/5 md:rounded-[1.75rem] md:border md:border-slate-100 md:p-4 md:shadow-sm md:ring-0">
-        {editingOrder && <div className="mb-3 rounded-2xl bg-brand-50 p-3 text-sm text-brand-800"><b>Editing Order:</b> {editingOrder.orderNumber}</div>}
-        <div className="mb-4 hidden items-center justify-between md:flex">
-          <div>
-            <h2 className="text-sm font-black text-ink">Order Cart</h2>
-            <p className="text-xs font-semibold text-slate-400">{cart.length} macam item · {cart.reduce((s, x) => s + x.qty, 0)} total qty</p>
-          </div>
-          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-brand-50 text-brand-700"><ShoppingBag size={22} /></div>
-        </div>
-        <div className="space-y-4 md:space-y-3">
-          <div className="grid grid-cols-[minmax(0,1fr)_minmax(150px,190px)] gap-3">
-            <div className="min-w-0">
-              <label className="label text-slate-600">Customer</label>
-              <input className="input h-12 w-full rounded-2xl md:h-11" value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Walk In" />
-            </div>
-            <div className="min-w-0">
-              <label className="label text-slate-600">Order Type</label>
-              <select className="input h-12 w-full rounded-2xl text-xs md:h-11" value={orderType} onChange={e => setOrderType(e.target.value)}>
-                <option value="DINE_IN">Dine In</option>
-                <option value="TAKE_AWAY">Take Away</option>
-                <option value="DELIVERY">Delivery</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="label text-slate-600">Catatan Order</label>
-            <input className="input h-12 w-full rounded-2xl text-xs md:h-11" value={orderNote} onChange={e => setOrderNote(e.target.value)} placeholder="Catatan untuk order (opsional)" />
-          </div>
-          <div className="-mx-4 border-t border-slate-100" />
-          <button onClick={applyItemDiscount} disabled={!cart.length} className="flex w-full items-center justify-between rounded-2xl px-1 py-1 text-left text-sm font-black text-brand-700 disabled:opacity-40"><span>+ Diskon item</span><span>⌄</span></button>
-          <div className="grid grid-cols-[minmax(0,1fr)_5rem] gap-2">
-            <input className="input h-12 rounded-2xl  text-xs uppercase md:h-11" value={coupon} onChange={e => setCoupon(e.target.value.toUpperCase())} placeholder="GUNAKAN KUPON" />
-            <button onClick={applyCoupon} disabled={!cart.length || !coupon} className="btn-soft rounded-2xl px-4"><Tag size={20} /></button>
-          </div>
-          {couponMsg && <p className={`text-xs ${couponDiscount ? 'text-brand-600' : 'text-red-600'}`}>{couponDiscount ? <Check className="mr-1 inline" size={14} /> : null}{couponMsg}</p>}
-          <button onClick={applyTransactionDiscount} className="rounded-2xl bg-brand-50 px-4 py-3 text-sm font-extrabold text-brand-700 md:py-2.5">+ Diskon transaksi</button>
-        </div>
-      </div>
+    {cartCollapsed && <aside className="relative hidden min-w-0 border-l bg-[#f8faf6] p-2 shadow-[-8px_0_24px_rgba(15,23,42,0.06)] md:sticky md:top-16 md:flex md:h-[calc(100vh-4rem)] md:flex-col md:items-center md:gap-3">
+      <button
+        onClick={() => changeCartCollapsed(false)}
+        className="mt-3 flex w-full flex-col items-center gap-2 rounded-[2rem] bg-white px-2 py-4 text-brand-700 shadow-sm ring-1 ring-black/5 transition hover:bg-brand-50"
+        title="Tampilkan pesanan"
+      >
+        <ChevronLeft size={18} className="mb-1" />
+        <span className="relative grid h-10 w-10 place-items-center rounded-2xl bg-brand-50">
+          <ShoppingBag size={20} />
+          {!!cart.length && <b className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-brand-600 px-1 text-[10px] text-white">{cart.reduce((s, x) => s + x.qty, 0)}</b>}
+        </span>
+        <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">CART</span>
+        {!!cart.length && <span className="max-w-full truncate text-[10px] font-black text-brand-700">{summary.grand >= 1000000 ? `${Math.round(summary.grand / 1000000)}jt` : `${Math.round(summary.grand / 1000)}rb`}</span>}
+      </button>
+      <button onClick={() => navigate('/orders?status=PENDING_PAYMENT')} className="grid h-11 w-11 place-items-center rounded-2xl bg-white text-brand-700 shadow-sm ring-1 ring-black/5" title="Orders"><ClipboardList size={19} /></button>
+    </aside>}
 
+    <aside className={`${cartCollapsed ? 'md:hidden' : ''} relative flex min-w-0 flex-col border-t bg-slate-50 shadow-[-8px_0_24px_rgba(15,23,42,0.06)] md:sticky md:top-16 md:h-[calc(100vh-4rem)] md:min-h-0 md:gap-3 md:overflow-y-auto md:overscroll-contain md:border-l md:border-t-0 md:bg-[#f8faf6] md:p-3`}>
       <div className="min-h-[220px] flex-none bg-slate-50/70 p-3 md:min-h-[180px] md:max-h-[60vh] md:overflow-y-auto md:overscroll-contain md:bg-transparent md:p-0">
         <div className="flex min-h-full flex-col rounded-3xl bg-white p-3 shadow-sm ring-1 ring-black/5 md:min-h-0 md:rounded-[1.75rem] md:border md:border-slate-100 md:p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3"><ShoppingBag className="shrink-0 text-slate-600" size={22} /><h2 className="truncate text-sm font-black text-ink">Pesanan ({cart.reduce((s, x) => s + x.qty, 0)})</h2></div>
-            <button onClick={clearCart} disabled={!cart.length} className="flex shrink-0 items-center gap-1 rounded-xl px-2 py-1 text-sm font-semibold text-red-600 disabled:opacity-40"><Trash2 size={16} />Kosongkan</button>
+            <div className="flex shrink-0 items-center gap-1">
+              <button onClick={clearCart} disabled={!cart.length} className="flex shrink-0 items-center gap-1 rounded-xl px-2 py-1 text-sm font-semibold text-red-600 disabled:opacity-40"><Trash2 size={16} />Kosongkan</button>
+              <button onClick={() => changeCartCollapsed(true)} className="hidden h-9 w-9 place-items-center rounded-xl border text-slate-500 hover:bg-brand-50 hover:text-brand-700 md:grid" title="Sembunyikan pesanan"><ChevronRight size={18} /></button>
+            </div>
           </div>
           {!cart.length ? <div className="grid min-h-64 flex-1 place-items-center rounded-3xl border-2 border-dashed bg-slate-50/70 text-center text-slate-400 md:min-h-0">
             <div><ShoppingBag className="mx-auto mb-3" /><p>Pilih produk untuk<br />memulai transaksi</p></div>
@@ -420,20 +438,19 @@ xl:grid-cols-[minmax(0,1fr)_360px]
             const lineBase = x.price * x.qty;
             const discount = calcDisc(lineBase, x.discount);
             const total = lineBase - discount;
-            return <div key={x.key} className="min-w-0 rounded-2xl border bg-white p-2.5 shadow-sm">
-              <div className="grid grid-cols-[4.25rem_minmax(0,1fr)_60px] items-start gap-2">
-                <div className="relative h-16 w-16 overflow-hidden rounded-2xl bg-slate-50">
-                  <span className="absolute left-0 top-0 z-10 grid h-6 w-6 place-items-center rounded-full bg-brand-600 text-xs font-black text-white">{i + 1}</span>
-                  <img src="/images/foru.png" alt="" className="h-full w-full object-contain p-2 opacity-70" />
-                </div>
-                <div className="flex-1 min-w-0 ">
-                  <h3 className="text-sm font-semibold leading-tight text-ink break-words">{x.name}</h3>
+            return <div key={x.key} className="min-w-0 rounded-2xl border bg-white p-3 shadow-sm">
+              <div className="grid grid-cols-[minmax(0,1fr)_84px] items-start gap-3">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-brand-600 text-[11px] font-black text-white">{i + 1}</span>
+                    <h3 className="min-w-0 text-sm font-semibold leading-tight text-ink break-words">{x.name}</h3>
+                  </div>
                   <p className="mt-1 truncate text-xs font-semibold text-slate-500">{x.variant || 'Base'}</p>
                   {x.itemNote && <button onClick={() => editItemNote(i, x.itemNote || '')} className="mt-2 max-w-full truncate rounded-lg bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800">{x.itemNote}</button>}
                 </div>
                 <b className="money shrink-1 text-right text-sm font-black text-ink">{rupiah(total)}</b>
               </div>
-              <div className="mt-3 grid grid-cols-[auto_1fr] items-center gap-2">
+              <div className="mt-2 grid grid-cols-[auto_1fr] items-center gap-2">
                 <div className="flex items-center overflow-hidden rounded-2xl border bg-white">
                   <button onClick={() => qty(i, x.qty - 1)} className="grid h-10 w-10 place-items-center text-ink hover:bg-brand-50"><Minus size={15} /></button>
                   <b className="grid h-10 min-w-10 place-items-center border-x px-3 text-sm">{x.qty}</b>
@@ -450,7 +467,45 @@ xl:grid-cols-[minmax(0,1fr)_360px]
         </div>
       </div>
 
-      <div className="shrink-0 border-t bg-white p-4 pb-[max(6rem,env(safe-area-inset-bottom))] md:rounded-[1.75rem] md:border md:border-slate-100 md:p-4 md:shadow-sm">
+      <div className="shrink-0 bg-white p-3 shadow-sm ring-1 ring-black/5 md:rounded-[1.75rem] md:border md:border-slate-100 md:p-3 md:shadow-sm md:ring-0">
+        {editingOrder && <div className="mb-2 rounded-2xl bg-brand-50 px-3 py-2 text-xs text-brand-800"><b>Editing Order:</b> {editingOrder.orderNumber}</div>}
+        <div className="mb-2 hidden items-center justify-between md:flex">
+          <div>
+            <h2 className="text-sm font-black text-ink">Order Info</h2>
+            <p className="text-[11px] font-semibold text-slate-400">{cart.length} macam item · {cart.reduce((s, x) => s + x.qty, 0)} total qty</p>
+          </div>
+          <div className="grid h-9 w-9 place-items-center rounded-2xl bg-brand-50 text-brand-700"><ShoppingBag size={18} /></div>
+        </div>
+        <div className="space-y-2">
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(130px,170px)] gap-2">
+            <div className="min-w-0">
+              <label className="label text-xs text-slate-600">Customer</label>
+              <input className="input h-10 w-full rounded-2xl text-sm" value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Walk In" />
+            </div>
+            <div className="min-w-0">
+              <label className="label text-xs text-slate-600">Order Type</label>
+              <select className="input h-10 w-full rounded-2xl text-xs" value={orderType} onChange={e => setOrderType(e.target.value)}>
+                <option value="DINE_IN">Dine In</option>
+                <option value="TAKE_AWAY">Take Away</option>
+                <option value="DELIVERY">Delivery</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="label text-xs text-slate-600">Catatan Order</label>
+            <input className="input h-10 w-full rounded-2xl text-xs" value={orderNote} onChange={e => setOrderNote(e.target.value)} placeholder="Catatan untuk order (opsional)" />
+          </div>
+          <div className="-mx-3 border-t border-slate-100" />
+          <button onClick={applyItemDiscount} disabled={!cart.length} className="flex w-full items-center justify-between rounded-2xl px-1 py-0.5 text-left text-xs font-black text-brand-700 disabled:opacity-40"><span>+ Diskon item</span><span>⌄</span></button>
+          <div className="grid grid-cols-[minmax(0,1fr)_3.25rem] gap-2">
+            <input className="input h-10 rounded-2xl text-xs uppercase" value={coupon} onChange={e => setCoupon(e.target.value.toUpperCase())} placeholder="GUNAKAN KUPON" />
+            <button onClick={applyCoupon} disabled={!cart.length || !coupon} className="btn-soft rounded-2xl px-3"><Tag size={18} /></button>
+          </div>
+          {couponMsg && <p className={`text-xs ${couponDiscount ? 'text-brand-600' : 'text-red-600'}`}>{couponDiscount ? <Check className="mr-1 inline" size={14} /> : null}{couponMsg}</p>}
+          <button onClick={applyTransactionDiscount} className="rounded-2xl bg-brand-50 px-3 py-2 text-xs font-extrabold text-brand-700">+ Diskon transaksi</button>
+        </div>
+      </div>
+<div className="shrink-0 border-t bg-white p-4 pb-[max(6rem,env(safe-area-inset-bottom))] md:rounded-[1.75rem] md:border md:border-slate-100 md:p-4 md:shadow-sm">
         <div className="space-y-1.5 text-sm"><Row label={`Subtotal (${cart.reduce((s, x) => s + x.qty, 0)} item)`} n={summary.subtotal} /><Row label="Diskon Item" n={-summary.productDiscount} /><Row label="Diskon Transaksi" n={-summary.transactionDiscount} /><Row label="Diskon Kupon" n={-couponDiscount} /><Row label="PPN (0%)" n={0} /></div>
         <div className="mt-3 flex items-end justify-between border-t pt-3"><b className="text-2xl text-ink md:text-xl">Total</b><strong className="money text-3xl text-brand-700 md:text-2xl">{rupiah(summary.grand)}</strong></div>
         <div className="mt-4 grid grid-cols-2 gap-3 md:mt-3">
@@ -492,7 +547,7 @@ xl:grid-cols-[minmax(0,1fr)_360px]
       onSubmit={value => { dialog.resolve(value); setDialog(null); }}
     />}
     {config && <ConfigProduct product={config} close={() => setConfig(null)} add={addLine} />}
-    {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); const payload = { ...orderPayload(active), customerName: paidCustomerName }; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); if (editingOrder) setEditingOrder(null); toast.success('Data berhasil disimpan.'); } catch (e) { const msg = (e as Error).message; toast.error(msg); throw e; } }} />}
+    {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); const payload = { ...orderPayload(active), customerName: paidCustomerName }; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); if (editingOrder) setEditingOrder(null); toast.success('Data berhasil disimpan.'); await runAutoPrint(result, 'paid-sale'); } catch (e) { const msg = (e as Error).message; toast.error(msg); throw e; } }} />}
     {receipt && <Receipt sale={receipt} close={() => setReceipt(null)} />}
   </div>;
 }
@@ -558,9 +613,9 @@ function Receipt({ sale, close }: { sale: any; close: () => void }) {
   const [customerPrint, setCustomerPrint] = useState(true);
   const [kitchenPrint, setKitchenPrint] = useState(true);
   async function print(type: 'customer-receipt' | 'kitchen-ticket' | 'customer-item-list') {
-    if (type === 'customer-item-list') await api(`/orders/${sale.id}/print/customer-item-list`, { method: 'POST' });
-    else await api(`/print/${type}/${sale.id}`, { method: 'POST' });
     await printWithBluetoothFallback(sale, type, type === 'customer-receipt' ? `/receipt/${sale.id}` : type === 'kitchen-ticket' ? `/kitchen-ticket/${sale.id}` : `/customer-item-list/${sale.id}`);
+    if (type === 'customer-item-list') await api(`/orders/${sale.id}/print/customer-item-list`, { method: 'POST' }).catch(() => {});
+    else await api(`/print/${type}/${sale.id}`, { method: 'POST' }).catch(() => {});
   }
   async function printSelected() {
     try {
@@ -571,21 +626,22 @@ function Receipt({ sale, close }: { sale: any; close: () => void }) {
       toast.error((e as Error).message);
     }
   }
-  return <div data-back-modal="true" className="fixed inset-0 z-[70] grid place-items-center bg-ink/80 p-4">
-    <div className="w-full max-w-sm rounded-3xl bg-white p-6 text-center">
-      <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full bg-brand-100 text-brand-700"><Check size={30} /></div>
-      <h2 className="text-2xl font-black">{paid ? 'Transaksi berhasil!' : 'Order tersimpan!'}</h2>
-      <p className="mt-2 text-sm text-slate-400">{paid ? sale.transactionNumber : sale.orderNumber}</p>
-      <p className="mt-1 text-sm font-bold">{sale.customerName || 'Walk In'}</p>
-      <div className="my-5 rounded-2xl bg-slate-50 p-4"><p className="text-xs text-slate-400">{paid ? 'Total' : 'Total sementara'}</p><b className="text-2xl text-brand-700">{rupiah(sale.grandTotal)}</b></div>
-      <div className="mb-4 rounded-2xl bg-brand-50/70 p-4 text-left">
-        <p className="mb-3 text-sm font-black">Pilih Struk yang akan dicetak</p>
-        <label className="flex items-center gap-3 py-2 text-sm font-medium"><input className="h-5 w-5 accent-brand-600" type="checkbox" checked={customerPrint} onChange={e => setCustomerPrint(e.target.checked)} />{paid ? 'Print Final Receipt (Struk Pelanggan)' : 'Print Customer Item List'}</label>
-        <div className="my-1 border-t border-brand-100" />
-        <label className="flex items-center gap-3 py-2 text-sm font-medium"><input className="h-5 w-5 accent-brand-600" type="checkbox" checked={kitchenPrint} onChange={e => setKitchenPrint(e.target.checked)} />Print Kitchen Ticket (Struk Dapur)</label>
+  return <div data-back-modal="true" className="fixed inset-0 z-[70] grid place-items-center bg-ink/80 p-3">
+    <div className="max-h-[86vh] w-[min(92vw,26rem)] rounded-[1.75rem] bg-white p-3 text-center shadow-2xl">
+      <h2 className="text-base font-black leading-tight">{paid ? 'Transaksi berhasil!' : 'Order tersimpan!'}</h2>
+      <p className="mx-auto mt-0.5 max-w-full truncate text-[11px] font-semibold leading-tight text-slate-400">{paid ? sale.transactionNumber : sale.orderNumber} - {sale.customerName || 'Walk In'}</p>
+      <div className="my-2 flex min-h-[52px] items-center justify-between gap-3 rounded-2xl bg-slate-50 px-3 py-2 text-left">
+        <p className="text-xs font-bold text-slate-400">{paid ? 'Total' : 'Total sementara'}</p>
+        <b className="text-lg text-brand-700">{rupiah(sale.grandTotal)}</b>
       </div>
-      <button onClick={printSelected} className="btn-soft mb-2 w-full justify-center border-brand-600 text-brand-700">Cetak Sekarang <Printer size={18} /></button>
-      <button data-back-close="true" onClick={close} className="btn-primary w-full">Transaksi Baru</button>
+      <div className="mb-2 rounded-2xl bg-brand-50/70 px-3 py-2 text-left">
+        <p className="mb-0.5 text-xs font-black">Cetak Struk</p>
+        <label className="flex min-h-8 items-center gap-2 py-0.5 text-xs font-medium leading-tight"><input className="h-3.5 w-3.5 accent-brand-600" type="checkbox" checked={customerPrint} onChange={e => setCustomerPrint(e.target.checked)} />{paid ? 'Final Receipt (Pelanggan)' : 'Customer Item List'}</label>
+        <div className="border-t border-brand-100" />
+        <label className="flex min-h-8 items-center gap-2 py-0.5 text-xs font-medium leading-tight"><input className="h-3.5 w-3.5 accent-brand-600" type="checkbox" checked={kitchenPrint} onChange={e => setKitchenPrint(e.target.checked)} />Kitchen Ticket (Dapur)</label>
+      </div>
+      <button onClick={printSelected} className="btn-soft mb-1 h-10 w-full justify-center border-brand-600 text-sm text-brand-700">Cetak Sekarang <Printer size={15} /></button>
+      <button data-back-close="true" onClick={close} className="btn-primary h-10 w-full text-sm">Selesai</button>
     </div>
   </div>;
 }

@@ -6,6 +6,9 @@ export type Outlet = {
   code?: string;
   name: string;
   status?: string;
+  autoPrintReceipt?: boolean;
+  autoPrintKitchen?: boolean;
+  autoPrintCustomerItemList?: boolean;
 };
 
 type OutletContextValue = {

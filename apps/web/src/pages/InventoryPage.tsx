@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { AlertTriangle, Bell, Boxes, Camera, History, PackagePlus, PackageX, Pencil, Plus, Search, SlidersHorizontal, Warehouse } from 'lucide-react';
+import { AlertTriangle, Bell, Boxes, Camera, History, PackagePlus, PackageX, Pencil, Plus, Search, SlidersHorizontal, Trash2, Warehouse } from 'lucide-react';
 import { api, dt, rupiah, type User } from '../api';
 import { checkInventoryStockAlerts, requestInventoryNotificationPermission } from '../inventoryAlerts';
 import { scanInventoryBarcode } from '../barcodeScanner';
@@ -10,12 +10,14 @@ import { appAlert, appConfirm, appPrompt } from '../components/ui/AppDialog';
 
 type Category = { id: string; name: string; status: string };
 type Unit = { id: string; name: string; status: string };
+type Outlet = { id: string; code?: string; name: string; status?: string };
 type InvWarehouse = { id: string; code: string; name: string; type: string; outletId?: string | null; address?: string | null; picName?: string | null; phone?: string | null; status: string; outlet?: { name: string } | null };
 type Item = {
   id: string; code: string; sku?: string | null; barcode?: string | null; name: string; categoryId: string; unitId: string;
   minimumStock: number; currentStock: number; averageCost: number;
   supplier?: string; notes?: string; photoUrl?: string; status: string;
   stockAlertEnabled?: boolean; stockAlertType?: 'OUT_OF_STOCK' | 'LOW_STOCK' | 'CUSTOM_THRESHOLD'; stockAlertThreshold?: number | null;
+  unitConversions?: Array<{ id?: string; fromUnitId: string; toUnitId: string; multiplier: number; fromUnit?: Unit; toUnit?: Unit }>;
   category?: Category; unit?: Unit; stocks?: Array<{ id: string; warehouseId: string; currentQty: number; availableQty: number; averageCost: number; warehouse?: InvWarehouse }>;
 };
 
@@ -59,6 +61,7 @@ export default function InventoryPage({ user }: { user: User }) {
   const [items, setItems] = useState<Item[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
+  const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [warehouses, setWarehouses] = useState<InvWarehouse[]>([]);
   const [warehouseId, setWarehouseId] = useState('');
   const [summary, setSummary] = useState<any>();
@@ -80,11 +83,12 @@ export default function InventoryPage({ user }: { user: User }) {
   const selectedOutletWarehouse = useMemo(() => warehouses.find(w => w.outletId === selectedOutletId), [selectedOutletId, warehouses]);
 
   async function loadLookups() {
-    const [nextCategories, nextUnits, nextWarehouses] = await Promise.all([api<Category[]>('/inventory/categories'), api<Unit[]>('/inventory/units'), api<InvWarehouse[]>('/inventory/warehouses?status=ACTIVE')]);
+    const [nextCategories, nextUnits, nextOutlets, nextWarehouses] = await Promise.all([api<Category[]>('/inventory/categories'), api<Unit[]>('/inventory/units'), api<Outlet[]>('/outlets'), api<InvWarehouse[]>('/inventory/warehouses?status=ACTIVE')]);
     setCategories(nextCategories); setUnits(nextUnits); setWarehouses(nextWarehouses);
+    setOutlets(nextOutlets.filter(o => (o.status || 'ACTIVE') === 'ACTIVE'));
     const outletWarehouse = nextWarehouses.find(w => w.outletId === selectedOutletId);
-    setWarehouseId(old => outletWarehouse?.id || (nextWarehouses.some(w => w.id === old) ? old : nextWarehouses[0]?.id || ''));
-    return { categories: nextCategories, units: nextUnits, warehouses: nextWarehouses };
+    setWarehouseId(old => old && nextWarehouses.some(w => w.id === old) ? old : outletWarehouse?.id || nextWarehouses[0]?.id || '');
+    return { categories: nextCategories, units: nextUnits, outlets: nextOutlets, warehouses: nextWarehouses };
   }
   function loadItems() {
     const p = new URLSearchParams();
@@ -117,7 +121,7 @@ export default function InventoryPage({ user }: { user: User }) {
     if (mode === 'transfers') loadTransfers().catch(e => setError(e.message));
   }, [canAccessCurrent, mode, period, warehouseId]);
   useEffect(() => {
-    if (selectedOutletWarehouse && selectedOutletWarehouse.id !== warehouseId) setWarehouseId(selectedOutletWarehouse.id);
+    if (!warehouseId && selectedOutletWarehouse) setWarehouseId(selectedOutletWarehouse.id);
   }, [selectedOutletWarehouse, warehouseId]);
 
   const activeItems = useMemo(() => items.filter(i => i.status === 'ACTIVE'), [items]);
@@ -152,7 +156,17 @@ export default function InventoryPage({ user }: { user: User }) {
       warehouseId: f.get('warehouseId') || warehouseId || undefined
     };
     try {
-      await api(edit?.id ? `/inventory/items/${edit.id}` : '/inventory/items', { method: edit?.id ? 'PUT' : 'POST', body: JSON.stringify(body) });
+      const saved = await api<Item>(edit?.id ? `/inventory/items/${edit.id}` : '/inventory/items', { method: edit?.id ? 'PUT' : 'POST', body: JSON.stringify(body) });
+      const conversionFromUnitIds = f.getAll('conversionFromUnitId').map(v => String(v || '').trim());
+      const conversionMultipliers = f.getAll('conversionMultiplier').map(v => String(v || '').trim());
+      const conversions = conversionFromUnitIds.map((fromUnitId, index) => ({
+        fromUnitId,
+        toUnitId: String(body.unitId || ''),
+        multiplier: Number(conversionMultipliers[index] || 0)
+      })).filter(row => row.fromUnitId && row.toUnitId && row.multiplier > 0);
+      if (saved.id && (edit?.id || conversions.length)) {
+        await api(`/inventory/items/${saved.id}/unit-conversions`, { method: 'PUT', body: JSON.stringify({ conversions }) });
+      }
       setEdit(null); reload();
       toast.success('Data berhasil disimpan.');
       if (body.stockAlertEnabled) {
@@ -212,8 +226,8 @@ export default function InventoryPage({ user }: { user: User }) {
     {!canAccessCurrent && <div className="rounded-3xl bg-white p-8 text-center text-slate-500 shadow-sm ring-1 ring-black/5">Anda tidak memiliki akses ke menu ini.</div>}
     {canAccessCurrent && <>
     <WarehouseFilter warehouses={warehouses} warehouseId={warehouseId} setWarehouseId={setWarehouseId} />
-    {mode === 'dashboard' && <Dashboard summary={summary} period={period} setPeriod={setPeriod} />}
-    {mode === 'warehouses' && <WarehousePage rows={warehouses} reload={reload} />}
+    {mode === 'dashboard' && <Dashboard summary={summary} period={period} setPeriod={setPeriod} items={activeItems} warehouseId={warehouseId} />}
+    {mode === 'warehouses' && <WarehousePage rows={warehouses} outlets={outlets} reload={reload} />}
     {mode === 'items' && <Items items={items} categories={categories} units={units} warehouseId={warehouseId} warehouses={warehouses} q={q} setQ={setQ} categoryId={categoryId} setCategoryId={setCategoryId} status={status} setStatus={setStatus} addLookup={addLookup} setEdit={setEdit} removeItem={removeItem} canManageItems={canManageItems} />}
     {mode === 'stock-in' && <StockIn items={activeItems} warehouses={warehouses} warehouseId={warehouseId} onSubmit={movement} scanForItem={scanForItem} />}
     {mode === 'stock-out' && <StockOut items={warehouseItems} warehouses={warehouses} warehouseId={warehouseId} onSubmit={movement} scanForItem={scanForItem} />}
@@ -223,29 +237,81 @@ export default function InventoryPage({ user }: { user: User }) {
     {mode === 'history' && <HistoryView rows={historyRows} />}
     {mode === 'alerts' && <AlertLogs rows={alertRows} />}
     </>}
-    {edit && <ItemModal item={edit} categories={categories} units={units} warehouses={warehouses} warehouseId={warehouseId} save={saveItem} submitting={itemSubmitting} close={() => setEdit(null)} photo={photo} scanSku={scanForSku} />}
+    {edit && <ItemModal item={edit} categories={categories} units={units} warehouses={warehouses} warehouseId={warehouseId} save={saveItem} submitting={itemSubmitting} close={() => setEdit(null)} photo={photo} scanSku={scanForSku} reload={reload} />}
   </div>;
 }
 
-function Dashboard({ summary, period, setPeriod }: any) {
-  const cards = [['Total Item', summary?.totalItems || 0, Boxes], ['Total Stock Value', rupiah(summary?.totalStockValue || 0), Warehouse], ['Low Stock', summary?.lowStock || 0, AlertTriangle], ['Out of Stock', summary?.outOfStock || 0, PackageX]];
+function Dashboard({ summary, period, setPeriod, items = [], warehouseId }: any) {
+  const [stockModal, setStockModal] = useState<'ALL_ITEMS' | 'LOW_STOCK' | 'OUT_OF_STOCK' | null>(null);
+  const scopedItems = warehouseId ? items.filter((item: Item) => stockRows(item, warehouseId).length > 0) : items;
+  const lowStockItems = scopedItems.filter((item: Item) => {
+    const stock = stockQty(item, warehouseId);
+    return stock > 0 && stock <= n(item.minimumStock);
+  });
+  const outOfStockItems = scopedItems.filter((item: Item) => stockQty(item, warehouseId) <= 0);
+  const cards = [
+    ['Total Item', summary?.totalItems || 0, Boxes, 'ALL_ITEMS'],
+    ['Total Stock Value', rupiah(summary?.totalStockValue || 0), Warehouse, null],
+    ['Low Stock', summary?.lowStock || 0, AlertTriangle, 'LOW_STOCK'],
+    ['Out of Stock', summary?.outOfStock || 0, PackageX, 'OUT_OF_STOCK']
+  ];
   const max = Math.max(1, summary?.chart?.stockIn || 0, summary?.chart?.stockOut || 0, summary?.chart?.adjustment || 0);
-  return <><div className="mb-4 flex gap-2 overflow-auto">{[['today', 'Hari Ini'], ['week', 'Minggu Ini'], ['month', 'Bulan Ini']].map(([v, l]) => <button key={v} onClick={() => setPeriod(v)} className={`rounded-full px-4 py-2 text-sm font-bold ${period === v ? 'bg-brand-600 text-white' : 'bg-white text-slate-600'}`}>{l}</button>)}</div><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map(([label, value, Icon]: any) => <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5" key={label}><div className="mb-4 flex justify-between"><span className="text-sm font-bold text-slate-500">{label}</span><span className="rounded-2xl bg-brand-50 p-2 text-brand-700"><Icon size={19} /></span></div><b className="text-2xl">{value}</b></div>)}</div><div className="mt-5 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5"><h3 className="mb-4 text-lg font-black">Stock Movement</h3>{[['Stock In', summary?.chart?.stockIn || 0, 'bg-brand-500'], ['Stock Out', summary?.chart?.stockOut || 0, 'bg-red-400'], ['Adjustment', summary?.chart?.adjustment || 0, 'bg-amber-400']].map(([l, v, c]: any) => <div className="mb-3" key={l}><div className="mb-1 flex justify-between text-sm"><b>{l}</b><span>{v}</span></div><div className="h-3 rounded-full bg-slate-100"><div className={`h-3 rounded-full ${c}`} style={{ width: `${Math.max(4, v / max * 100)}%` }} /></div></div>)}</div></>;
+  return <>
+    <div className="mb-4 flex gap-2 overflow-auto">{[['today', 'Hari Ini'], ['week', 'Minggu Ini'], ['month', 'Bulan Ini']].map(([v, l]) => <button key={v} onClick={() => setPeriod(v)} className={`rounded-full px-4 py-2 text-sm font-bold ${period === v ? 'bg-brand-600 text-white' : 'bg-white text-slate-600'}`}>{l}</button>)}</div>
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map(([label, value, Icon, action]: any) => <button type="button" onClick={() => action && setStockModal(action)} className={`rounded-3xl bg-white p-5 text-left shadow-sm ring-1 ring-black/5 transition ${action ? 'hover:-translate-y-0.5 hover:ring-brand-200' : 'cursor-default'}`} key={label}><div className="mb-4 flex justify-between"><span className="text-sm font-bold text-slate-500">{label}</span><span className="rounded-2xl bg-brand-50 p-2 text-brand-700"><Icon size={19} /></span></div><b className="text-2xl">{value}</b>{action && <p className="mt-3 text-xs font-bold text-brand-700">Klik untuk lihat item</p>}</button>)}</div>
+    <div className="mt-5 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5"><h3 className="mb-4 text-lg font-black">Stock Movement</h3>{[['Stock In', summary?.chart?.stockIn || 0, 'bg-brand-500'], ['Stock Out', summary?.chart?.stockOut || 0, 'bg-red-400'], ['Adjustment', summary?.chart?.adjustment || 0, 'bg-amber-400']].map(([l, v, c]: any) => <div className="mb-3" key={l}><div className="mb-1 flex justify-between text-sm"><b>{l}</b><span>{v}</span></div><div className="h-3 rounded-full bg-slate-100"><div className={`h-3 rounded-full ${c}`} style={{ width: `${Math.max(4, v / max * 100)}%` }} /></div></div>)}</div>
+    {stockModal && <StockStatusModal title={stockModal === 'ALL_ITEMS' ? 'Daftar Total Item' : stockModal === 'LOW_STOCK' ? 'Daftar Low Stock' : 'Daftar Out of Stock'} items={stockModal === 'ALL_ITEMS' ? scopedItems : stockModal === 'LOW_STOCK' ? lowStockItems : outOfStockItems} warehouseId={warehouseId} tone={stockModal} close={() => setStockModal(null)} />}
+  </>;
+}
+
+function StockStatusModal({ title, items, warehouseId, tone, close }: { title: string; items: Item[]; warehouseId?: string; tone: 'ALL_ITEMS' | 'LOW_STOCK' | 'OUT_OF_STOCK'; close: () => void }) {
+  const badgeClass = tone === 'OUT_OF_STOCK' ? 'bg-red-50 text-red-700' : tone === 'LOW_STOCK' ? 'bg-amber-50 text-amber-700' : 'bg-brand-50 text-brand-700';
+  return <div data-back-modal="true" className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+    <div className="max-h-[88vh] w-full max-w-3xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+      <div className="flex items-start justify-between gap-4 border-b p-5">
+        <div><h3 className="text-2xl font-black">{title}</h3><p className="text-sm font-medium text-slate-500">{items.length} item perlu dicek.</p></div>
+        <button data-back-close="true" type="button" onClick={close} className="grid h-10 w-10 place-items-center rounded-2xl bg-slate-100 text-xl font-black text-slate-600">×</button>
+      </div>
+      <div className="max-h-[65vh] overflow-auto p-4">
+        {items.length ? <div className="grid gap-3">
+          {items.map(item => {
+            const stock = stockQty(item, warehouseId);
+            const rows = stockRows(item, warehouseId);
+            return <article className="rounded-2xl border bg-white p-4 shadow-sm" key={item.id}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <b className="block truncate text-lg text-ink">{item.name}</b>
+                  <p className="text-sm font-medium text-slate-400">{item.code} · {item.sku || 'Tanpa barcode'} · {item.category?.name || '-'}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">{rows.map(s => s.warehouse?.name || s.warehouseId).join(', ') || 'Warehouse aktif'}</p>
+                </div>
+                <span className={`pill shrink-0 ${badgeClass}`}>{tone === 'OUT_OF_STOCK' ? 'OUT OF STOCK' : tone === 'LOW_STOCK' ? 'LOW STOCK' : 'ITEM'}</span>
+              </div>
+              <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+                <div className="rounded-xl bg-slate-50 p-3"><span className="block text-xs font-bold text-slate-400">Stock</span><b>{n(stock)} {item.unit?.name || ''}</b></div>
+                <div className="rounded-xl bg-slate-50 p-3"><span className="block text-xs font-bold text-slate-400">Minimum</span><b>{n(item.minimumStock)} {item.unit?.name || ''}</b></div>
+                <div className="rounded-xl bg-slate-50 p-3"><span className="block text-xs font-bold text-slate-400">Avg Cost</span><b>{rupiah(stockAverageCost(item, warehouseId))}</b></div>
+              </div>
+            </article>;
+          })}
+        </div> : <div className="rounded-2xl bg-slate-50 p-8 text-center font-semibold text-slate-400">Tidak ada item.</div>}
+      </div>
+    </div>
+  </div>;
 }
 
 function WarehouseFilter({ warehouses, warehouseId, setWarehouseId }: any) {
   if (!warehouses.length) return null;
   return <div className="mb-4 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5">
-    <label className="block max-w-md"><span className="label">Warehouse / Lokasi Stok</span><select className="input" value={warehouseId} onChange={(e: any) => setWarehouseId(e.target.value)}>{warehouses.map((w: InvWarehouse) => <option key={w.id} value={w.id}>{w.name} · {w.code}</option>)}</select></label>
+    <label className="block max-w-md"><span className="label">Warehouse / Lokasi Stok</span><select className="input" value={warehouseId} onChange={(e: any) => setWarehouseId(e.target.value)}>{warehouses.map((w: InvWarehouse) => <option key={w.id} value={w.id}>{w.name} Â· {w.code}</option>)}</select></label>
   </div>;
 }
 
-function WarehousePage({ rows, reload }: any) {
+function WarehousePage({ rows, outlets, reload }: any) {
   async function save(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
     try {
-      await api('/warehouses', { method: 'POST', body: JSON.stringify({ code: f.get('code'), name: f.get('name'), type: f.get('type'), address: f.get('address') || null, picName: f.get('picName') || null, phone: f.get('phone') || null, status: 'ACTIVE' }) });
+      await api('/warehouses', { method: 'POST', body: JSON.stringify({ code: f.get('code'), name: f.get('name'), type: f.get('type'), outletId: f.get('outletId') || null, address: f.get('address') || null, picName: f.get('picName') || null, phone: f.get('phone') || null, status: 'ACTIVE' }) });
       e.currentTarget.reset(); reload(); toast.success('Warehouse berhasil ditambahkan.');
     } catch (err) { toast.error((err as Error).message); }
   }
@@ -260,6 +326,8 @@ function WarehousePage({ rows, reload }: any) {
         <Field name="code" label="Kode Warehouse" />
         <Field name="name" label="Nama Warehouse" />
         <label><span className="label">Type</span><select className="input" name="type"><option>CENTRAL</option><option>PRODUCTION</option><option>OUTLET</option><option>VIRTUAL</option></select></label>
+        <label><span className="label">Outlet terkait</span><select className="input" name="outletId" defaultValue=""><option value="">Tidak terhubung outlet</option>{outlets.map((o: Outlet) => <option key={o.id} value={o.id}>{o.name}{o.code ? ` Â· ${o.code}` : ''}</option>)}</select></label>
+        <p className="-mt-1 text-xs font-medium text-slate-400">Pilih outlet jika warehouse ini dipakai sebagai lokasi stok outlet.</p>
         <Field name="address" label="Alamat" />
         <Field name="picName" label="PIC" />
         <Field name="phone" label="Telepon" />
@@ -281,22 +349,158 @@ function Items(p: any) {
       {p.canManageItems && <button onClick={() => p.setEdit(emptyItem)} className="btn-primary"><Plus size={18} /> Tambah</button>}
     </div>
     {p.canManageItems && <div className="mb-4 flex gap-2"><button onClick={() => p.addLookup('categories')} className="btn-soft">+ Kategori</button><button onClick={() => p.addLookup('units')} className="btn-soft">+ Satuan</button></div>}
-    <div className="hidden overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5 lg:block"><table className="w-full min-w-[1320px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr>{['Foto', 'Kode', 'SKU/Barcode', 'Nama', 'Lokasi', 'Kategori', 'Satuan', 'Min', 'Stock', 'Alert', 'Avg Cost', 'Status', ''].map(x => <th className="p-4" key={x}>{x}</th>)}</tr></thead><tbody>{p.items.map((i: Item) => <tr className="border-t" key={i.id}><td className="p-4"><Thumb item={i} /></td><td className="font-bold">{i.code}</td><td className="font-mono text-xs">{i.sku || '-'}</td><td>{i.name}</td><td><LocationInfo item={i} warehouseId={p.warehouseId} /></td><td>{i.category?.name}</td><td>{i.unit?.name}</td><td>{n(i.minimumStock)}</td><td><StockBadge item={i} warehouseId={p.warehouseId} /></td><td><AlertBadge item={i} /></td><td>{rupiah(stockAverageCost(i, p.warehouseId))}</td><td><span className="pill bg-slate-100">{i.status}</span></td><td>{p.canManageItems && <><button onClick={() => p.setEdit(i)} className="mr-3 text-brand-700"><Pencil size={17} /></button><button onClick={() => p.removeItem(i)} className="text-red-600">Delete</button></>}</td></tr>)}</tbody></table></div>
-    <div className="grid gap-3 lg:hidden">{p.items.map((i: Item) => <article className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5" key={i.id}><div className="flex gap-3"><Thumb item={i} /><div className="min-w-0 flex-1"><b className="block truncate">{i.name}</b><p className="text-sm text-slate-400">{i.code} · {i.sku || 'Tanpa barcode'} · {i.category?.name}</p><div className="mt-2"><LocationInfo item={i} warehouseId={p.warehouseId} /></div><div className="mt-2 flex flex-wrap gap-2"><StockBadge item={i} warehouseId={p.warehouseId} /><AlertBadge item={i} /></div></div>{p.canManageItems && <button onClick={() => p.setEdit(i)}><Pencil size={18} /></button>}</div></article>)}</div>
+    <div className="hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5 lg:block">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1320px] text-left text-sm">
+          <thead className="bg-slate-50 text-slate-500">
+            <tr>
+              {['Aksi', 'Foto', 'Kode', 'SKU/Barcode', 'Nama', 'Lokasi', 'Kategori', 'Satuan', 'Min', 'Stock', 'Alert', 'Avg Cost', 'Status'].map(x => <th className="p-4" key={x}>{x}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {p.items.map((i: Item) => <tr className="border-t" key={i.id}>
+              <td className="sticky left-0 z-10 bg-white p-4 shadow-[8px_0_14px_-14px_rgba(15,23,42,0.45)]">
+                {p.canManageItems ? <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => p.setEdit(i)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-brand-100 bg-brand-50 text-brand-700 transition hover:bg-brand-100" title="Edit bahan baku" aria-label={`Edit ${i.name}`}>
+                    <Pencil size={17} />
+                  </button>
+                  <button type="button" onClick={() => p.removeItem(i)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-red-100 bg-red-50 text-red-600 transition hover:bg-red-100" title="Hapus bahan baku" aria-label={`Hapus ${i.name}`}>
+                    <Trash2 size={17} />
+                  </button>
+                </div> : <span className="text-xs text-slate-400">-</span>}
+              </td>
+              <td className="p-4"><Thumb item={i} /></td>
+              <td className="font-bold">{i.code}</td>
+              <td className="font-mono text-xs">{i.sku || '-'}</td>
+              <td>{i.name}</td>
+              <td><LocationInfo item={i} warehouseId={p.warehouseId} /></td>
+              <td>{i.category?.name}</td>
+              <td>{i.unit?.name}</td>
+              <td>{n(i.minimumStock)}</td>
+              <td><StockBadge item={i} warehouseId={p.warehouseId} /></td>
+              <td><AlertBadge item={i} /></td>
+              <td>{rupiah(stockAverageCost(i, p.warehouseId))}</td>
+              <td><span className="pill bg-slate-100">{i.status}</span></td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div className="grid gap-3 lg:hidden">{p.items.map((i: Item) => <article className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5" key={i.id}><div className="flex gap-3"><Thumb item={i} /><div className="min-w-0 flex-1"><b className="block truncate">{i.name}</b><p className="text-sm text-slate-400">{i.code} Â· {i.sku || 'Tanpa barcode'} Â· {i.category?.name}</p><div className="mt-2"><LocationInfo item={i} warehouseId={p.warehouseId} /></div><div className="mt-2 flex flex-wrap gap-2"><StockBadge item={i} warehouseId={p.warehouseId} /><AlertBadge item={i} /></div></div>{p.canManageItems && <button onClick={() => p.setEdit(i)}><Pencil size={18} /></button>}</div></article>)}</div>
   </>;
 }
 function stockRows(item: Item, warehouseId?: string) { const rows = item.stocks || []; return warehouseId ? rows.filter(s => s.warehouseId === warehouseId) : rows; }
 function stockQty(item: Item, warehouseId?: string) { const rows = stockRows(item, warehouseId); if (warehouseId) return rows.reduce((sum, s) => sum + n(s.currentQty), 0); return rows.length ? rows.reduce((sum, s) => sum + n(s.currentQty), 0) : n(item.currentStock); }
 function stockAverageCost(item: Item, warehouseId?: string) { const rows = stockRows(item, warehouseId); if (warehouseId && !rows.length) return 0; if (!rows.length) return n(item.averageCost); const qty = rows.reduce((sum, s) => sum + n(s.currentQty), 0); const value = rows.reduce((sum, s) => sum + n(s.currentQty) * n(s.averageCost), 0); return qty > 0 ? value / qty : n(rows[0]?.averageCost ?? item.averageCost); }
-function LocationInfo({ item, warehouseId }: { item: Item; warehouseId?: string }) { const rows = stockRows(item, warehouseId); if (!rows.length) return <span className="text-xs text-slate-400">-</span>; return <div className="max-w-[220px] space-y-1">{rows.map(s => <div key={s.id || s.warehouseId} className="rounded-xl bg-slate-50 px-3 py-2 text-xs"><b className="block truncate text-slate-700">{s.warehouse?.name || s.warehouseId}</b><span className="text-slate-500">{n(s.currentQty)} {item.unit?.name || ''} · Avg {rupiah(s.averageCost)}</span></div>)}</div>; }
+function LocationInfo({ item, warehouseId }: { item: Item; warehouseId?: string }) { const rows = stockRows(item, warehouseId); if (!rows.length) return <span className="text-xs text-slate-400">-</span>; return <div className="max-w-[220px] space-y-1">{rows.map(s => <div key={s.id || s.warehouseId} className="rounded-xl bg-slate-50 px-3 py-2 text-xs"><b className="block truncate text-slate-700">{s.warehouse?.name || s.warehouseId}</b><span className="text-slate-500">{n(s.currentQty)} {item.unit?.name || ''} Â· Avg {rupiah(s.averageCost)}</span></div>)}</div>; }
 function StockBadge({ item, warehouseId }: { item: Item; warehouseId?: string }) { const stock = stockQty(item, warehouseId), min = n(item.minimumStock); const label = stock === 0 ? 'OUT OF STOCK' : stock <= min ? 'LOW STOCK' : `${stock} ${item.unit?.name || ''}`; const cls = stock === 0 ? 'bg-red-50 text-red-700' : stock <= min ? 'bg-amber-50 text-amber-700' : 'bg-brand-50 text-brand-700'; return <span className={`pill ${cls}`}>{label}</span>; }
 function AlertBadge({ item }: { item: Item }) { return <span className={`pill ${item.stockAlertEnabled ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500'}`}>{item.stockAlertEnabled ? 'Alert ON' : 'Alert OFF'}</span>; }
 function Thumb({ item }: { item: Item }) { return item.photoUrl ? <img src={item.photoUrl} className="h-14 w-14 rounded-2xl object-cover" /> : <span className="grid h-14 w-14 place-items-center rounded-2xl bg-slate-100 text-slate-400"><Boxes size={20} /></span>; }
 
-function ItemModal({ item, categories, units, warehouses, warehouseId, save, submitting, close, photo, scanSku }: any) {
+function UnitConversionSection({ item, units }: { item: Item; units: Unit[] }) {
+  const baseUnitName = item.unit?.name || units.find(u => u.id === item.unitId)?.name || 'satuan stok';
+  const initialRows = (item.unitConversions || []).length
+    ? item.unitConversions!
+    : [{ fromUnitId: '', toUnitId: item.unitId, multiplier: 0 }];
+  const [rows, setRows] = useState(initialRows.map((row, i) => ({ key: row.id || `conversion-${i}`, fromUnitId: row.fromUnitId || '', multiplier: row.multiplier ? String(row.multiplier) : '' })));
+  const add = () => setRows(v => [...v, { key: `conversion-${Date.now()}`, fromUnitId: units.find(u => u.id !== item.unitId)?.id || '', multiplier: '1' }]);
+  const update = (key: string, patch: any) => setRows(v => v.map(row => row.key === key ? { ...row, ...patch } : row));
+  const remove = (key: string) => setRows(v => v.filter(row => row.key !== key));
+  return <section className="rounded-3xl border bg-brand-50/40 p-4 sm:col-span-2">
+    <div className="mb-2 font-black">Konversi Satuan Recipe</div>
+    <p className="mb-3 text-xs font-medium text-slate-500">Dipakai saat recipe produk memakai satuan berbeda dari stok bahan. Rumus: qty stok = qty recipe x multiplier. Satuan stok bahan ini: <b>{baseUnitName}</b>.</p>
+    <div className="space-y-3">
+      {rows.map(row => <div key={row.key} className="grid gap-2 rounded-2xl bg-white p-3 ring-1 ring-black/5 sm:grid-cols-[1fr_1fr_auto]">
+        <label><span className="label">Dari satuan recipe</span><select className="input" name="conversionFromUnitId" value={row.fromUnitId} onChange={e => update(row.key, { fromUnitId: e.target.value })}><option value="">Pilih satuan</option>{units.filter(u => u.status === 'ACTIVE' && u.id !== item.unitId).map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label>
+        <label><span className="label">Multiplier ke {baseUnitName}</span><input className="input" name="conversionMultiplier" inputMode="decimal" type="text" value={row.multiplier} onChange={e => update(row.key, { multiplier: e.target.value.replace(',', '.') })} placeholder="0.001" /></label>
+        <button type="button" onClick={() => remove(row.key)} className="self-end rounded-xl border px-3 py-3 text-sm font-bold text-red-600">Hapus</button>
+      </div>)}
+    </div>
+    <button type="button" onClick={add} className="btn-soft mt-3 w-full">+ Tambah Konversi</button>
+    <p className="mt-3 text-xs text-slate-400">Contoh: stok UHT = pcs, recipe = ml, isi multiplier 0.001 jika 1 ml = 0.001 pcs.</p>
+  </section>;
+}
+
+function StockByWarehouseSection({ item, reload }: { item: Item; reload?: () => void }) {
+  const [rows, setRows] = useState((item.stocks || []).map(s => ({ ...s, averageCostInput: String(n(s.averageCost)) })));
+  const [savingId, setSavingId] = useState('');
+  useEffect(() => setRows((item.stocks || []).map(s => ({ ...s, averageCostInput: String(n(s.averageCost)) }))), [item.id, item.stocks]);
+  async function updateAverageCost(row: any) {
+    if (!row.id || savingId) return;
+    const averageCost = Number(String(row.averageCostInput || '').replace(',', '.'));
+    if (!Number.isFinite(averageCost) || averageCost < 0) return toast.error('Avg Cost tidak valid.');
+    setSavingId(row.id);
+    try {
+      const updated = await api<any>(`/inventory/stocks/${row.id}/average-cost`, { method: 'PUT', body: JSON.stringify({ averageCost }) });
+      setRows(current => current.map(r => r.id === row.id ? { ...r, averageCost: n(updated.averageCost), averageCostInput: String(n(updated.averageCost)) } : r));
+      reload?.();
+      toast.success('Avg Cost warehouse berhasil diupdate.');
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSavingId('');
+    }
+  }
+  return <section className="rounded-3xl border bg-white p-4 sm:col-span-2">
+    <div className="mb-1 font-black">Stock by Warehouse</div>
+    <p className="mb-3 text-xs font-medium text-slate-500">Update Avg Cost hanya mengubah harga rata-rata di warehouse tersebut. Qty stok tidak berubah.</p>
+    <div className="overflow-auto">
+      <table className="w-full min-w-[680px] text-sm">
+        <thead className="text-left text-slate-400"><tr><th className="py-2">Warehouse</th><th>Current Qty</th><th>Avg Cost</th><th>Stock Value</th><th>Aksi</th></tr></thead>
+        <tbody>{rows.length ? rows.map((s: any) => <tr className="border-t" key={s.id || s.warehouseId}>
+          <td className="py-2 font-bold">{s.warehouse?.name || s.warehouseId}</td>
+          <td>{n(s.currentQty)} {item.unit?.name || ''}</td>
+          <td><input className="input h-11 max-w-40" inputMode="decimal" value={s.averageCostInput} onChange={e => setRows(current => current.map(r => r.id === s.id ? { ...r, averageCostInput: e.target.value.replace(',', '.') } : r))} /></td>
+          <td>{rupiah(n(s.currentQty) * Number(String(s.averageCostInput || s.averageCost || 0).replace(',', '.')))}</td>
+          <td><button type="button" className="btn-soft h-11" disabled={savingId === s.id} onClick={() => updateAverageCost(s)}>{savingId === s.id ? 'Update...' : 'Update Avg Cost'}</button></td>
+        </tr>) : <tr><td className="py-3 text-slate-400" colSpan={5}>Belum ada stock di warehouse.</td></tr>}</tbody>
+      </table>
+    </div>
+  </section>;
+}
+
+function ItemModal({ item, categories, units, warehouses, warehouseId, save, submitting, close, photo, scanSku, reload }: any) {
   const [sku, setSku] = useState(item.sku || '');
   useEffect(() => setSku(item.sku || ''), [item.id, item.sku]);
-  return <div data-back-modal="true" className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"><form onSubmit={save} className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-3xl bg-white p-6 shadow-2xl"><div className="mb-5 flex justify-between"><h3 className="text-2xl font-black">{item.id ? 'Edit Bahan Baku' : 'Tambah Bahan Baku'}</h3><button data-back-close="true" type="button" onClick={close}>×</button></div><div className="mb-4 flex items-center gap-4"><Thumb item={item} /><label className="btn-soft cursor-pointer"><Camera size={16} /> Upload Foto<input type="file" accept="image/png,image/jpeg" className="hidden" onChange={e => photo(e.target.files?.[0])} /></label></div><input type="hidden" name="photoUrl" value={item.photoUrl || ''} /><div className="grid gap-3 sm:grid-cols-2"><Field name="code" label="Kode" value={item.code} /><label><span className="label">SKU / Barcode</span><div className="flex gap-2"><input className="input min-w-0 flex-1 font-mono" name="sku" value={sku} onChange={e => setSku(e.target.value)} placeholder="8991234567890" /><button type="button" onClick={async () => { await scanSku(item.id); }} className="btn-soft shrink-0"><Camera size={16} /> Scan</button></div></label><Field name="name" label="Nama" value={item.name} />{!item.id && <label><span className="label">Warehouse Stok Awal</span><select className="input" name="warehouseId" defaultValue={warehouseId}>{warehouses.map((w: InvWarehouse) => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label>}<Select name="categoryId" label="Kategori" value={item.categoryId} rows={categories} /><Select name="unitId" label="Satuan" value={item.unitId} rows={units} /><Field name="minimumStock" label="Minimum Stock" type="number" value={item.minimumStock} /><Field name="currentStock" label="Current Stock" type="number" value={item.currentStock} /><Field name="averageCost" label="Average Cost" type="number" value={item.averageCost} /><Field name="supplier" label="Supplier" value={item.supplier} /><label className="sm:col-span-2"><span className="label">Catatan</span><textarea name="notes" className="input min-h-24" defaultValue={item.notes || ''} /></label><section className="rounded-3xl border bg-slate-50 p-4 sm:col-span-2"><div className="mb-3 flex items-center gap-2 font-black"><Bell size={18} /> Stock Alert</div><label className="mb-3 flex items-center gap-3 text-sm font-bold"><input name="stockAlertEnabled" type="checkbox" defaultChecked={!!item.stockAlertEnabled} /> Aktifkan notifikasi stok</label><div className="grid gap-3 sm:grid-cols-2"><label><span className="label">Jenis Alert</span><select className="input" name="stockAlertType" defaultValue={item.stockAlertType || 'LOW_STOCK'}><option value="OUT_OF_STOCK">Stok kosong</option><option value="LOW_STOCK">Stok di bawah minimum</option><option value="CUSTOM_THRESHOLD">Custom threshold</option></select></label><Field name="stockAlertThreshold" label="Custom threshold" type="number" value={item.stockAlertThreshold ?? ''} /></div><p className="mt-2 text-xs text-slate-500">Contoh: kirim notifikasi jika stok ≤ 5 {item.unit?.name || ''}.</p></section>{item.id && <section className="rounded-3xl border bg-white p-4 sm:col-span-2"><div className="mb-3 font-black">Stock by Warehouse</div><div className="overflow-auto"><table className="w-full min-w-[520px] text-sm"><thead className="text-left text-slate-400"><tr><th className="py-2">Warehouse</th><th>Current Qty</th><th>Average Cost</th><th>Stock Value</th></tr></thead><tbody>{(item.stocks || []).length ? item.stocks.map((s: any) => <tr className="border-t" key={s.id || s.warehouseId}><td className="py-2 font-bold">{s.warehouse?.name || s.warehouseId}</td><td>{n(s.currentQty)} {item.unit?.name || ''}</td><td>{rupiah(s.averageCost)}</td><td>{rupiah(n(s.currentQty) * n(s.averageCost))}</td></tr>) : <tr><td className="py-3 text-slate-400" colSpan={4}>Belum ada stock di warehouse.</td></tr>}</tbody></table></div></section>}<label><span className="label">Status</span><select className="input" name="status" defaultValue={item.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select></label></div><button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan'}</button></form></div>;
+  return <div data-back-modal="true" className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+    <form onSubmit={save} className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-3xl bg-white p-6 shadow-2xl">
+      <div className="mb-5 flex justify-between">
+        <h3 className="text-2xl font-black">{item.id ? 'Edit Bahan Baku' : 'Tambah Bahan Baku'}</h3>
+        <button data-back-close="true" type="button" onClick={close}>×</button>
+      </div>
+      <div className="mb-4 flex items-center gap-4">
+        <Thumb item={item} />
+        <label className="btn-soft cursor-pointer"><Camera size={16} /> Upload Foto<input type="file" accept="image/png,image/jpeg" className="hidden" onChange={e => photo(e.target.files?.[0])} /></label>
+      </div>
+      <input type="hidden" name="photoUrl" value={item.photoUrl || ''} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field name="code" label="Kode" value={item.code} />
+        <label><span className="label">SKU / Barcode</span><div className="flex gap-2"><input className="input min-w-0 flex-1 font-mono" name="sku" value={sku} onChange={e => setSku(e.target.value)} placeholder="8991234567890" /><button type="button" onClick={async () => { await scanSku(item.id); }} className="btn-soft shrink-0"><Camera size={16} /> Scan</button></div></label>
+        <Field name="name" label="Nama" value={item.name} />
+        {!item.id && <label><span className="label">Warehouse Stok Awal</span><select className="input" name="warehouseId" defaultValue={warehouseId}>{warehouses.map((w: InvWarehouse) => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label>}
+        <Select name="categoryId" label="Kategori" value={item.categoryId} rows={categories} />
+        <Select name="unitId" label="Satuan" value={item.unitId} rows={units} />
+        <Field name="minimumStock" label="Minimum Stock" type="number" value={item.minimumStock} />
+        <Field name="currentStock" label="Current Stock" type="number" value={item.currentStock} />
+        <Field name="averageCost" label="Average Cost" type="number" value={item.averageCost} />
+        <Field name="supplier" label="Supplier" value={item.supplier} />
+        <label className="sm:col-span-2"><span className="label">Catatan</span><textarea name="notes" className="input min-h-24" defaultValue={item.notes || ''} /></label>
+        <section className="rounded-3xl border bg-slate-50 p-4 sm:col-span-2">
+          <div className="mb-3 flex items-center gap-2 font-black"><Bell size={18} /> Stock Alert</div>
+          <label className="mb-3 flex items-center gap-3 text-sm font-bold"><input name="stockAlertEnabled" type="checkbox" defaultChecked={!!item.stockAlertEnabled} /> Aktifkan notifikasi stok</label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label><span className="label">Jenis Alert</span><select className="input" name="stockAlertType" defaultValue={item.stockAlertType || 'LOW_STOCK'}><option value="OUT_OF_STOCK">Stok kosong</option><option value="LOW_STOCK">Stok di bawah minimum</option><option value="CUSTOM_THRESHOLD">Custom threshold</option></select></label>
+            <Field name="stockAlertThreshold" label="Custom threshold" type="number" value={item.stockAlertThreshold ?? ''} />
+          </div>
+          <p className="mt-2 text-xs text-slate-500">Contoh: kirim notifikasi jika stok = 5 {item.unit?.name || ''}.</p>
+        </section>
+        {item.id && <UnitConversionSection item={item} units={units} />}
+        {item.id && <StockByWarehouseSection item={item} reload={reload} />}
+        <label><span className="label">Status</span><select className="input" name="status" defaultValue={item.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select></label>
+      </div>
+      <button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan'}</button>
+    </form>
+  </div>;
 }
 function Field({ name, label, value, type = 'text' }: any) { return <label><span className="label">{label}</span><input className="input" name={name} type={type} min={type === 'number' ? 0 : undefined} step={type === 'number' ? '0.001' : undefined} defaultValue={value || ''} required={['code', 'name'].includes(name)} /></label>; }
 function Select({ name, label, value, rows }: any) { return <label><span className="label">{label}</span><select className="input" name={name} defaultValue={value || rows[0]?.id} required>{rows.filter((x: any) => x.status === 'ACTIVE').map((x: any) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>; }
@@ -315,7 +519,7 @@ function LegacyItemSelect({ items, value, onChange, warehouseId }: { items: Item
   const choose = (id: string, name: string) => { onChange ? onChange(id) : setInternalId(id); setQuery(name); setOpen(false); };
   const selected = items.find(i => i.id === selectedId);
   const filtered = items.filter(i => i.name.toLowerCase().includes(query.toLowerCase()) || i.code.toLowerCase().includes(query.toLowerCase()) || (i.sku || '').toLowerCase().includes(query.toLowerCase())).slice(0, 20);
-  return <div className="relative"><input type="hidden" name="itemId" value={selectedId} required /><input className="input" value={query} onFocus={() => { setOpen(true); setQuery(''); }} onChange={e => { setQuery(e.target.value); setOpen(true); }} placeholder="Cari nama, kode, atau barcode bahan..." />{open && <div className="absolute z-50 mt-2 max-h-72 w-full overflow-auto rounded-2xl border bg-white shadow-xl">{filtered.length ? filtered.map(i => <button type="button" key={i.id} onMouseDown={() => choose(i.id, '')} className="flex w-full items-start justify-between gap-3 border-b px-4 py-3 text-left hover:bg-brand-50"><div><b className="block text-sm text-ink">{i.name}</b><span className="text-xs text-slate-400">{i.code} · {i.sku || 'Tanpa barcode'}</span></div><span className="shrink-0 text-xs font-bold text-slate-500">{n(i.currentStock)} {i.unit?.name}</span></button>) : <div className="px-4 py-3 text-sm text-slate-400">Bahan tidak ditemukan</div>}</div>}{selected && <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500"><b>{selected.name}</b><br />Kode: {selected.code} · SKU: {selected.sku || '-'} · Stock: {n(selected.currentStock)} {selected.unit?.name} · Avg Cost: {rupiah(selected.averageCost)}</div>}</div>;
+  return <div className="relative"><input type="hidden" name="itemId" value={selectedId} required /><input className="input" value={query} onFocus={() => { setOpen(true); setQuery(''); }} onChange={e => { setQuery(e.target.value); setOpen(true); }} placeholder="Cari nama, kode, atau barcode bahan..." />{open && <div className="absolute z-50 mt-2 max-h-72 w-full overflow-auto rounded-2xl border bg-white shadow-xl">{filtered.length ? filtered.map(i => <button type="button" key={i.id} onMouseDown={() => choose(i.id, '')} className="flex w-full items-start justify-between gap-3 border-b px-4 py-3 text-left hover:bg-brand-50"><div><b className="block text-sm text-ink">{i.name}</b><span className="text-xs text-slate-400">{i.code} Â· {i.sku || 'Tanpa barcode'}</span></div><span className="shrink-0 text-xs font-bold text-slate-500">{n(i.currentStock)} {i.unit?.name}</span></button>) : <div className="px-4 py-3 text-sm text-slate-400">Bahan tidak ditemukan</div>}</div>}{selected && <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500"><b>{selected.name}</b><br />Kode: {selected.code} Â· SKU: {selected.sku || '-'} Â· Stock: {n(selected.currentStock)} {selected.unit?.name} Â· Avg Cost: {rupiah(selected.averageCost)}</div>}</div>;
 }
 function ItemSelect({ items, value, onChange, warehouseId }: { items: Item[]; value?: string; onChange?: (id: string) => void; warehouseId?: string }) {
   const [query, setQuery] = useState('');
@@ -343,11 +547,11 @@ function ItemSelect({ items, value, onChange, warehouseId }: { items: Item[]; va
     <input className="input" value={query} onFocus={() => { setOpen(true); setQuery(''); }} onChange={e => { setQuery(e.target.value); setOpen(true); }} placeholder="Cari nama, kode, atau barcode bahan..." />
     {open && <div className="absolute z-50 mt-2 max-h-72 w-full overflow-auto rounded-2xl border bg-white shadow-xl">
       {filtered.length ? filtered.map(i => <button type="button" key={i.id} onMouseDown={() => choose(i.id)} className="flex w-full items-start justify-between gap-3 border-b px-4 py-3 text-left hover:bg-brand-50">
-        <div><b className="block text-sm text-ink">{i.name}</b><span className="text-xs text-slate-400">{i.code} · {i.sku || 'Tanpa barcode'}</span></div>
+        <div><b className="block text-sm text-ink">{i.name}</b><span className="text-xs text-slate-400">{i.code} Â· {i.sku || 'Tanpa barcode'}</span></div>
         <span className="shrink-0 text-xs font-bold text-slate-500">{stockQty(i, warehouseId)} {i.unit?.name}</span>
       </button>) : <div className="px-4 py-3 text-sm text-slate-400">Tidak ada bahan di warehouse ini</div>}
     </div>}
-    {selected && <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500"><b>{selected.name}</b><br />Kode: {selected.code} · SKU: {selected.sku || '-'} · Stock: {stockQty(selected, warehouseId)} {selected.unit?.name} · Avg Cost: {rupiah(stockAverageCost(selected, warehouseId))}</div>}
+    {selected && <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500"><b>{selected.name}</b><br />Kode: {selected.code} Â· SKU: {selected.sku || '-'} Â· Stock: {stockQty(selected, warehouseId)} {selected.unit?.name} Â· Avg Cost: {rupiah(stockAverageCost(selected, warehouseId))}</div>}
   </div>;
 }
 function StockIn({ items, warehouses, warehouseId, onSubmit, scanForItem }: any) {
@@ -355,7 +559,7 @@ function StockIn({ items, warehouses, warehouseId, onSubmit, scanForItem }: any)
   const [qty, setQty] = useState(1);
   async function scanOnce(add = false) { const item = await scanForItem(); if (!item) return; setItemId(item.id); setQty(q => add && item.id === itemId ? q + 1 : Math.max(1, q)); setTimeout(() => (document.querySelector('input[name="qty"]') as HTMLInputElement | null)?.focus(), 50); }
   async function continuous() { do { await scanOnce(true); } while (await appConfirm('Scan item berikutnya?', { title: 'Continuous Scan', confirmText: 'Scan Lagi', cancelText: 'Selesai' })); }
-  return <Movement title="Stok Masuk" icon={<PackagePlus />} warehouses={warehouses} warehouseId={warehouseId} onSubmit={(e: any) => { e.preventDefault(); const f = new FormData(e.currentTarget); return onSubmit('/inventory/stock-in', { warehouseId: f.get('warehouseId'), supplier: f.get('supplier'), reference: f.get('reference'), remarks: f.get('remarks'), items: [{ itemId: f.get('itemId'), qty: Number(f.get('qty')), unitCost: Number(f.get('unitCost')) }] }, e.currentTarget, 'Stok masuk berhasil disimpan.'); }}><Field name="supplier" label="Supplier" /><Field name="reference" label="Referensi" /><div className="flex gap-2 sm:col-span-2"><button type="button" onClick={() => scanOnce(false)} className="btn-soft"><Camera size={16} /> Scan Barcode</button><button type="button" onClick={continuous} className="btn-soft">Continuous Scan</button></div><label className="sm:col-span-2"><span className="label">Bahan</span><ItemSelect items={items} value={itemId} onChange={setItemId} warehouseId={warehouseId} /></label><label><span className="label">Qty</span><input className="input" name="qty" type="number" min={0} step="0.001" value={qty} onChange={e => setQty(Number(e.target.value || 0))} /></label><Field name="unitCost" label="Harga Beli" type="number" /><Field name="remarks" label="Catatan" /></Movement>;
+  return <Movement title="Stok Masuk" icon={<PackagePlus />} warehouses={warehouses} warehouseId={warehouseId} onSubmit={(e: any) => { e.preventDefault(); const f = new FormData(e.currentTarget); return onSubmit('/inventory/stock-in', { warehouseId: f.get('warehouseId'), supplier: f.get('supplier'), reference: f.get('reference'), remarks: f.get('remarks'), items: [{ itemId: f.get('itemId'), qty: Number(f.get('qty')), totalCost: Number(f.get('totalCost')) }] }, e.currentTarget, 'Stok masuk berhasil disimpan.'); }}><Field name="supplier" label="Supplier" /><Field name="reference" label="Referensi" /><div className="flex gap-2 sm:col-span-2"><button type="button" onClick={() => scanOnce(false)} className="btn-soft"><Camera size={16} /> Scan Barcode</button><button type="button" onClick={continuous} className="btn-soft">Continuous Scan</button></div><label className="sm:col-span-2"><span className="label">Bahan</span><ItemSelect items={items} value={itemId} onChange={setItemId} warehouseId={warehouseId} /></label><label><span className="label">Qty</span><input className="input" name="qty" type="number" min={0} step="0.001" value={qty} onChange={e => setQty(Number(e.target.value || 0))} /></label><Field name="totalCost" label="Total Harga Beli" type="number" /><p className="-mt-2 text-xs font-medium text-slate-400">Isi total harga pembelian untuk seluruh qty. Sistem otomatis menghitung Avg Cost per satuan.</p><Field name="remarks" label="Catatan" /></Movement>;
 }
 function StockOut({ items, warehouses, warehouseId, onSubmit, scanForItem }: any) {
   const [itemId, setItemId] = useState(items[0]?.id || '');
@@ -390,6 +594,6 @@ function TransferStock({ items, warehouses, rows, reload, warehouseId }: any) {
   return <div className="grid gap-4 xl:grid-cols-[460px_1fr]"><form onSubmit={submit} className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5"><div className="mb-5 flex items-center gap-3 text-2xl font-black"><span className="rounded-2xl bg-brand-50 p-3 text-brand-700"><PackagePlus /></span>Transfer Stock</div><div className="grid gap-3"><label><span className="label">Dari Warehouse</span><select className="input" name="fromWarehouseId" defaultValue={warehouseId}>{warehouses.map((w: InvWarehouse) => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label><label><span className="label">Ke Warehouse</span><select className="input" name="toWarehouseId">{warehouses.map((w: InvWarehouse) => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label><label><span className="label">Bahan</span><ItemSelect items={items} value={itemId} onChange={setItemId} warehouseId={warehouseId} /></label><Field name="qty" label="Qty" type="number" value={1} /><Field name="unitCost" label="Unit Cost optional" type="number" /><Field name="notes" label="Catatan" /><label className="flex items-center gap-3 text-sm font-bold"><input type="checkbox" name="autoComplete" defaultChecked /> Langsung selesaikan transfer</label></div><button className="btn-primary mt-5 w-full">Simpan Transfer</button></form><div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5"><div className="overflow-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr>{['Tanggal', 'No Transfer', 'Dari', 'Ke', 'Item', 'Status', ''].map(x => <th className="p-4" key={x}>{x}</th>)}</tr></thead><tbody>{rows.map((r: any) => <tr className="border-t" key={r.id}><td className="p-4">{dt(r.createdAt)}</td><td className="font-mono font-bold">{r.transferNumber}</td><td>{r.fromWarehouse?.name}</td><td>{r.toWarehouse?.name}</td><td>{r.items?.map((x: any) => `${x.item?.name} (${n(x.qty)})`).join(', ')}</td><td><span className="pill bg-slate-100">{r.status}</span></td><td>{r.status !== 'COMPLETED' && r.status !== 'CANCELLED' && <button className="font-bold text-brand-700" onClick={() => complete(r.id)}>Complete</button>}</td></tr>)}</tbody></table></div>{!rows.length && <div className="p-8 text-center text-slate-400">Belum ada transfer stock.</div>}</div></div>;
 }
 
-function Movement({ title, icon, onSubmit, children, warehouses = [], warehouseId }: any) { const [submitting, setSubmitting] = useState(false); async function submit(e: FormEvent<HTMLFormElement>) { e.preventDefault(); if (submitting) return; setSubmitting(true); try { await onSubmit(e); } finally { setSubmitting(false); } } return <form onSubmit={submit} className="max-w-2xl rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5"><div className="mb-5 flex items-center gap-3 text-2xl font-black"><span className="rounded-2xl bg-brand-50 p-3 text-brand-700">{icon}</span>{title}</div><div className="grid gap-3 sm:grid-cols-2"><label className="sm:col-span-2"><span className="label">Warehouse / Lokasi</span><select className="input" name="warehouseId" defaultValue={warehouseId}>{warehouses.map((w: InvWarehouse) => <option key={w.id} value={w.id}>{w.name} · {w.code}</option>)}</select></label>{children}</div><button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan'}</button></form>; }
+function Movement({ title, icon, onSubmit, children, warehouses = [], warehouseId }: any) { const [submitting, setSubmitting] = useState(false); async function submit(e: FormEvent<HTMLFormElement>) { e.preventDefault(); if (submitting) return; setSubmitting(true); try { await onSubmit(e); } finally { setSubmitting(false); } } return <form onSubmit={submit} className="max-w-2xl rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5"><div className="mb-5 flex items-center gap-3 text-2xl font-black"><span className="rounded-2xl bg-brand-50 p-3 text-brand-700">{icon}</span>{title}</div><div className="grid gap-3 sm:grid-cols-2"><label className="sm:col-span-2"><span className="label">Warehouse / Lokasi</span><select className="input" name="warehouseId" defaultValue={warehouseId}>{warehouses.map((w: InvWarehouse) => <option key={w.id} value={w.id}>{w.name} Â· {w.code}</option>)}</select></label>{children}</div><button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan'}</button></form>; }
 function HistoryView({ rows }: any) { return <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5"><div className="overflow-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr>{['Tanggal', 'Item', 'Type', 'Qty', 'Before', 'After', 'User', 'Reference'].map(x => <th className="p-4" key={x}>{x}</th>)}</tr></thead><tbody>{rows.map((r: any) => <tr className="border-t" key={r.id}><td className="p-4">{dt(r.createdAt)}</td><td className="font-bold">{r.item?.name}</td><td><span className="pill bg-slate-100">{r.movementType}</span></td><td>{n(r.qty)}</td><td>{n(r.beforeQty)}</td><td>{n(r.afterQty)}</td><td>{r.user?.name}</td><td>{r.reference || r.remarks || '-'}</td></tr>)}</tbody></table></div>{!rows.length && <div className="p-8 text-center text-slate-400"><History className="mx-auto mb-2" />Belum ada riwayat stok.</div>}</div>; }
 function AlertLogs({ rows }: any) { return <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5"><div className="overflow-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr>{['Tanggal', 'Bahan', 'Alert', 'Stock', 'Threshold', 'Status', 'Pesan'].map(x => <th className="p-4" key={x}>{x}</th>)}</tr></thead><tbody>{rows.map((r: any) => <tr className="border-t" key={r.id}><td className="p-4">{dt(r.sentAt)}</td><td className="font-bold">{r.item?.name}</td><td><span className="pill bg-amber-50 text-amber-700">{r.alertType}</span></td><td>{n(r.currentStock)} {r.item?.unit?.name}</td><td>{r.threshold ?? '-'}</td><td><span className={`pill ${r.status === 'SENT' ? 'bg-brand-50 text-brand-700' : 'bg-red-50 text-red-700'}`}>{r.status}</span></td><td>{r.message || r.errorMessage || '-'}</td></tr>)}</tbody></table></div>{!rows.length && <div className="p-8 text-center text-slate-400"><Bell className="mx-auto mb-2" />Belum ada notifikasi stok.</div>}</div>; }
