@@ -5,6 +5,7 @@ import type { NextFunction, Request, Response } from 'express';
 export const prisma = new PrismaClient();
 export const asyncRoute = (fn:(req:Request,res:Response,next:NextFunction)=>Promise<unknown>) => (req:Request,res:Response,next:NextFunction) => void fn(req,res,next).catch(next);
 export class ApiError extends Error { constructor(public status:number, message:string){ super(message); } }
+export const DASHBOARD_PERMISSION = 'dashboard.view';
 export const INVENTORY_PERMISSIONS = [
   'inventory.view',
   'inventory.stock_in',
@@ -16,7 +17,8 @@ export const INVENTORY_PERMISSIONS = [
   'inventory.warehouse',
   'inventory.item_management'
 ] as const;
-export const defaultInventoryPermissions=(role:Role)=>role==='OWNER'||role==='SUPERVISOR'?[...INVENTORY_PERMISSIONS]:[];
+export const DEFAULT_USER_PERMISSIONS = [DASHBOARD_PERMISSION, ...INVENTORY_PERMISSIONS] as const;
+export const defaultInventoryPermissions=(role:Role)=>role==='OWNER'||role==='SUPERVISOR'?[...DEFAULT_USER_PERMISSIONS]:[];
 export async function auth(req:Request,res:Response,next:NextFunction){
   const token=req.headers.authorization?.replace(/^Bearer /,'');
   if(!token) return res.status(401).json({message:'Silakan login terlebih dahulu'});

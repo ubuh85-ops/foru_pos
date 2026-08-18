@@ -30,7 +30,11 @@ const inventoryPermissions = [
   ['inventory.warehouse', 'Warehouse Management'],
   ['inventory.item_management', 'Item Management']
 ] as const;
+const dashboardPermissions = [
+  ['dashboard.view', 'View Dashboard']
+] as const;
 const allInventoryPermissionKeys = inventoryPermissions.map(([key]) => key);
+const allDefaultPermissionKeys = [...dashboardPermissions.map(([key]) => key), ...allInventoryPermissionKeys];
 
 const Page = ({ children }: { children: any }) => <div className="p-4 lg:p-8">{children}</div>;
 const Err = ({ v }: { v: string }) => v ? <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{v}</div> : null;
@@ -266,7 +270,7 @@ function Actions({ user, busyAction, edit, reset, assign, setStatus, softDelete 
 function UserForm({ user, outlets, warehouses, outletsLoading, outletsError, reloadOutlets, busy, onSubmit }: { user: ManagedUser; outlets: Outlet[]; warehouses: Warehouse[]; outletsLoading: boolean; outletsError: string; reloadOutlets: () => void; busy: boolean; onSubmit: (e: FormEvent<HTMLFormElement>) => void }) {
   const selected = (user.outlets || []).map(x => x.outlet.id);
   const [role, setRole] = useState<ManagedUser['role']>(user.role || 'CASHIER');
-  const initialPermissions = user.id ? (user.inventoryPermissions || []) : (role === 'CASHIER' ? [] : allInventoryPermissionKeys);
+  const initialPermissions = user.id ? (user.inventoryPermissions || []) : (role === 'CASHIER' ? [] : allDefaultPermissionKeys);
   const [selectedPermissions, setSelectedPermissions] = useState<string[]>(initialPermissions);
   const viewEnabled = selectedPermissions.includes('inventory.view');
   function setPermission(key: string, checked: boolean) {
@@ -280,7 +284,7 @@ function UserForm({ user, outlets, warehouses, outletsLoading, outletsError, rel
   }
   function changeRole(nextRole: ManagedUser['role']) {
     setRole(nextRole);
-    if (nextRole === 'OWNER' || nextRole === 'SUPERVISOR') setSelectedPermissions(allInventoryPermissionKeys);
+    if (nextRole === 'OWNER' || nextRole === 'SUPERVISOR') setSelectedPermissions(allDefaultPermissionKeys);
     if (nextRole === 'CASHIER' && !user.id) setSelectedPermissions([]);
   }
   return <form onSubmit={onSubmit}>
@@ -303,6 +307,24 @@ function UserForm({ user, outlets, warehouses, outletsLoading, outletsError, rel
       </select>
       <p className="mt-2 text-xs text-slate-400">Opsional. Jika dipilih, kasir hanya bisa mengakses stok di warehouse ini.</p>
     </section>}
+    <section className="mt-4 rounded-2xl border p-3">
+      <b className="mb-3 block text-sm">Dashboard Permission</b>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {dashboardPermissions.map(([key, label]) => (
+          <label key={key} className="flex items-center gap-2 rounded-xl bg-brand-50 p-3 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              name="inventoryPermissions"
+              value={key}
+              checked={selectedPermissions.includes(key)}
+              onChange={e => setPermission(key, e.target.checked)}
+            />
+            {label}
+          </label>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-slate-400">User non-owner hanya melihat Dashboard sesuai outlet aktif yang diassign.</p>
+    </section>
     <section className="mt-4 rounded-2xl border p-3">
       <b className="mb-3 block text-sm">Inventory Permission</b>
       <div className="grid gap-2 sm:grid-cols-2">

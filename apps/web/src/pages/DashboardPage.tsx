@@ -9,14 +9,21 @@ const Loading = () => <div className="p-10 text-center text-slate-400">Memuat da
 export default function DashboardPage() {
   const user = JSON.parse(localStorage.getItem('user') || 'null');
   const { selectedOutletId: outletId } = useOutlet();
+  const canViewDashboard = user?.role === 'OWNER' || (user?.inventoryPermissions || []).includes('dashboard.view');
   const [mode, setMode] = useState<'outlet' | 'all'>('outlet');
   const [data, setData] = useState<any>();
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (user?.role !== 'OWNER' && mode === 'all') setMode('outlet');
+  }, [mode, user?.role]);
+
+  useEffect(() => {
+    if (!canViewDashboard) return;
     async function load() {
       try {
         setError('');
+        if (user?.role !== 'OWNER' && mode === 'all') return;
         if (mode === 'outlet' && !outletId) throw new Error('Silakan pilih outlet terlebih dahulu.');
         const url = mode === 'all' ? '/dashboard/consolidated' : `/dashboard?outletId=${outletId}`;
         setData(await api(url));
@@ -26,8 +33,9 @@ export default function DashboardPage() {
       }
     }
     load();
-  }, [mode, outletId]);
+  }, [canViewDashboard, mode, outletId]);
 
+  if (!canViewDashboard) return <Page><div className="rounded-2xl bg-red-50 p-4 text-sm font-semibold text-red-700">Anda tidak memiliki akses ke Dashboard.</div></Page>;
   if (!data && !error) return <Loading />;
   const cards = [['Omset hari ini', data?.netSales || 0, TrendingUp], ['Transaksi', data?.totalTransactions || 0, ReceiptText], ['Average ticket', data?.averageTicket || 0, Wallet], ['Gross profit', data?.grossProfit || 0, ArrowUpRight]];
   return <Page>

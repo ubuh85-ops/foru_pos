@@ -74,6 +74,7 @@ export default function InventoryPage({ user }: { user: User }) {
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [edit, setEdit] = useState<any | null>(null);
+  const [assignItem, setAssignItem] = useState<Item | null>(null);
   const [itemSubmitting, setItemSubmitting] = useState(false);
   const mode = loc.pathname.split('/')[2] || 'dashboard';
   const normalizedPath = mode === 'dashboard' ? '/inventory' : loc.pathname;
@@ -87,15 +88,17 @@ export default function InventoryPage({ user }: { user: User }) {
     setCategories(nextCategories); setUnits(nextUnits); setWarehouses(nextWarehouses);
     setOutlets(nextOutlets.filter(o => (o.status || 'ACTIVE') === 'ACTIVE'));
     const outletWarehouse = nextWarehouses.find(w => w.outletId === selectedOutletId);
-    setWarehouseId(old => old && nextWarehouses.some(w => w.id === old) ? old : outletWarehouse?.id || nextWarehouses[0]?.id || '');
+    const nextWarehouseId = warehouseId && nextWarehouses.some(w => w.id === warehouseId) ? warehouseId : outletWarehouse?.id || nextWarehouses[0]?.id || '';
+    setWarehouseId(nextWarehouseId);
+    if (nextWarehouseId) await loadItems(nextWarehouseId);
     return { categories: nextCategories, units: nextUnits, outlets: nextOutlets, warehouses: nextWarehouses };
   }
-  function loadItems() {
+  function loadItems(nextWarehouseId = warehouseId) {
     const p = new URLSearchParams();
     if (q) p.set('q', q);
     if (categoryId) p.set('category_id', categoryId);
     if (status) p.set('status', status);
-    if (warehouseId) p.set('warehouseId', warehouseId);
+    if (nextWarehouseId) p.set('warehouseId', nextWarehouseId);
     return api<Item[]>(`/inventory/items?${p}`).then(setItems);
   }
   function inventoryParams(extra?: Record<string, string>) { const p = new URLSearchParams(extra); if (warehouseId) p.set('warehouseId', warehouseId); return p.toString(); }
@@ -106,14 +109,15 @@ export default function InventoryPage({ user }: { user: User }) {
   function reload() {
     setError('');
     loadLookups().catch(e => setError(e.message));
-    loadItems().catch(e => setError(e.message));
+    if (warehouseId) loadItems().catch(e => setError(e.message));
+    else setItems([]);
     if (mode === 'dashboard') loadSummary().catch(e => setError(e.message));
     if (mode === 'history') loadHistory().catch(e => setError(e.message));
     if (mode === 'alerts') loadAlerts().catch(e => setError(e.message));
     if (mode === 'transfers') loadTransfers().catch(e => setError(e.message));
   }
   useEffect(() => { if (canAccessCurrent) reload(); }, [canAccessCurrent, mode]);
-  useEffect(() => { if (canAccessCurrent) loadItems().catch(e => setError(e.message)); }, [canAccessCurrent, q, categoryId, status, warehouseId]);
+  useEffect(() => { if (!canAccessCurrent) return; if (warehouseId) loadItems().catch(e => setError(e.message)); else setItems([]); }, [canAccessCurrent, q, categoryId, status, warehouseId]);
   useEffect(() => {
     if (!canAccessCurrent) return;
     if (mode === 'dashboard') loadSummary().catch(e => setError(e.message));
@@ -180,6 +184,19 @@ export default function InventoryPage({ user }: { user: User }) {
     if (!await appConfirm(`Hapus bahan baku ${item.name}?`, { title: 'Hapus Bahan Baku', confirmText: 'Hapus', danger: true })) return;
     try { await api(`/inventory/items/${item.id}`, { method: 'DELETE' }); reload(); toast.success('Bahan baku berhasil dihapus.'); } catch (e) { toast.error((e as Error).message); }
   }
+  async function assignWarehouses(item: Item, payload: any) {
+    try {
+      const result = await api<any>(`/inventory/items/${item.id}/assign-warehouses`, { method: 'POST', body: JSON.stringify(payload) });
+      setAssignItem(null);
+      reload();
+      const assigned = result?.assigned?.length || 0;
+      const skipped = result?.skipped?.length || 0;
+      toast.success(`Bahan berhasil diassign ke ${assigned} warehouse${skipped ? `, ${skipped} sudah ada` : ''}.`);
+    } catch (e) {
+      toast.error((e as Error).message);
+      throw e;
+    }
+  }
   async function photo(file?: File) {
     if (!file || !edit) return;
     if (!['image/jpeg', 'image/png'].includes(file.type)) return appAlert('Foto harus JPG atau PNG.', { title: 'Format foto tidak valid', tone: 'warning' });
@@ -228,7 +245,7 @@ export default function InventoryPage({ user }: { user: User }) {
     <WarehouseFilter warehouses={warehouses} warehouseId={warehouseId} setWarehouseId={setWarehouseId} />
     {mode === 'dashboard' && <Dashboard summary={summary} period={period} setPeriod={setPeriod} items={activeItems} warehouseId={warehouseId} />}
     {mode === 'warehouses' && <WarehousePage rows={warehouses} outlets={outlets} reload={reload} />}
-    {mode === 'items' && <Items items={items} categories={categories} units={units} warehouseId={warehouseId} warehouses={warehouses} q={q} setQ={setQ} categoryId={categoryId} setCategoryId={setCategoryId} status={status} setStatus={setStatus} addLookup={addLookup} setEdit={setEdit} removeItem={removeItem} canManageItems={canManageItems} />}
+    {mode === 'items' && <Items items={items} categories={categories} units={units} warehouseId={warehouseId} warehouses={warehouses} q={q} setQ={setQ} categoryId={categoryId} setCategoryId={setCategoryId} status={status} setStatus={setStatus} addLookup={addLookup} setEdit={setEdit} setAssignItem={setAssignItem} removeItem={removeItem} canManageItems={canManageItems} />}
     {mode === 'stock-in' && <StockIn items={activeItems} warehouses={warehouses} warehouseId={warehouseId} onSubmit={movement} scanForItem={scanForItem} />}
     {mode === 'stock-out' && <StockOut items={warehouseItems} warehouses={warehouses} warehouseId={warehouseId} onSubmit={movement} scanForItem={scanForItem} />}
     {mode === 'transfers' && <TransferStock items={warehouseItems} warehouses={warehouses} rows={transferRows} reload={reload} warehouseId={warehouseId} />}
@@ -238,6 +255,7 @@ export default function InventoryPage({ user }: { user: User }) {
     {mode === 'alerts' && <AlertLogs rows={alertRows} />}
     </>}
     {edit && <ItemModal item={edit} categories={categories} units={units} warehouses={warehouses} warehouseId={warehouseId} save={saveItem} submitting={itemSubmitting} close={() => setEdit(null)} photo={photo} scanSku={scanForSku} reload={reload} />}
+    {assignItem && <AssignWarehouseModal item={assignItem} warehouses={warehouses} currentWarehouseId={warehouseId} close={() => setAssignItem(null)} save={assignWarehouses} />}
   </div>;
 }
 
@@ -364,6 +382,9 @@ function Items(p: any) {
                   <button type="button" onClick={() => p.setEdit(i)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-brand-100 bg-brand-50 text-brand-700 transition hover:bg-brand-100" title="Edit bahan baku" aria-label={`Edit ${i.name}`}>
                     <Pencil size={17} />
                   </button>
+                  <button type="button" onClick={() => p.setAssignItem(i)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-brand-100 bg-white text-brand-700 transition hover:bg-brand-50" title="Assign ke warehouse" aria-label={`Assign ${i.name} ke warehouse`}>
+                    <Warehouse size={17} />
+                  </button>
                   <button type="button" onClick={() => p.removeItem(i)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-red-100 bg-red-50 text-red-600 transition hover:bg-red-100" title="Hapus bahan baku" aria-label={`Hapus ${i.name}`}>
                     <Trash2 size={17} />
                   </button>
@@ -386,7 +407,7 @@ function Items(p: any) {
         </table>
       </div>
     </div>
-    <div className="grid gap-3 lg:hidden">{p.items.map((i: Item) => <article className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5" key={i.id}><div className="flex gap-3"><Thumb item={i} /><div className="min-w-0 flex-1"><b className="block truncate">{i.name}</b><p className="text-sm text-slate-400">{i.code} Â· {i.sku || 'Tanpa barcode'} Â· {i.category?.name}</p><div className="mt-2"><LocationInfo item={i} warehouseId={p.warehouseId} /></div><div className="mt-2 flex flex-wrap gap-2"><StockBadge item={i} warehouseId={p.warehouseId} /><AlertBadge item={i} /></div></div>{p.canManageItems && <button onClick={() => p.setEdit(i)}><Pencil size={18} /></button>}</div></article>)}</div>
+    <div className="grid gap-3 lg:hidden">{p.items.map((i: Item) => <article className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5" key={i.id}><div className="flex gap-3"><Thumb item={i} /><div className="min-w-0 flex-1"><b className="block truncate">{i.name}</b><p className="text-sm text-slate-400">{i.code} Â· {i.sku || 'Tanpa barcode'} Â· {i.category?.name}</p><div className="mt-2"><LocationInfo item={i} warehouseId={p.warehouseId} /></div><div className="mt-2 flex flex-wrap gap-2"><StockBadge item={i} warehouseId={p.warehouseId} /><AlertBadge item={i} /></div></div>{p.canManageItems && <div className="flex flex-col gap-2"><button onClick={() => p.setEdit(i)}><Pencil size={18} /></button><button onClick={() => p.setAssignItem(i)}><Warehouse size={18} /></button></div>}</div></article>)}</div>
   </>;
 }
 function stockRows(item: Item, warehouseId?: string) { const rows = item.stocks || []; return warehouseId ? rows.filter(s => s.warehouseId === warehouseId) : rows; }
@@ -457,6 +478,77 @@ function StockByWarehouseSection({ item, reload }: { item: Item; reload?: () => 
       </table>
     </div>
   </section>;
+}
+
+function AssignWarehouseModal({ item, warehouses, currentWarehouseId, close, save }: { item: Item; warehouses: InvWarehouse[]; currentWarehouseId?: string; close: () => void; save: (item: Item, payload: any) => Promise<void> }) {
+  const assignedIds = useMemo(() => new Set((item.stocks || []).map(s => s.warehouseId)), [item.stocks]);
+  const targetWarehouses = warehouses.filter(w => w.status === 'ACTIVE');
+  const defaultSource = (item.stocks || []).find(s => s.warehouse?.type === 'CENTRAL')?.warehouseId || currentWarehouseId || item.stocks?.[0]?.warehouseId || '';
+  const [selected, setSelected] = useState<string[]>([]);
+  const [mode, setMode] = useState<'SOURCE' | 'ITEM' | 'ZERO' | 'MANUAL'>('SOURCE');
+  const [sourceWarehouseId, setSourceWarehouseId] = useState(defaultSource);
+  const [manualCost, setManualCost] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const toggle = (id: string) => setSelected(rows => rows.includes(id) ? rows.filter(x => x !== id) : [...rows, id]);
+  async function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (submitting || !selected.length) return;
+    setSubmitting(true);
+    try {
+      await save(item, {
+        warehouseIds: selected,
+        averageCostMode: mode,
+        sourceWarehouseId: mode === 'SOURCE' ? sourceWarehouseId || undefined : undefined,
+        averageCost: mode === 'MANUAL' ? Number(manualCost || 0) : undefined
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+  return <div data-back-modal="true" className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+    <form onSubmit={submit} className="w-full max-w-xl rounded-3xl bg-white p-5 shadow-2xl">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-2xl font-black">Assign Bahan ke Warehouse</h3>
+          <p className="text-sm font-medium text-slate-500">{item.name} akan dibuatkan stock awal 0 di warehouse yang dipilih.</p>
+        </div>
+        <button data-back-close="true" type="button" onClick={close} className="grid h-10 w-10 place-items-center rounded-2xl bg-slate-100 text-xl font-black text-slate-600">×</button>
+      </div>
+      <div className="mb-4 rounded-2xl bg-brand-50 p-3 text-sm font-semibold text-brand-800">
+        Proses ini tidak menambah stok dan tidak membuat movement. Stok akan muncul di warehouse target dengan qty 0.
+      </div>
+      <div className="max-h-64 overflow-auto rounded-2xl border">
+        {targetWarehouses.map(w => {
+          const already = assignedIds.has(w.id);
+          return <label key={w.id} className={`flex items-center gap-3 border-b px-4 py-3 ${already ? 'bg-slate-50 text-slate-400' : 'hover:bg-brand-50'}`}>
+            <input type="checkbox" checked={selected.includes(w.id)} disabled={already} onChange={() => toggle(w.id)} />
+            <span className="min-w-0 flex-1">
+              <b className="block truncate">{w.name}</b>
+              <span className="text-xs">{w.code} · {w.type}{w.outlet?.name ? ` · ${w.outlet.name}` : ''}</span>
+            </span>
+            {already && <span className="rounded-full bg-slate-200 px-2 py-1 text-xs font-bold text-slate-500">Sudah ada</span>}
+          </label>;
+        })}
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <label><span className="label">Avg Cost awal</span><select className="input" value={mode} onChange={e => setMode(e.target.value as any)}>
+          <option value="SOURCE">Copy dari warehouse sumber</option>
+          <option value="ITEM">Pakai avg cost master item</option>
+          <option value="ZERO">Set 0</option>
+          <option value="MANUAL">Isi manual</option>
+        </select></label>
+        {mode === 'SOURCE' && <label><span className="label">Warehouse sumber</span><select className="input" value={sourceWarehouseId} onChange={e => setSourceWarehouseId(e.target.value)}>
+          <option value="">Pakai avg cost master item</option>
+          {(item.stocks || []).map(s => <option key={s.warehouseId} value={s.warehouseId}>{s.warehouse?.name || s.warehouseId} · Avg {rupiah(s.averageCost)}</option>)}
+        </select></label>}
+        {mode === 'MANUAL' && <label><span className="label">Avg Cost manual</span><input className="input" inputMode="decimal" value={manualCost} onChange={e => setManualCost(e.target.value.replace(',', '.'))} placeholder="0" /></label>}
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <button type="button" onClick={close} className="btn-secondary">Batal</button>
+        <button disabled={!selected.length || submitting} className="btn-primary">{submitting ? 'Menyimpan...' : 'Assign Warehouse'}</button>
+      </div>
+    </form>
+  </div>;
 }
 
 function ItemModal({ item, categories, units, warehouses, warehouseId, save, submitting, close, photo, scanSku, reload }: any) {

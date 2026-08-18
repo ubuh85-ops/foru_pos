@@ -164,7 +164,7 @@ function receiptText(doc: any, width: number) {
 function kitchenText(doc: any, width: number) {
   const line = '-'.repeat(width);
   const lines = [
-    center('KITCHEN TICKET', width),
+    center(doc.printTitle || 'KITCHEN TICKET', width),
     center(String(customerNameOf(doc)).toUpperCase(), width),
     outletNameOf(doc),
     docNumberOf(doc),
@@ -180,7 +180,7 @@ function kitchenText(doc: any, width: number) {
 function customerItemListText(doc: any, width: number) {
   const line = '-'.repeat(width);
   const lines = [
-    center('CUSTOMER ITEM LIST', width),
+    center(doc.printTitle || 'CUSTOMER ITEM LIST', width),
     outletNameOf(doc),
     docNumberOf(doc),
     dt(doc.createdAt || new Date().toISOString()),

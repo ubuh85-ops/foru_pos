@@ -126,6 +126,9 @@ const inventoryRoutePermissions: Record<string, string> = {
 function hasInventoryPermission(user: User, permission: string) {
   return user.role === 'OWNER' || (user.inventoryPermissions || []).includes(permission);
 }
+function hasUserPermission(user: User, permission: string) {
+  return user.role === 'OWNER' || (user.inventoryPermissions || []).includes(permission);
+}
 function canSeeInventoryPath(user: User, path: string) {
   if (!path.startsWith('/inventory')) return true;
   if (!hasInventoryPermission(user, 'inventory.view')) return false;
@@ -134,6 +137,7 @@ function canSeeInventoryPath(user: User, path: string) {
 
 function canSeePath(user: User, path: string) {
   if (!knownRoutes.has(path)) return false;
+  if (path === '/dashboard') return hasUserPermission(user, 'dashboard.view');
   if (!canSeeInventoryPath(user, path)) return false;
   return user.role === 'OWNER' || !['/coupons', '/outlets', '/categories', '/variant-groups', '/printers', '/users', '/reports'].includes(path);
 }

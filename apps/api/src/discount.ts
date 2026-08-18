@@ -1,9 +1,10 @@
-import type { Coupon, CouponCategory, CouponOutlet, CouponProduct } from '@prisma/client';
+import type { Coupon, CouponCategory, CouponOutlet, CouponProduct, PaymentMethod } from '@prisma/client';
 import { ApiError, money, prisma } from './lib.js';
 
 export type DiscountInput={type?:'NOMINAL'|'PERCENTAGE';value?:number};
 export type CartLine={productId:string;variantId?:string;selectedVariantOptionIds?:string[];qty:number;discount?:DiscountInput;addonIds?:string[];itemNote?:string};
-export type PricedLine={outletId:string;productId:string;variantId?:string;productName:string;variantName:string;category:string;qty:number;unitPrice:number;hpp:number;gross:number;discountType?:'NOMINAL'|'PERCENTAGE';discountValue?:number;discountAmount:number;net:number;itemNote?:string;addons:{id:string;name:string;price:number;hpp:number}[];selectedVariants:{groupId:string;groupName:string;optionId:string;optionName:string;additionalPrice:number;hpp:number}[];basePrice:number;outletPrice?:number;variantPriceTotal:number;baseHpp:number;outletHpp?:number;variantHppTotal:number};
+export type PriceChannel=Extract<PaymentMethod,'GOFOOD'|'GRABFOOD'|'SHOPEEFOOD'>|'DINE_IN'|'TAKE_AWAY';
+export type PricedLine={outletId:string;productId:string;variantId?:string;productName:string;variantName:string;category:string;qty:number;unitPrice:number;hpp:number;gross:number;discountType?:'NOMINAL'|'PERCENTAGE';discountValue?:number;discountAmount:number;net:number;itemNote?:string;addons:{id:string;name:string;price:number;hpp:number}[];selectedVariants:{groupId:string;groupName:string;optionId:string;optionName:string;additionalPrice:number;hpp:number}[];basePrice:number;outletPrice?:number;channel?:PaymentMethod;dineInPriceSnapshot:number;channelPriceSnapshot?:number;priceSource:'BASE'|'OUTLET'|'CHANNEL';baseMarginPercent:number;actualMarginPercent:number;variantPriceTotal:number;baseHpp:number;outletHpp?:number;variantHppTotal:number};
 type LoadedCoupon=Coupon&{outlets:CouponOutlet[];products:CouponProduct[];categories:CouponCategory[]};
 
 export function discountAmount(base:number,input?:DiscountInput){
@@ -12,8 +13,16 @@ export function discountAmount(base:number,input?:DiscountInput){
   if(input.type==='PERCENTAGE'&&input.value>100) throw new ApiError(400,'Diskon persentase maksimal 100%');
   return money(Math.min(base,input.type==='PERCENTAGE'?base*input.value/100:input.value));
 }
-export async function priceCart(items:CartLine[],outletId:string):Promise<PricedLine[]>{
+const ONLINE_CHANNELS=['GOFOOD','GRABFOOD','SHOPEEFOOD'] as const;
+function normalizedChannel(channel?:string|null):PaymentMethod|undefined{
+  const upper=String(channel||'').trim().toUpperCase();
+  return (ONLINE_CHANNELS as readonly string[]).includes(upper) ? upper as PaymentMethod : undefined;
+}
+function percentMargin(price:number,hpp:number){return price>0?money((price-hpp)/price*100):0;}
+
+export async function priceCart(items:CartLine[],outletId:string,channel?:string|null):Promise<PricedLine[]>{
   if(!items.length) throw new ApiError(400,'Cart masih kosong');
+  const onlineChannel=normalizedChannel(channel);
   return Promise.all(items.map(async line=>{
     if(!Number.isInteger(line.qty)||line.qty<1) throw new ApiError(400,'Qty produk tidak valid');
     const itemNote=line.itemNote?.trim();
@@ -24,6 +33,7 @@ export async function priceCart(items:CartLine[],outletId:string):Promise<Priced
         categoryRef:true,
         addons:true,
         outlets:{where:{outletId}},
+        channelPrices:onlineChannel?{where:{outletId,channel:onlineChannel,status:'ACTIVE'}}:false,
         variants:{where:{status:'ACTIVE'},orderBy:{variantName:'asc'}},
         variantGroups:{
           orderBy:{sortOrder:'asc'},
@@ -61,11 +71,15 @@ export async function priceCart(items:CartLine[],outletId:string):Promise<Priced
     }
     const variantPriceTotal=selectedVariants.reduce((s,v)=>s+v.additionalPrice,0);
     const variantHppTotal=selectedVariants.reduce((s,v)=>s+v.hpp,0);
-    const effectiveBasePrice=outletPrice??basePrice, effectiveBaseHpp=outletHpp??baseHpp;
+    const dineInPrice=outletPrice??basePrice;
+    const channelPrice=onlineChannel?Number((product as any).channelPrices?.[0]?.price??NaN):NaN;
+    const hasChannelPrice=Number.isFinite(channelPrice);
+    const effectiveBasePrice=hasChannelPrice?channelPrice:dineInPrice, effectiveBaseHpp=outletHpp??baseHpp;
+    const priceSource=hasChannelPrice?'CHANNEL':(outletPrice!==undefined?'OUTLET':'BASE');
     const unit=effectiveBasePrice+variantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0);
     const hpp=effectiveBaseHpp+variantHppTotal+selectedAddons.reduce((s,a)=>s+Number(a.hpp),0);
     const gross=money(unit*line.qty), disc=discountAmount(gross,line.discount);
-    return {outletId,productId:line.productId,variantId,productName:product.name,variantName,category:product.categoryRef?.name||product.category,qty:line.qty,unitPrice:money(unit),hpp:money(hpp),gross,discountType:line.discount?.type,discountValue:line.discount?.value,discountAmount:disc,net:money(gross-disc),itemNote:itemNote||undefined,addons:selectedAddons.map(a=>({id:a.id,name:a.addonName,price:Number(a.price),hpp:Number(a.hpp)})),selectedVariants,basePrice:money(basePrice),outletPrice:outletPrice===undefined?undefined:money(outletPrice),variantPriceTotal:money(variantPriceTotal),baseHpp:money(baseHpp),outletHpp:outletHpp===undefined?undefined:money(outletHpp),variantHppTotal:money(variantHppTotal)};
+    return {outletId,productId:line.productId,variantId,productName:product.name,variantName,category:product.categoryRef?.name||product.category,qty:line.qty,unitPrice:money(unit),hpp:money(hpp),gross,discountType:line.discount?.type,discountValue:line.discount?.value,discountAmount:disc,net:money(gross-disc),itemNote:itemNote||undefined,addons:selectedAddons.map(a=>({id:a.id,name:a.addonName,price:Number(a.price),hpp:Number(a.hpp)})),selectedVariants,basePrice:money(basePrice),outletPrice:outletPrice===undefined?undefined:money(outletPrice),channel:onlineChannel,dineInPriceSnapshot:money(dineInPrice+variantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)),channelPriceSnapshot:hasChannelPrice?money(channelPrice+variantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)):undefined,priceSource,baseMarginPercent:percentMargin(dineInPrice+variantPriceTotal, hpp),actualMarginPercent:percentMargin(unit,hpp),variantPriceTotal:money(variantPriceTotal),baseHpp:money(baseHpp),outletHpp:outletHpp===undefined?undefined:money(outletHpp),variantHppTotal:money(variantHppTotal)};
   }));
 }
 export async function validateCoupon(code:string,outletId:string,lines:PricedLine[],customerKey?:string){

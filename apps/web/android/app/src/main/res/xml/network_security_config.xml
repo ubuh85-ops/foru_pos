@@ -4,7 +4,7 @@
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">192.168.1.24</domain>
 
-        <domain includeSubdomains="true">103.253.244.190</domain>
+        <domain includeSubdomains="true">168.110.201.2</domain>
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">10.0.2.2</domain>
     </domain-config>

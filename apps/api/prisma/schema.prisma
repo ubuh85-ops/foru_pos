@@ -56,6 +56,7 @@ model Outlet {
   couponUsages   CouponUsage[]
   expenses        Expense[]
   products       ProductOutlet[]
+  productChannelPrices ProductChannelPrice[]
   printers       Printer[]
   printerLogs    PrinterLog[]
   sales          Sale[]
@@ -99,6 +100,7 @@ model Product {
   couponProducts CouponProduct[]
   addons         ProductAddon[]
   outlets        ProductOutlet[]
+  channelPrices  ProductChannelPrice[]
   variantGroups  ProductVariantGroup[]
   variants       ProductVariant[]
   saleItems      SaleItem[]
@@ -224,6 +226,23 @@ model ProductOutlet {
 
   @@unique([productId, outletId])
   @@map("product_outlets")
+}
+
+model ProductChannelPrice {
+  id              String         @id @default(cuid())
+  productId       String         @map("product_id")
+  outletId        String         @map("outlet_id")
+  channel         PaymentMethod
+  price           Decimal        @db.Decimal(14, 2)
+  status          Status         @default(ACTIVE)
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+  product         Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  outlet          Outlet         @relation(fields: [outletId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, outletId, channel])
+  @@index([outletId, channel])
+  @@map("product_channel_prices")
 }
 
 model ProductRecipe {
@@ -426,6 +445,12 @@ model SaleItem {
   selectedVariantsJson  Json?           @map("selected_variants_json")
   basePrice             Decimal         @default(0) @map("base_price") @db.Decimal(14, 2)
   outletPrice           Decimal?        @map("outlet_price") @db.Decimal(14, 2)
+  channel               PaymentMethod?  @map("channel")
+  dineInPriceSnapshot   Decimal?        @map("dine_in_price_snapshot") @db.Decimal(14, 2)
+  channelPriceSnapshot  Decimal?        @map("channel_price_snapshot") @db.Decimal(14, 2)
+  priceSource           String?         @map("price_source")
+  baseMarginPercent     Decimal?        @map("base_margin_percent_snapshot") @db.Decimal(8, 2)
+  actualMarginPercent   Decimal?        @map("actual_margin_percent") @db.Decimal(8, 2)
   variantPriceTotal     Decimal         @default(0) @map("variant_price_total") @db.Decimal(14, 2)
   finalUnitPrice        Decimal         @default(0) @map("final_unit_price") @db.Decimal(14, 2)
   baseHpp               Decimal         @default(0) @map("base_hpp") @db.Decimal(14, 2)

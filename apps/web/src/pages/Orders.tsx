@@ -13,7 +13,7 @@ const Err = ({ v }: { v: string }) => v ? <div className="mb-4 rounded-xl bg-red
 const Empty = () => <div className="p-10 text-center text-sm text-slate-400">Belum ada data pada periode ini.</div>;
 const statusMeta = (status: string) => {
   if (status === 'PAID') return { label: 'PAID', cls: 'bg-emerald-50 text-emerald-700', icon: Check };
-  if (status === 'PENDING_PAYMENT') return { label: 'PENDING PAYMENT', cls: 'bg-amber-50 text-amber-700', icon: Clock3 };
+  if (status === 'PENDING_PAYMENT') return { label: 'OPEN BILL', cls: 'bg-amber-50 text-amber-700', icon: Clock3 };
   if (status === 'CANCELLED') return { label: 'CANCELLED', cls: 'bg-slate-100 text-slate-600', icon: X };
   if (status === 'VOID') return { label: 'Void', cls: 'bg-red-50 text-red-700', icon: X };
   return { label: status, cls: 'bg-slate-100 text-slate-600', icon: Clock3 };
@@ -43,7 +43,8 @@ const datePresetRange = (preset: string) => {
 };
 const zeroSummary = { totalOrders: 0, paidOrders: 0, pendingOrders: 0, cancelledOrders: 0, totalItemsSold: 0, totalNominal: 0, topSellingProduct: null as null | { productId: string; productName: string; qty: number; nominal: number } };
 const moneyNumber = (value: any) => Number(value || 0);
-const paidLabel = (status: string) => status === 'PAID' ? 'Lunas' : status === 'PENDING_PAYMENT' ? 'Pending' : status === 'CANCELLED' ? 'Batal' : status;
+const paidLabel = (status: string) => status === 'PAID' ? 'Lunas' : status === 'PENDING_PAYMENT' ? 'Open Bill' : status === 'CANCELLED' ? 'Batal' : status;
+const statusLabel = (status: string) => status === 'PENDING_PAYMENT' ? 'OPEN BILL' : status.replace('_', ' ');
 const compactDate = (value: string) => {
   const d = new Date(value);
   return `${d.getDate()}-${d.getMonth() + 1}-${d.getFullYear()} ${new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).format(d)}`;
@@ -164,7 +165,7 @@ export function Orders() {
       <div className="mb-2 flex items-start justify-between gap-3">
         <div>
           <h2 className="text-3xl font-black tracking-tight text-ink lg:text-3xl">Orders</h2>
-          <p className="mt-1 text-sm leading-relaxed text-slate-500">Pending order, paid, cancelled, dan void.</p>
+          <p className="mt-1 text-sm leading-relaxed text-slate-500">Open bill, paid, cancelled, dan void.</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <button onClick={() => navigate('/pos')} className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-black text-brand-700 shadow-sm ring-1 ring-brand-100 hover:bg-brand-50">
@@ -193,7 +194,7 @@ export function Orders() {
         <div className="min-w-0"><p className="text-xs font-black leading-tight text-slate-500">Penjualan Terbanyak</p><p className="mt-1 line-clamp-2 break-words text-sm leading-snug text-slate-800">{summary.topSellingProduct ? `${summary.topSellingProduct.productName} ${summary.topSellingProduct.qty}x` : '-'}</p></div>
       </div>
       <div className="mt-1.5 flex gap-2 overflow-x-auto pb-1">
-        {tabs.map(t => <button key={t} onClick={() => setStatus(t)} className={`min-w-fit whitespace-nowrap rounded-full px-4 py-2 text-[11px] font-black shadow-sm transition sm:px-5 sm:text-xs ${status === t ? 'bg-ink text-white shadow-ink/15' : 'bg-white text-slate-500 ring-1 ring-slate-100'}`}>{t.replace('_', ' ')}</button>)}
+        {tabs.map(t => <button key={t} onClick={() => setStatus(t)} className={`min-w-fit whitespace-nowrap rounded-full px-4 py-2 text-[11px] font-black shadow-sm transition sm:px-5 sm:text-xs ${status === t ? 'bg-ink text-white shadow-ink/15' : 'bg-white text-slate-500 ring-1 ring-slate-100'}`}>{statusLabel(t)}</button>)}
       </div>
     </div>
     <Err v={error} />
@@ -338,7 +339,7 @@ export function OrderDetail() {
         <div className="mt-5 space-y-1 border-t pt-4 text-right"><p>Product discount: {rupiah(order.productDiscountTotal)}</p><p>Transaction discount: {rupiah(order.transactionDiscountAmount)}</p><p>Coupon discount: {rupiah(order.couponDiscountAmount)}</p><p className="text-sm text-slate-400">Total</p><b className="text-2xl text-brand-700">{rupiah(order.grandTotal)}</b></div>
       </div>
       <div className="card p-5"><h3 className="section-title mb-4">Actions</h3>
-        {order.status === 'PENDING_PAYMENT' && <button onClick={() => navigate(`/pos?editOrderId=${order.id}`)} className="btn-primary mb-2 w-full">Edit Order</button>}
+        {order.status === 'PENDING_PAYMENT' && <button onClick={() => navigate(`/pos?editOrderId=${order.id}`)} className="btn-primary mb-2 w-full">Edit Open Bill</button>}
         {order.status === 'PENDING_PAYMENT' && <button onClick={() => print('customer-item-list')} className="btn-soft mb-2 w-full">Customer Item List</button>}
         <button onClick={() => print('kitchen-ticket')} className="btn-soft mb-2 w-full">Kitchen Ticket</button>
         {order.status === 'PAID' && <button onClick={() => print('customer-receipt')} className="btn-soft mb-2 w-full">Print Receipt</button>}

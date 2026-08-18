@@ -14,6 +14,7 @@ type Group = { id: string; name: string; minSelect: number; maxSelect: number; r
 type Variant = { id: string; variantName: string; sellingPrice: number };
 type Product = { id: string; name: string; category: string; categoryRef?: { name: string }; basePrice: number; baseHpp: number; imageUrl?: string; variants: Variant[]; variantGroups: { group: Group }[] };
 type Line = { key: string; productId: string; variantId?: string; selectedVariantOptionIds?: string[]; name: string; variant: string; price: number; qty: number; itemNote?: string; discount?: { type: 'NOMINAL' | 'PERCENTAGE'; value: number } };
+type CartQtySnapshot = Record<string, number>;
 type PosDialog =
   | { kind: 'confirm'; tone?: ForuDialogTone; title: string; description?: string; detail?: string; cancelText?: string; confirmText?: string; resolve: (value: boolean) => void }
   | { kind: 'text'; title: string; description?: string; label: string; defaultValue?: string; placeholder?: string; resolve: (value: string | null) => void }
@@ -22,6 +23,14 @@ type PosDialog =
 const calcDisc = (base: number, d?: Line['discount']) => !d ? 0 : Math.min(base, d.type === 'PERCENTAGE' ? base * d.value / 100 : d.value);
 const catName = (p: Product) => p.categoryRef?.name || p.category;
 const searchKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+const orderChannels = ['DINE_IN', 'TAKE_AWAY', 'GOFOOD', 'GRABFOOD', 'SHOPEEFOOD'];
+const normalizeOrderType = (value: string | null | undefined) => orderChannels.includes(String(value || '').toUpperCase()) ? String(value).toUpperCase() : 'DINE_IN';
+const normalizedLineKey = (x: Pick<Line, 'productId' | 'variantId' | 'selectedVariantOptionIds'>) => `${x.productId}:${x.variantId || 'base'}:${[...(x.selectedVariantOptionIds || [])].sort().join('|')}`;
+const cartQtySnapshot = (lines: Line[]) => lines.reduce<CartQtySnapshot>((acc, line) => {
+  const key = normalizedLineKey(line);
+  acc[key] = (acc[key] || 0) + line.qty;
+  return acc;
+}, {});
 
 export default function POS() {
   const [params] = useSearchParams();
@@ -43,10 +52,11 @@ export default function POS() {
   const [couponMsg, setCouponMsg] = useState('');
   const [trxDisc, setTrxDisc] = useState<Line['discount']>();
   const [customerName, setCustomerName] = useState('');
-  const [orderType, setOrderType] = useState(localStorage.getItem('foru:pos_order_type') || 'DINE_IN');
+  const [orderType, setOrderType] = useState(normalizeOrderType(localStorage.getItem('foru:pos_order_type')));
   const [tableNumber, setTableNumber] = useState('');
   const [orderNote, setOrderNote] = useState('');
   const [editingOrder, setEditingOrder] = useState<any>(null);
+  const [editingOrderSnapshot, setEditingOrderSnapshot] = useState<CartQtySnapshot>({});
   const [payOpen, setPayOpen] = useState(false);
   const [receipt, setReceipt] = useState<any>(null);
   const [activeShift, setActiveShift] = useState<any>(null);
@@ -74,7 +84,7 @@ export default function POS() {
   async function loadProductsForOutlet(outletId = outlet) {
     if (!outletId) return;
     try {
-      const next = await api<Product[]>(`/pos/products?outlet_id=${outletId}&_=${Date.now()}`);
+      const next = await api<Product[]>(`/pos/products?outlet_id=${outletId}&channel=${encodeURIComponent(orderType)}&_=${Date.now()}`);
       setProducts(next);
       setConfig(current => current ? next.find(p => p.id === current.id) || current : current);
       setError('');
@@ -113,9 +123,9 @@ export default function POS() {
       window.removeEventListener('pageshow', refreshWhenActive);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
-  }, [outlet]);
-  useEffect(() => { if (outlet) { loadProductsForOutlet(outlet); refreshActiveShift(); setCouponDiscount(0); } }, [outlet]);
-  useEffect(() => subscribeMasterDataChanged(() => { if (!outlet) return; loadProductsForOutlet(outlet); }), [outlet]);
+  }, [outlet, orderType]);
+  useEffect(() => { if (outlet) { loadProductsForOutlet(outlet); refreshActiveShift(); setCouponDiscount(0); } }, [outlet, orderType]);
+  useEffect(() => subscribeMasterDataChanged(() => { if (!outlet) return; loadProductsForOutlet(outlet); }), [outlet, orderType]);
   useEffect(() => { setPage(1); }, [q, cat, pageSize]);
   useEffect(() => {
     if (!outlet || editOrderId) return;
@@ -125,7 +135,7 @@ export default function POS() {
       const draft = JSON.parse(raw);
       setCart(draft.cart || []);
       setCustomerName(draft.customerName || '');
-      setOrderType(draft.orderType || 'DINE_IN');
+      setOrderType(normalizeOrderType(draft.orderType));
       setTableNumber(draft.tableNumber || '');
       setOrderNote(draft.orderNote || '');
     } catch {}
@@ -145,7 +155,7 @@ export default function POS() {
       setCoupon(order.couponCode || '');
       setCouponDiscount(Number(order.couponDiscountAmount || 0));
       setTrxDisc(Number(order.transactionDiscountAmount || 0) > 0 ? { type: 'NOMINAL', value: Number(order.transactionDiscountAmount) } : undefined);
-      setCart((order.items || []).map((i: any) => {
+      const nextCart = (order.items || []).map((i: any) => {
         const selectedVariants = Array.isArray(i.selectedVariantsJson) ? i.selectedVariantsJson : [];
         return {
           key: `${i.productId}:${i.productVariantId || selectedVariants.map((x: any) => x.optionId).join('|')}:${i.id}`,
@@ -159,7 +169,9 @@ export default function POS() {
           itemNote: i.itemNote || '',
           discount: i.discountType ? { type: i.discountType, value: Number(i.discountValue || 0) } : undefined
         } as Line;
-      }));
+      });
+      setCart(nextCart);
+      setEditingOrderSnapshot(cartQtySnapshot(nextCart));
     }).catch(e => setError((e as Error).message));
   }, [editOrderId, setSelectedOutletId]);
   useEffect(() => {
@@ -219,6 +231,25 @@ export default function POS() {
         toast.error(`${label} gagal dicetak: ${(e as Error).message}`);
       }
     }
+  }
+
+  function additionalOrderDoc(order: any) {
+    const items = cart.flatMap(line => {
+      const addedQty = line.qty - (editingOrderSnapshot[normalizedLineKey(line)] || 0);
+      if (addedQty <= 0) return [];
+      return [{
+        productId: line.productId,
+        productName: line.name,
+        variantName: line.variant,
+        selectedVariantsJson: (line.selectedVariantOptionIds || []).map(optionId => ({ optionId })),
+        itemNote: line.itemNote,
+        qty: addedQty,
+        sellingPrice: line.price,
+        finalUnitPrice: line.price,
+        subtotalAfterDiscount: line.price * addedQty
+      }];
+    });
+    return items.length ? { ...order, items, grandTotal: items.reduce((sum: number, item: any) => sum + Number(item.subtotalAfterDiscount || 0), 0), printTitle: 'Tambahan Open Bill' } : null;
   }
 
   function changeMenuView(view: 'grid' | 'list') { setMenuView(view); localStorage.setItem('foru:pos_menu_view', view); }
@@ -287,19 +318,33 @@ export default function POS() {
     });
     if (discount) setTrxDisc(discount);
   }
-  async function applyCoupon() { try { const r = await api<any>('/coupons/validate', { method: 'POST', body: JSON.stringify({ couponCode: coupon, outletId: outlet, items: cart.map(itemPayload) }) }); setCouponDiscount(r.discountAmount); setCouponMsg(`${r.coupon.name} diterapkan`); } catch (e) { setCouponDiscount(0); setCouponMsg((e as Error).message); } }
+  async function applyCoupon() { try { const r = await api<any>('/coupons/validate', { method: 'POST', body: JSON.stringify({ couponCode: coupon, outletId: outlet, orderType, items: cart.map(itemPayload) }) }); setCouponDiscount(r.discountAmount); setCouponMsg(`${r.coupon.name} diterapkan`); } catch (e) { setCouponDiscount(0); setCouponMsg((e as Error).message); } }
   const orderPayload = (active?: any) => ({ outletId: outlet, cashSessionId: active?.id, customerName, orderType, tableNumber, orderNote, items: cart.map(itemPayload), transactionDiscount: trxDisc, couponCode: couponDiscount ? coupon : undefined });
   function resetCart() { setCart([]); setCoupon(''); setCouponDiscount(0); setTrxDisc(undefined); setCustomerName(''); setTableNumber(''); setOrderNote(''); }
   async function saveOrder() {
     if (orderSubmitting) return;
+    if (!customerName.trim() || customerName.trim().toLowerCase() === 'walk in') {
+      const msg = 'Nama customer wajib diisi untuk Open Bill.';
+      setError(msg);
+      toast.error(msg);
+      return;
+    }
     setOrderSubmitting(true);
     try {
       const active = await refreshActiveShift();
       if (editingOrder) {
+        const additionalDoc = additionalOrderDoc(editingOrder);
         const result = await api(`/orders/${editingOrder.id}`, { method: 'PUT', body: JSON.stringify(orderPayload(active)) });
         toast.success('Data berhasil disimpan.');
-        await runAutoPrint(result, 'pending-order');
-        navigate(`/orders/${(result as any).id}`);
+        setEditingOrder(result);
+        setEditingOrderSnapshot(cartQtySnapshot(cart));
+        if (additionalDoc) {
+          const printable = { ...(result as any), items: additionalDoc.items, grandTotal: additionalDoc.grandTotal, printTitle: additionalDoc.printTitle };
+          setReceipt(printable);
+          await runAutoPrint(printable, 'pending-order');
+        } else {
+          navigate(`/orders/${(result as any).id}`);
+        }
         return;
       }
       const result = await api('/orders', { method: 'POST', body: JSON.stringify(orderPayload(active)) });
@@ -487,7 +532,9 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
               <select className="input h-10 w-full rounded-2xl text-xs" value={orderType} onChange={e => setOrderType(e.target.value)}>
                 <option value="DINE_IN">Dine In</option>
                 <option value="TAKE_AWAY">Take Away</option>
-                <option value="DELIVERY">Delivery</option>
+                <option value="GOFOOD">GoFood</option>
+                <option value="GRABFOOD">GrabFood</option>
+                <option value="SHOPEEFOOD">ShopeeFood</option>
               </select>
             </div>
           </div>
@@ -509,11 +556,11 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
         <div className="space-y-1.5 text-sm"><Row label={`Subtotal (${cart.reduce((s, x) => s + x.qty, 0)} item)`} n={summary.subtotal} /><Row label="Diskon Item" n={-summary.productDiscount} /><Row label="Diskon Transaksi" n={-summary.transactionDiscount} /><Row label="Diskon Kupon" n={-couponDiscount} /><Row label="PPN (0%)" n={0} /></div>
         <div className="mt-3 flex items-end justify-between border-t pt-3"><b className="text-2xl text-ink md:text-xl">Total</b><strong className="money text-3xl text-brand-700 md:text-2xl">{rupiah(summary.grand)}</strong></div>
         <div className="mt-4 grid grid-cols-2 gap-3 md:mt-3">
-          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={saveOrder} className="h-14 rounded-2xl border border-brand-600 bg-white px-3 text-sm font-black text-brand-700 disabled:opacity-40 md:h-12">{orderSubmitting ? 'Menyimpan...' : editingOrder ? 'Update Order' : 'Simpan Draft'}</button>
+          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={saveOrder} className="h-14 rounded-2xl border border-brand-600 bg-white px-3 text-sm font-black text-brand-700 disabled:opacity-40 md:h-12">{orderSubmitting ? 'Menyimpan...' : editingOrder ? 'Update Open Bill' : 'Simpan Open Bill'}</button>
           <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={() => setPayOpen(true)} className="btn-primary h-14 rounded-2xl text-sm font-black md:h-12 md:text-base">Bayar</button>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2">
-          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={saveOrder} className="rounded-2xl border px-2 py-3 text-xs font-extrabold text-slate-600 disabled:opacity-40">{orderSubmitting ? 'Menyimpan...' : 'Hold Order'}</button>
+          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={saveOrder} className="rounded-2xl border px-2 py-3 text-xs font-extrabold text-slate-600 disabled:opacity-40">{orderSubmitting ? 'Menyimpan...' : 'Open Bill'}</button>
           <button disabled={!cart.length} onClick={clearCart} className="rounded-2xl border px-2 py-3 text-xs font-extrabold text-red-600 disabled:opacity-40">Clear Cart</button>
         </div>
         {editingOrder && <button onClick={() => navigate(`/orders/${editingOrder.id}`)} className="mt-2 w-full rounded-2xl border px-4 py-3 text-sm font-extrabold text-slate-500">Cancel Edit</button>}
@@ -628,7 +675,7 @@ function Receipt({ sale, close }: { sale: any; close: () => void }) {
   }
   return <div data-back-modal="true" className="fixed inset-0 z-[70] grid place-items-center bg-ink/80 p-3">
     <div className="max-h-[86vh] w-[min(92vw,26rem)] rounded-[1.75rem] bg-white p-3 text-center shadow-2xl">
-      <h2 className="text-base font-black leading-tight">{paid ? 'Transaksi berhasil!' : 'Order tersimpan!'}</h2>
+      <h2 className="text-base font-black leading-tight">{sale.printTitle || (paid ? 'Transaksi berhasil!' : 'Open Bill tersimpan!')}</h2>
       <p className="mx-auto mt-0.5 max-w-full truncate text-[11px] font-semibold leading-tight text-slate-400">{paid ? sale.transactionNumber : sale.orderNumber} - {sale.customerName || 'Walk In'}</p>
       <div className="my-2 flex min-h-[52px] items-center justify-between gap-3 rounded-2xl bg-slate-50 px-3 py-2 text-left">
         <p className="text-xs font-bold text-slate-400">{paid ? 'Total' : 'Total sementara'}</p>
