@@ -32,12 +32,68 @@ model User {
   createdStockTransfers StockTransfer[] @relation("StockTransferCreatedBy")
   completedStockTransfers StockTransfer[] @relation("StockTransferCompletedBy")
   assignedWarehouse InventoryWarehouse? @relation(fields: [assignedWarehouseId], references: [id], onDelete: SetNull)
+  memberships BusinessMembership[]
 
   @@map("users")
 }
 
+model Business {
+  id        String         @id @default(cuid())
+  code      String         @unique
+  name      String
+  legalName String?        @map("legal_name")
+  logoUrl   String?        @map("logo_url")
+  phone     String?
+  email     String?
+  address   String?
+  status    BusinessStatus @default(ACTIVE)
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+
+  memberships BusinessMembership[]
+  outlets     Outlet[]
+  products    Product[]
+  categories  Category[]
+  variantGroups VariantGroup[]
+  sales       Sale[]
+  cashSessions CashSession[]
+  printers    Printer[]
+  printerLogs PrinterLog[]
+  auditLogs   AuditLog[]
+  expenses    Expense[]
+  expenseCategories ExpenseCategory[]
+  inventoryCategories InventoryCategory[]
+  inventoryUnits InventoryUnit[]
+  inventoryItems InventoryItem[]
+  inventoryWarehouses InventoryWarehouse[]
+  inventoryMovements InventoryMovement[]
+  stockTransfers StockTransfer[]
+  coupons Coupon[]
+
+  @@map("businesses")
+}
+
+model BusinessMembership {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  userId     String   @map("user_id")
+  role       Role
+  status     Status   @default(ACTIVE)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, userId])
+  @@index([userId])
+  @@index([businessId])
+  @@map("business_memberships")
+}
+
 model Outlet {
   id             String                @id @default(cuid())
+  businessId     String?               @map("business_id")
   code           String                @unique
   name           String
   address        String?
@@ -65,7 +121,9 @@ model Outlet {
   variantOptions VariantOptionOutlet[]
   warehouses      InventoryWarehouse[]
   defaultInventoryWarehouse InventoryWarehouse? @relation("OutletDefaultInventoryWarehouse", fields: [inventoryWarehouseId], references: [id], onDelete: SetNull)
+  business       Business?             @relation(fields: [businessId], references: [id])
 
+  @@index([businessId])
   @@map("outlets")
 }
 
@@ -85,6 +143,7 @@ model UserOutlet {
 
 model Product {
   id             String                @id @default(cuid())
+  businessId     String?               @map("business_id")
   sku            String?               @unique
   name           String
   category       String
@@ -106,12 +165,15 @@ model Product {
   saleItems      SaleItem[]
   recipes        ProductRecipe[]
   inventoryMovements InventoryMovement[]
+  business       Business?             @relation(fields: [businessId], references: [id])
 
+  @@index([businessId])
   @@map("products")
 }
 
 model Category {
   id          String    @id @default(cuid())
+  businessId  String?   @map("business_id")
   name        String    @unique
   description String?
   sortOrder   Int       @default(0) @map("sort_order")
@@ -119,12 +181,15 @@ model Category {
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
   products    Product[]
+  business    Business? @relation(fields: [businessId], references: [id])
 
+  @@index([businessId])
   @@map("categories")
 }
 
 model VariantGroup {
   id          String                @id @default(cuid())
+  businessId  String?               @map("business_id")
   name        String
   description String?
   minSelect   Int                   @default(0) @map("min_select")
@@ -135,7 +200,9 @@ model VariantGroup {
   updatedAt   DateTime              @updatedAt @map("updated_at")
   options     VariantOption[]
   products    ProductVariantGroup[]
+  business    Business?             @relation(fields: [businessId], references: [id])
 
+  @@index([businessId])
   @@map("variant_groups")
 }
 
@@ -289,6 +356,7 @@ model BundleItem {
 
 model CashSession {
   id                String        @id @default(cuid())
+  businessId         String?       @map("business_id")
   outletId          String        @map("outlet_id")
   cashierId         String        @map("cashier_id")
   closedByUserId    String?       @map("closed_by_user_id")
@@ -305,12 +373,15 @@ model CashSession {
   expenses          Expense[]
   sales             Sale[]
   printerLogs       PrinterLog[]
+  business          Business?     @relation(fields: [businessId], references: [id])
 
+  @@index([businessId, outletId, openedAt])
   @@map("cash_sessions")
 }
 
 model Sale {
   id                        String        @id @default(cuid())
+  businessId                String?       @map("business_id")
   orderNumber               String?       @unique @map("order_number")
   transactionNumber         String?       @unique @map("transaction_number")
   outletId                  String        @map("outlet_id")
@@ -345,13 +416,16 @@ model Sale {
   cashSession               CashSession?  @relation(fields: [cashSessionId], references: [id])
   cashier                   User          @relation(fields: [cashierId], references: [id])
   outlet                    Outlet        @relation(fields: [outletId], references: [id])
+  business                  Business?     @relation(fields: [businessId], references: [id])
 
+  @@index([businessId, outletId, createdAt])
   @@index([outletId, createdAt])
   @@map("sales")
 }
 
 model Printer {
   id                String         @id @default(cuid())
+  businessId         String?        @map("business_id")
   outletId          String         @map("outlet_id")
   printerName       String         @map("printer_name")
   printerType       PrinterType    @default(THERMAL) @map("printer_type")
@@ -369,12 +443,15 @@ model Printer {
   updatedAt         DateTime       @updatedAt @map("updated_at")
   outlet            Outlet         @relation(fields: [outletId], references: [id], onDelete: Cascade)
   logs              PrinterLog[]
+  business          Business?      @relation(fields: [businessId], references: [id])
 
+  @@index([businessId, outletId])
   @@map("printers")
 }
 
 model PrinterLog {
   id           String      @id @default(cuid())
+  businessId   String?     @map("business_id")
   outletId     String      @map("outlet_id")
   saleId       String?     @map("sale_id")
   cashSessionId String?    @map("cash_session_id")
@@ -389,7 +466,9 @@ model PrinterLog {
   sale         Sale?       @relation(fields: [saleId], references: [id], onDelete: Cascade)
   cashSession  CashSession? @relation(fields: [cashSessionId], references: [id], onDelete: Cascade)
   user         User        @relation(fields: [printedBy], references: [id])
+  business     Business?   @relation(fields: [businessId], references: [id])
 
+  @@index([businessId, printedAt])
   @@index([saleId, printType])
   @@index([cashSessionId, printType])
   @@map("printer_logs")
@@ -397,6 +476,7 @@ model PrinterLog {
 
 model AuditLog {
   id         String   @id @default(cuid())
+  businessId String?  @map("business_id")
   entityType String   @map("entity_type")
   entityId   String   @map("entity_id")
   action     String
@@ -405,7 +485,9 @@ model AuditLog {
   changedBy  String   @map("changed_by")
   changedAt  DateTime @default(now()) @map("changed_at")
   user       User     @relation(fields: [changedBy], references: [id])
+  business   Business? @relation(fields: [businessId], references: [id])
 
+  @@index([businessId, changedAt])
   @@index([entityType, entityId])
   @@map("audit_logs")
 }
@@ -482,6 +564,7 @@ model SaleItemAddon {
 
 model Expense {
   id              String           @id @default(cuid())
+  businessId      String?          @map("business_id")
   outletId        String           @map("outlet_id")
   cashSessionId   String           @map("cash_session_id")
   cashierId       String           @map("cashier_id")
@@ -498,13 +581,16 @@ model Expense {
   cashSession     CashSession      @relation(fields: [cashSessionId], references: [id])
   categoryRef     ExpenseCategory? @relation(fields: [categoryId], references: [id])
   cashier         User             @relation(fields: [cashierId], references: [id])
+  business        Business?        @relation(fields: [businessId], references: [id])
   outlet          Outlet           @relation(fields: [outletId], references: [id])
 
+  @@index([businessId, outletId])
   @@map("expenses")
 }
 
 model ExpenseCategory {
   id          String    @id @default(cuid())
+  businessId  String?   @map("business_id")
   name        String    @unique
   description String?
   status      Status    @default(ACTIVE)
@@ -512,24 +598,30 @@ model ExpenseCategory {
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
   expenses    Expense[]
+  business    Business? @relation(fields: [businessId], references: [id])
 
+  @@index([businessId])
   @@map("expense_categories")
 }
 
 model InventoryCategory {
   id          String          @id @default(cuid())
+  businessId  String?         @map("business_id")
   name        String          @unique
   status      Status          @default(ACTIVE)
   sortOrder   Int             @default(0) @map("sort_order")
   createdAt   DateTime        @default(now()) @map("created_at")
   updatedAt   DateTime        @updatedAt @map("updated_at")
   items       InventoryItem[]
+  business    Business?       @relation(fields: [businessId], references: [id])
 
+  @@index([businessId])
   @@map("inventory_categories")
 }
 
 model InventoryUnit {
   id        String          @id @default(cuid())
+  businessId String?        @map("business_id")
   name      String          @unique
   status    Status          @default(ACTIVE)
   sortOrder Int             @default(0) @map("sort_order")
@@ -539,12 +631,15 @@ model InventoryUnit {
   productRecipes ProductRecipe[]
   fromUnitConversions InventoryUnitConversion[] @relation("InventoryUnitConversionFrom")
   toUnitConversions   InventoryUnitConversion[] @relation("InventoryUnitConversionTo")
+  business  Business?       @relation(fields: [businessId], references: [id])
 
+  @@index([businessId])
   @@map("inventory_units")
 }
 
 model InventoryItem {
   id           String              @id @default(cuid())
+  businessId   String?             @map("business_id")
   code         String              @unique
   sku          String?             @unique
   barcode      String?             @unique
@@ -573,7 +668,9 @@ model InventoryItem {
   transferItems StockTransferItem[]
   productRecipes ProductRecipe[]
   unitConversions InventoryUnitConversion[]
+  business     Business?           @relation(fields: [businessId], references: [id])
 
+  @@index([businessId])
   @@index([name])
   @@index([sku])
   @@index([barcode])
@@ -601,6 +698,7 @@ model InventoryUnitConversion {
 
 model InventoryWarehouse {
   id          String              @id @default(cuid())
+  businessId  String?             @map("business_id")
   code        String              @unique
   name        String
   type        InventoryWarehouseType @default(CENTRAL)
@@ -618,7 +716,9 @@ model InventoryWarehouse {
   transferFrom StockTransfer[]    @relation("StockTransferFromWarehouse")
   transferTo   StockTransfer[]    @relation("StockTransferToWarehouse")
   assignedUsers User[]
+  business    Business?           @relation(fields: [businessId], references: [id])
 
+  @@index([businessId])
   @@map("inventory_warehouses")
 }
 
@@ -661,6 +761,7 @@ model InventoryAlertLog {
 
 model InventoryMovement {
   id              String                @id @default(cuid())
+  businessId       String?               @map("business_id")
   movementNumber  String?               @unique @map("movement_number")
   warehouseId     String?               @map("warehouse_id")
   inventoryItemId String                @map("inventory_item_id")
@@ -683,7 +784,9 @@ model InventoryMovement {
   product         Product?              @relation(fields: [productId], references: [id], onDelete: SetNull)
   orderItem       SaleItem?             @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
   user            User                  @relation(fields: [createdBy], references: [id])
+  business        Business?             @relation(fields: [businessId], references: [id])
 
+  @@index([businessId, createdAt])
   @@index([inventoryItemId, createdAt])
   @@index([warehouseId, createdAt])
   @@index([productId, createdAt])
@@ -694,6 +797,7 @@ model InventoryMovement {
 
 model StockTransfer {
   id              String              @id @default(cuid())
+  businessId       String?             @map("business_id")
   transferNumber  String              @unique @map("transfer_number")
   fromWarehouseId String              @map("from_warehouse_id")
   toWarehouseId   String              @map("to_warehouse_id")
@@ -708,7 +812,9 @@ model StockTransfer {
   creator         User                @relation("StockTransferCreatedBy", fields: [createdBy], references: [id])
   completer       User?               @relation("StockTransferCompletedBy", fields: [completedBy], references: [id], onDelete: SetNull)
   items           StockTransferItem[]
+  business        Business?           @relation(fields: [businessId], references: [id])
 
+  @@index([businessId, createdAt])
   @@index([fromWarehouseId, createdAt])
   @@index([toWarehouseId, createdAt])
   @@map("stock_transfers")
@@ -728,6 +834,7 @@ model StockTransferItem {
 
 model Coupon {
   id                       String           @id @default(cuid())
+  businessId               String?          @map("business_id")
   couponCode               String           @unique @map("coupon_code")
   couponName               String           @map("coupon_name")
   discountType             DiscountType     @map("discount_type")
@@ -746,7 +853,9 @@ model Coupon {
   outlets                  CouponOutlet[]
   products                 CouponProduct[]
   usages                   CouponUsage[]
+  business                 Business?        @relation(fields: [businessId], references: [id])
 
+  @@index([businessId])
   @@map("coupons")
 }
 
@@ -801,6 +910,12 @@ enum Role {
   OWNER
   SUPERVISOR
   CASHIER
+}
+
+enum BusinessStatus {
+  ACTIVE
+  SUSPENDED
+  INACTIVE
 }
 
 enum Status {

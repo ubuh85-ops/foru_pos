@@ -19,6 +19,25 @@ export const INVENTORY_PERMISSIONS = [
 ] as const;
 export const DEFAULT_USER_PERMISSIONS = [DASHBOARD_PERMISSION, ...INVENTORY_PERMISSIONS] as const;
 export const defaultInventoryPermissions=(role:Role)=>role==='OWNER'||role==='SUPERVISOR'?[...DEFAULT_USER_PERMISSIONS]:[];
+export const FORU_BUSINESS_CODE = 'FORU';
+export async function defaultBusinessForUser(userId:string, preferredBusinessId?:string){
+  const membership = await prisma.businessMembership.findFirst({
+    where:{
+      userId,
+      status:'ACTIVE',
+      ...(preferredBusinessId ? { businessId: preferredBusinessId } : {})
+    },
+    include:{business:true},
+    orderBy:{createdAt:'asc'}
+  });
+  if(membership?.business?.status==='ACTIVE') return membership;
+  if(preferredBusinessId) return null;
+  return prisma.businessMembership.findFirst({
+    where:{userId,status:'ACTIVE',business:{status:'ACTIVE'}},
+    include:{business:true},
+    orderBy:{createdAt:'asc'}
+  });
+}
 export async function auth(req:Request,res:Response,next:NextFunction){
   const token=req.headers.authorization?.replace(/^Bearer /,'');
   if(!token) return res.status(401).json({message:'Silakan login terlebih dahulu'});
@@ -26,10 +45,13 @@ export async function auth(req:Request,res:Response,next:NextFunction){
     const decoded=jwt.verify(token,process.env.JWT_SECRET||'dev-secret') as any;
     const user=await prisma.user.findUnique({where:{id:decoded.id},include:{outlets:true}});
     if(!user||user.status!=='ACTIVE') return res.status(401).json({message:'Sesi tidak valid atau telah berakhir'});
-    const outletIds=user.role==='OWNER'
-      ? (await prisma.outlet.findMany({where:{status:'ACTIVE'},select:{id:true}})).map(x=>x.id)
+    const membership=await defaultBusinessForUser(user.id,decoded.businessId);
+    if(!membership) return res.status(401).json({message:'Akses bisnis tidak ditemukan'});
+    const role=membership.role;
+    const outletIds=role==='OWNER'
+      ? (await prisma.outlet.findMany({where:{status:'ACTIVE',OR:[{businessId:membership.businessId},{businessId:null}]},select:{id:true}})).map(x=>x.id)
       : user.outlets.filter(x=>x.status==='ACTIVE').map(x=>x.outletId);
-    req.user={id:user.id,role:user.role,outletIds,inventoryPermissions:user.inventoryPermissions.length?user.inventoryPermissions:defaultInventoryPermissions(user.role),assignedWarehouseId:user.assignedWarehouseId};
+    req.user={id:user.id,businessId:membership.businessId,membershipId:membership.id,role,outletIds,inventoryPermissions:user.inventoryPermissions.length?user.inventoryPermissions:defaultInventoryPermissions(role),assignedWarehouseId:user.assignedWarehouseId};
     next();
   }
   catch { res.status(401).json({message:'Sesi tidak valid atau telah berakhir'}); }
