@@ -20,7 +20,7 @@ function normalizedChannel(channel?:string|null):PaymentMethod|undefined{
 }
 function percentMargin(price:number,hpp:number){return price>0?money((price-hpp)/price*100):0;}
 
-export async function priceCart(items:CartLine[],outletId:string,channel?:string|null):Promise<PricedLine[]>{
+export async function priceCart(items:CartLine[],outletId:string,channel?:string|null,businessId?:string):Promise<PricedLine[]>{
   if(!items.length) throw new ApiError(400,'Cart masih kosong');
   const onlineChannel=normalizedChannel(channel);
   return Promise.all(items.map(async line=>{
@@ -28,7 +28,7 @@ export async function priceCart(items:CartLine[],outletId:string,channel?:string
     const itemNote=line.itemNote?.trim();
     if(itemNote&&itemNote.length>255) throw new ApiError(400,'Catatan item maksimal 255 karakter');
     const product=await prisma.product.findFirst({
-      where:{id:line.productId,status:'ACTIVE',outlets:{some:{outletId,isAvailable:true,isActive:true,status:'ACTIVE'}}},
+      where:{AND:[businessId?{OR:[{businessId},{businessId:null}]}:{}, {id:line.productId,status:'ACTIVE',outlets:{some:{outletId,isAvailable:true,isActive:true,status:'ACTIVE'}}}]},
       include:{
         categoryRef:true,
         addons:true,
@@ -82,8 +82,8 @@ export async function priceCart(items:CartLine[],outletId:string,channel?:string
     return {outletId,productId:line.productId,variantId,productName:product.name,variantName,category:product.categoryRef?.name||product.category,qty:line.qty,unitPrice:money(unit),hpp:money(hpp),gross,discountType:line.discount?.type,discountValue:line.discount?.value,discountAmount:disc,net:money(gross-disc),itemNote:itemNote||undefined,addons:selectedAddons.map(a=>({id:a.id,name:a.addonName,price:Number(a.price),hpp:Number(a.hpp)})),selectedVariants,basePrice:money(basePrice),outletPrice:outletPrice===undefined?undefined:money(outletPrice),channel:onlineChannel,dineInPriceSnapshot:money(dineInPrice+variantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)),channelPriceSnapshot:hasChannelPrice?money(channelPrice+variantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)):undefined,priceSource,baseMarginPercent:percentMargin(dineInPrice+variantPriceTotal, hpp),actualMarginPercent:percentMargin(unit,hpp),variantPriceTotal:money(variantPriceTotal),baseHpp:money(baseHpp),outletHpp:outletHpp===undefined?undefined:money(outletHpp),variantHppTotal:money(variantHppTotal)};
   }));
 }
-export async function validateCoupon(code:string,outletId:string,lines:PricedLine[],customerKey?:string){
-  const coupon=await prisma.coupon.findUnique({where:{couponCode:code.trim().toUpperCase()},include:{outlets:true,products:true,categories:true}}) as LoadedCoupon|null;
+export async function validateCoupon(code:string,outletId:string,lines:PricedLine[],customerKey?:string,businessId?:string){
+  const coupon=await prisma.coupon.findFirst({where:{AND:[businessId?{OR:[{businessId},{businessId:null}]}:{},{couponCode:code.trim().toUpperCase()}]},include:{outlets:true,products:true,categories:true}}) as LoadedCoupon|null;
   if(!coupon) throw new ApiError(404,'Kode kupon tidak ditemukan');
   const now=new Date();
   if(coupon.status!=='ACTIVE') throw new ApiError(400,'Kupon tidak aktif');

@@ -9,6 +9,7 @@
     "test": "vitest run",
     "prisma": "prisma",
     "seed:products": "tsx prisma/seed-products-only.ts",
+    "seed:test-tenant": "tsx prisma/seed-test-tenant.ts",
     "recipe:template": "tsx prisma/create-product-recipe-template.ts",
     "recipe:import": "tsx prisma/import-product-recipes.ts",
     "recipe:category-template": "tsx prisma/create-product-recipe-category-template.ts",

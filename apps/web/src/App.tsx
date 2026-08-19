@@ -83,6 +83,10 @@ const bottomNav: NavItem[] = [
   ['/shift', 'Shift', Clock3]
 ];
 
+function businessIdOf(user: Partial<User> | null | undefined) {
+  return user?.business?.id || user?.businessId || user?.membership?.businessId || '';
+}
+
 const knownRoutes = new Set([
   '/pos',
   '/orders',
@@ -221,7 +225,29 @@ export default function App() {
     if (!localStorage.getItem('token')) return;
     const refreshUser = () => api<any>('/auth/me').then(me => {
       if (!me) return;
-      const next: User = { id: me.id, name: me.name, role: me.role, outletIds: me.outletIds || [], inventoryPermissions: me.inventoryPermissions || [] };
+      const next: User = {
+        id: me.id,
+        name: me.name,
+        role: me.role,
+        outletIds: me.outletIds || [],
+        inventoryPermissions: me.inventoryPermissions || [],
+        assignedWarehouseId: me.assignedWarehouseId || null,
+        businessId: me.business?.id || me.businessId || me.membership?.businessId,
+        business: me.business,
+        membership: me.membership
+      };
+      const previousBusinessId = localStorage.getItem('foru:business_id') || '';
+      const nextBusinessId = businessIdOf(next);
+      if (previousBusinessId && nextBusinessId && previousBusinessId !== nextBusinessId) {
+        localStorage.removeItem('outletId');
+        localStorage.setItem('foru:must_select_outlet', '1');
+      }
+      if (nextBusinessId) localStorage.setItem('foru:business_id', nextBusinessId);
+      const currentOutletId = localStorage.getItem('outletId') || '';
+      if (currentOutletId && !next.outletIds.includes(currentOutletId)) {
+        localStorage.removeItem('outletId');
+        localStorage.setItem('foru:must_select_outlet', '1');
+      }
       localStorage.setItem('user', JSON.stringify(next));
       setUser(next);
     }).catch(() => {});

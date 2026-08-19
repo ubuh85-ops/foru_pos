@@ -2,6 +2,10 @@ import { FormEvent, useState } from 'react';
 import { ArrowRight, LockKeyhole } from 'lucide-react';
 import { api, type User } from '../api';
 
+function businessIdOf(user: User) {
+  return user.business?.id || user.businessId || user.membership?.businessId || '';
+}
+
 export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -17,10 +21,22 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
         method: 'POST',
         body: JSON.stringify(Object.fromEntries(fd))
       });
+      const nextBusinessId = businessIdOf(r.user);
+      const previousBusinessId = localStorage.getItem('foru:business_id') || '';
+      if (previousBusinessId && nextBusinessId && previousBusinessId !== nextBusinessId) {
+        localStorage.removeItem('outletId');
+      }
+      if (nextBusinessId) localStorage.setItem('foru:business_id', nextBusinessId);
+      const currentOutletId = localStorage.getItem('outletId') || '';
+      if (!r.user.outletIds.includes(currentOutletId)) localStorage.removeItem('outletId');
+      if (r.user.outletIds.length === 1) {
+        localStorage.setItem('outletId', r.user.outletIds[0]);
+        localStorage.removeItem('foru:must_select_outlet');
+      } else {
+        localStorage.setItem('foru:must_select_outlet', '1');
+      }
       localStorage.setItem('token', r.token);
       localStorage.setItem('user', JSON.stringify(r.user));
-      localStorage.setItem('foru:must_select_outlet', '1');
-      if (!r.user.outletIds.includes(localStorage.getItem('outletId') || '')) localStorage.removeItem('outletId');
       onLogin(r.user);
     } catch (e) {
       setError((e as Error).message);

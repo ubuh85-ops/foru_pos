@@ -28,9 +28,14 @@ function userAllowedOutlets(user: User, rows: Outlet[]) {
   return rows.filter(outlet => allowed.has(outlet.id));
 }
 
+function businessIdOf(user: User) {
+  return user.business?.id || user.businessId || user.membership?.businessId || '';
+}
+
 export function OutletProvider({ user, children }: { user: User; children: ReactNode }) {
   const [outletList, setOutletList] = useState<Outlet[]>([]);
   const [selectedOutletIdState, setSelectedOutletIdState] = useState(() => localStorage.getItem('outletId') || '');
+  const businessId = businessIdOf(user);
 
   const setSelectedOutletId = useCallback((outletId: string) => {
     setSelectedOutletIdState(outletId);
@@ -44,20 +49,35 @@ export function OutletProvider({ user, children }: { user: User; children: React
   }, []);
 
   const refreshOutlets = useCallback(async () => {
+    const storedBusinessId = localStorage.getItem('foru:business_id') || '';
+    if (businessId && storedBusinessId && storedBusinessId !== businessId) {
+      localStorage.setItem('foru:business_id', businessId);
+      localStorage.removeItem('outletId');
+      localStorage.setItem('foru:must_select_outlet', '1');
+      setSelectedOutletIdState('');
+    } else if (businessId && !storedBusinessId) {
+      localStorage.setItem('foru:business_id', businessId);
+    }
+
     const rows = await api<Outlet[]>('/outlets');
     const allowed = userAllowedOutlets(user, rows);
     setOutletList(allowed);
 
     const stored = localStorage.getItem('outletId') || '';
     const current = selectedOutletIdState;
-    const next =
-      allowed.find(outlet => outlet.id === current)?.id ||
-      allowed.find(outlet => outlet.id === stored)?.id ||
-      allowed[0]?.id ||
-      '';
+    const mustSelectOutlet = localStorage.getItem('foru:must_select_outlet') === '1';
+    const currentIsValid = !!allowed.find(outlet => outlet.id === current);
+    const storedIsValid = !!allowed.find(outlet => outlet.id === stored);
+    const next = currentIsValid
+      ? current
+      : storedIsValid && !mustSelectOutlet
+        ? stored
+        : !mustSelectOutlet && allowed.length === 1
+          ? allowed[0].id
+          : '';
 
     if (next !== current) setSelectedOutletId(next);
-  }, [selectedOutletIdState, setSelectedOutletId, user]);
+  }, [businessId, selectedOutletIdState, setSelectedOutletId, user]);
 
   useEffect(() => {
     refreshOutlets().catch(() => setOutletList([]));

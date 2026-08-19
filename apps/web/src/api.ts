@@ -14,6 +14,7 @@ export function clearAuthSession() {
   localStorage.removeItem('token');
   localStorage.removeItem('user');
   localStorage.removeItem('outletId');
+  localStorage.removeItem('foru:business_id');
   localStorage.removeItem('foru:must_select_outlet');
 }
 
@@ -24,10 +25,24 @@ export function handleUnauthorizedSession(message = 'Sesi tidak valid atau telah
 
 export type User = {
   id: string;
+  businessId?: string;
+  business?: {
+    id: string;
+    name: string;
+    code?: string;
+    status?: string;
+  };
+  membership?: {
+    id: string;
+    businessId: string;
+    role: 'OWNER' | 'SUPERVISOR' | 'CASHIER';
+    status: string;
+  };
   name: string;
   role: 'OWNER' | 'SUPERVISOR' | 'CASHIER';
   outletIds: string[];
   inventoryPermissions?: string[];
+  assignedWarehouseId?: string | null;
 };
 
 export async function api<T = any>(path: string, options: RequestInit = {}) {
