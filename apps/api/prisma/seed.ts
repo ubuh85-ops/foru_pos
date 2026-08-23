@@ -2,20 +2,20 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 const db=new PrismaClient();
 async function main(){
-  const [lrt,huis]=await Promise.all([
-    db.outlet.upsert({where:{code:'LRT'},update:{},create:{code:'LRT',name:'FORU LRT'}}),
-    db.outlet.upsert({where:{code:'HUIS'},update:{},create:{code:'HUIS',name:'FORU HUIS'}})
-  ]);
+  const business=await db.business.upsert({where:{code:'FORU'},update:{name:'FORU',status:'ACTIVE'},create:{code:'FORU',name:'FORU',status:'ACTIVE'}});
+  const lrt=await db.outlet.upsert({where:{businessId_code:{businessId:business.id,code:'LRT'}},update:{name:'FORU LRT',status:'ACTIVE'},create:{businessId:business.id,code:'LRT',name:'FORU LRT',status:'ACTIVE'}});
+  const huis=await db.outlet.upsert({where:{businessId_code:{businessId:business.id,code:'HUIS'}},update:{name:'FORU HUIS',status:'ACTIVE'},create:{businessId:business.id,code:'HUIS',name:'FORU HUIS',status:'ACTIVE'}});
   const owner=await db.user.upsert({where:{username:'owner'},update:{},create:{name:'Owner FORU',username:'owner',passwordHash:await bcrypt.hash('owner123',10),role:'OWNER'}});
   const cashier=await db.user.upsert({where:{username:'kasir'},update:{},create:{name:'Kasir FORU',username:'kasir',passwordHash:await bcrypt.hash('kasir123',10),role:'CASHIER'}});
   const lrtCashier=await db.user.upsert({where:{username:'ltrkasir'},update:{name:'Kasir LRT',passwordHash:await bcrypt.hash('lrtkasir',10),role:'CASHIER'},create:{name:'Kasir LRT',username:'ltrkasir',passwordHash:await bcrypt.hash('lrtkasir',10),role:'CASHIER'}});
+  for(const user of [{row:owner,role:'OWNER' as const},{row:cashier,role:'CASHIER' as const},{row:lrtCashier,role:'CASHIER' as const}])await db.businessMembership.upsert({where:{businessId_userId:{businessId:business.id,userId:user.row.id}},update:{role:user.role,status:'ACTIVE'},create:{businessId:business.id,userId:user.row.id,role:user.role,status:'ACTIVE'}});
   for(const outlet of [lrt,huis])await db.userOutlet.upsert({where:{userId_outletId:{userId:owner.id,outletId:outlet.id}},update:{},create:{userId:owner.id,outletId:outlet.id}});
   await db.userOutlet.upsert({where:{userId_outletId:{userId:cashier.id,outletId:lrt.id}},update:{},create:{userId:cashier.id,outletId:lrt.id}});
   await db.userOutlet.upsert({where:{userId_outletId:{userId:lrtCashier.id,outletId:lrt.id}},update:{},create:{userId:lrtCashier.id,outletId:lrt.id}});
-  const spicy=await db.variantGroup.upsert({where:{id:'vg_level_pedas'},update:{},create:{id:'vg_level_pedas',name:'Level Pedas',required:true,minSelect:1,maxSelect:1,options:{create:[{name:'Original',sortOrder:1},{name:'Spicy',sortOrder:2},{name:'Extra Spicy',additionalPrice:1000,hpp:200,sortOrder:3}]}}});
-  const topping=await db.variantGroup.upsert({where:{id:'vg_topping'},update:{},create:{id:'vg_topping',name:'Topping',required:false,minSelect:0,maxSelect:3,options:{create:[{name:'Extra Chicken',additionalPrice:8000,hpp:4000,sortOrder:1},{name:'Extra Cheese',additionalPrice:3000,hpp:1200,sortOrder:2},{name:'Extra Sauce',additionalPrice:2000,hpp:600,sortOrder:3}]}}});
-  const size=await db.variantGroup.upsert({where:{id:'vg_size'},update:{},create:{id:'vg_size',name:'Size',required:true,minSelect:1,maxSelect:1,options:{create:[{name:'Regular',sortOrder:1},{name:'Large',additionalPrice:2000,hpp:500,sortOrder:2},{name:'Jumbo',additionalPrice:5000,hpp:1200,sortOrder:3}]}}});
-  const temp=await db.variantGroup.upsert({where:{id:'vg_temperature'},update:{},create:{id:'vg_temperature',name:'Temperature',required:true,minSelect:1,maxSelect:1,options:{create:[{name:'Ice',sortOrder:1},{name:'Hot',sortOrder:2}]}}});
+  const spicy=await db.variantGroup.upsert({where:{id:'vg_level_pedas'},update:{businessId:business.id},create:{id:'vg_level_pedas',businessId:business.id,name:'Level Pedas',required:true,minSelect:1,maxSelect:1,options:{create:[{name:'Original',sortOrder:1},{name:'Spicy',sortOrder:2},{name:'Extra Spicy',additionalPrice:1000,hpp:200,sortOrder:3}]}}});
+  const topping=await db.variantGroup.upsert({where:{id:'vg_topping'},update:{businessId:business.id},create:{id:'vg_topping',businessId:business.id,name:'Topping',required:false,minSelect:0,maxSelect:3,options:{create:[{name:'Extra Chicken',additionalPrice:8000,hpp:4000,sortOrder:1},{name:'Extra Cheese',additionalPrice:3000,hpp:1200,sortOrder:2},{name:'Extra Sauce',additionalPrice:2000,hpp:600,sortOrder:3}]}}});
+  const size=await db.variantGroup.upsert({where:{id:'vg_size'},update:{businessId:business.id},create:{id:'vg_size',businessId:business.id,name:'Size',required:true,minSelect:1,maxSelect:1,options:{create:[{name:'Regular',sortOrder:1},{name:'Large',additionalPrice:2000,hpp:500,sortOrder:2},{name:'Jumbo',additionalPrice:5000,hpp:1200,sortOrder:3}]}}});
+  const temp=await db.variantGroup.upsert({where:{id:'vg_temperature'},update:{businessId:business.id},create:{id:'vg_temperature',businessId:business.id,name:'Temperature',required:true,minSelect:1,maxSelect:1,options:{create:[{name:'Ice',sortOrder:1},{name:'Hot',sortOrder:2}]}}});
   const _defaultVariantGroups=[spicy.id,topping.id,size.id,temp.id];
   void _defaultVariantGroups;
   const productSeeds=[
@@ -72,23 +72,23 @@ async function main(){
   ];
   const categoryByName=new Map<string,{id:string;name:string}>();
   for(const categoryName of Array.from(new Set(productSeeds.map((p)=>p.categoryName)))){
-    const category=await db.category.upsert({where:{name:categoryName},update:{status:'ACTIVE'},create:{name:categoryName,sortOrder:categoryByName.size+1,status:'ACTIVE'}});
+    const category=await db.category.upsert({where:{businessId_name:{businessId:business.id,name:categoryName}},update:{status:'ACTIVE'},create:{businessId:business.id,name:categoryName,sortOrder:categoryByName.size+1,status:'ACTIVE'}});
     categoryByName.set(categoryName,{id:category.id,name:category.name});
   }
   for(const p of productSeeds){
     const category=categoryByName.get(p.categoryName);
     if(!category)throw new Error(`Category not found for product ${p.name}`);
-    let product=await db.product.findFirst({where:{name:p.name}});
+    let product=await db.product.findFirst({where:{businessId:business.id,name:p.name}});
     const productData={name:p.name,category:category.name,categoryId:category.id,basePrice:p.basePrice,baseHpp:p.baseHpp,description:`Satuan: ${p.unit}`,status:'ACTIVE' as const};
-    if(!product)product=await db.product.create({data:{...productData,variants:{create:{variantName:'Base',sellingPrice:p.basePrice,hpp:p.baseHpp,status:'ACTIVE'}}}});
+    if(!product)product=await db.product.create({data:{businessId:business.id,...productData,variants:{create:{variantName:'Base',sellingPrice:p.basePrice,hpp:p.baseHpp,status:'ACTIVE'}}}});
     else product=await db.product.update({where:{id:product.id},data:productData});
     const baseVariant=await db.productVariant.findFirst({where:{productId:product.id,variantName:'Base'}});
     if(baseVariant)await db.productVariant.update({where:{id:baseVariant.id},data:{sellingPrice:p.basePrice,hpp:p.baseHpp,status:'ACTIVE'}});
     else await db.productVariant.create({data:{productId:product.id,variantName:'Base',sellingPrice:p.basePrice,hpp:p.baseHpp,status:'ACTIVE'}});
     for(const outlet of [lrt,huis])await db.productOutlet.upsert({where:{productId_outletId:{productId:product.id,outletId:outlet.id}},update:{isAvailable:true,isActive:true,status:'ACTIVE',outletPrice:null,outletHpp:null},create:{productId:product.id,outletId:outlet.id,isAvailable:true,isActive:true,status:'ACTIVE',outletPrice:null,outletHpp:null}});
   }
-  for(const outlet of [lrt,huis]){const existing=await db.printer.findFirst({where:{outletId:outlet.id,printerName:'Browser Print'}});if(existing)await db.printer.update({where:{id:existing.id},data:{connectionType:'BROWSER',paperSize:'MM58',isCustomerReceipt:true,isKitchenPrinter:true,status:'ACTIVE'}});else await db.printer.create({data:{outletId:outlet.id,printerName:'Browser Print',printerType:'THERMAL',connectionType:'BROWSER',paperSize:'MM58',isCustomerReceipt:true,isKitchenPrinter:true,status:'ACTIVE'}});}
-  await db.coupon.upsert({where:{couponCode:'FORUHEMAT'},update:{},create:{couponCode:'FORUHEMAT',couponName:'Hemat 10%',discountType:'PERCENTAGE',discountValue:10,maxDiscountAmount:10000,minimumTransactionAmount:50000,startDate:new Date('2026-01-01T00:00:00+07:00'),endDate:new Date('2027-12-31T23:59:59+07:00'),usageLimit:1000,status:'ACTIVE'}});
+  for(const outlet of [lrt,huis]){const existing=await db.printer.findFirst({where:{businessId:business.id,outletId:outlet.id,printerName:'Browser Print'}});if(existing)await db.printer.update({where:{id:existing.id},data:{connectionType:'BROWSER',paperSize:'MM58',isCustomerReceipt:true,isKitchenPrinter:true,status:'ACTIVE'}});else await db.printer.create({data:{businessId:business.id,outletId:outlet.id,printerName:'Browser Print',printerType:'THERMAL',connectionType:'BROWSER',paperSize:'MM58',isCustomerReceipt:true,isKitchenPrinter:true,status:'ACTIVE'}});}
+  await db.coupon.upsert({where:{businessId_couponCode:{businessId:business.id,couponCode:'FORUHEMAT'}},update:{},create:{businessId:business.id,couponCode:'FORUHEMAT',couponName:'Hemat 10%',discountType:'PERCENTAGE',discountValue:10,maxDiscountAmount:10000,minimumTransactionAmount:50000,startDate:new Date('2026-01-01T00:00:00+07:00'),endDate:new Date('2027-12-31T23:59:59+07:00'),usageLimit:1000,status:'ACTIVE'}});
   console.log({owner:owner.username,cashier:cashier.username,lrtCashier:lrtCashier.username,outlets:[lrt.code,huis.code]});
 }
 main().finally(()=>db.$disconnect());

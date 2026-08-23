@@ -56,8 +56,13 @@ const productSeeds = [
 ];
 
 async function main() {
+  const business = await db.business.upsert({
+    where: { code: 'FORU' },
+    update: { name: 'FORU', status: 'ACTIVE' },
+    create: { code: 'FORU', name: 'FORU', status: 'ACTIVE' },
+  });
   const outlets = await db.outlet.findMany({
-    where: { code: { in: ['LRT', 'HUIS'] } },
+    where: { businessId: business.id, code: { in: ['LRT', 'HUIS'] } },
     select: { id: true, code: true },
   });
 
@@ -69,9 +74,9 @@ async function main() {
 
   for (const categoryName of Array.from(new Set(productSeeds.map((product) => product.categoryName)))) {
     const category = await db.category.upsert({
-      where: { name: categoryName },
+      where: { businessId_name: { businessId: business.id, name: categoryName } },
       update: { status: 'ACTIVE' },
-      create: { name: categoryName, sortOrder: categoryByName.size + 1, status: 'ACTIVE' },
+      create: { businessId: business.id, name: categoryName, sortOrder: categoryByName.size + 1, status: 'ACTIVE' },
     });
     categoryByName.set(categoryName, { id: category.id, name: category.name });
   }
@@ -83,7 +88,7 @@ async function main() {
     const category = categoryByName.get(seed.categoryName);
     if (!category) throw new Error(`Category not found for product ${seed.name}`);
 
-    const existingProduct = await db.product.findFirst({ where: { name: seed.name } });
+    const existingProduct = await db.product.findFirst({ where: { businessId: business.id, name: seed.name } });
     const productData = {
       name: seed.name,
       category: category.name,
@@ -98,6 +103,7 @@ async function main() {
       ? await db.product.update({ where: { id: existingProduct.id }, data: productData })
       : await db.product.create({
           data: {
+            businessId: business.id,
             ...productData,
             variants: {
               create: {

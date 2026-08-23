@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { CalendarDays, Check, Clock3, CreditCard, Eye, Filter, MoreHorizontal, Package, Pencil, Printer, ReceiptText, ShoppingCart, UserRound, WalletCards, X, XCircle } from 'lucide-react';
+import { CalendarDays, Check, Clock3, CreditCard, Eye, Filter, LayoutGrid, List, MessageCircle, MoreHorizontal, Package, Pencil, Printer, ReceiptText, ShoppingCart, UserRound, WalletCards, X, XCircle } from 'lucide-react';
 import { api, dt, rupiah } from '../api';
 import { printWithBluetoothFallback } from '../printer';
 import { useOutlet } from '../OutletContext';
@@ -13,6 +13,7 @@ const Err = ({ v }: { v: string }) => v ? <div className="mb-4 rounded-xl bg-red
 const Empty = () => <div className="p-10 text-center text-sm text-slate-400">Belum ada data pada periode ini.</div>;
 const statusMeta = (status: string) => {
   if (status === 'PAID') return { label: 'PAID', cls: 'bg-emerald-50 text-emerald-700', icon: Check };
+  if (status === 'OPEN_ORDER') return { label: 'OPEN ORDER', cls: 'bg-amber-50 text-amber-700', icon: Clock3 };
   if (status === 'PENDING_PAYMENT') return { label: 'OPEN BILL', cls: 'bg-amber-50 text-amber-700', icon: Clock3 };
   if (status === 'CANCELLED') return { label: 'CANCELLED', cls: 'bg-slate-100 text-slate-600', icon: X };
   if (status === 'VOID') return { label: 'Void', cls: 'bg-red-50 text-red-700', icon: X };
@@ -43,18 +44,70 @@ const datePresetRange = (preset: string) => {
 };
 const zeroSummary = { totalOrders: 0, paidOrders: 0, pendingOrders: 0, cancelledOrders: 0, totalItemsSold: 0, totalNominal: 0, topSellingProduct: null as null | { productId: string; productName: string; qty: number; nominal: number } };
 const moneyNumber = (value: any) => Number(value || 0);
-const paidLabel = (status: string) => status === 'PAID' ? 'Lunas' : status === 'PENDING_PAYMENT' ? 'Open Bill' : status === 'CANCELLED' ? 'Batal' : status;
-const statusLabel = (status: string) => status === 'PENDING_PAYMENT' ? 'OPEN BILL' : status.replace('_', ' ');
+const paidLabel = (status: string) => status === 'PAID' ? 'Lunas' : status === 'OPEN_ORDER' ? 'Menunggu' : status === 'PENDING_PAYMENT' ? 'Open Bill' : status === 'CANCELLED' ? 'Batal' : status;
+const statusLabel = (status: string) => status === 'OPEN_ORDER' ? 'OPEN ORDER' : status === 'PENDING_PAYMENT' ? 'OPEN BILL' : status.replace('_', ' ');
 const compactDate = (value: string) => {
   const d = new Date(value);
   return `${d.getDate()}-${d.getMonth() + 1}-${d.getFullYear()} ${new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).format(d)}`;
 };
+const normalizeWhatsappPhone = (value?: string | null) => {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('0')) return `62${digits.slice(1)}`;
+  if (digits.startsWith('62')) return digits;
+  if (digits.startsWith('8')) return `62${digits}`;
+  return digits;
+};
+const whatsappOrderMessage = (order: any) => {
+  const number = order.orderNumber || order.transactionNumber || '-';
+  const customer = order.customerName || 'Kak';
+  const outlet = order.outlet?.name || 'FORU POS';
+  const items = (order.items || []).map((item: any, index: number) => {
+    const details = [
+      item.variantName && item.variantName !== 'Base' ? item.variantName : '',
+      ...(item.addons || []).map((addon: any) => `+ ${addon.addonName}`),
+      item.itemNote ? `Catatan: ${item.itemNote}` : ''
+    ].filter(Boolean);
+    const subtotal = Number(item.subtotalAfterDiscount || item.subtotal || 0);
+    return `${index + 1}. ${item.qty}x ${item.productName}${details.length ? ` (${details.join(', ')})` : ''}${subtotal ? ` - ${rupiah(subtotal)}` : ''}`;
+  });
+  const lines = [
+    `Halo ${customer}, pesanan Anda sudah kami terima di ${outlet}.`,
+    '',
+    `No Order: ${number}`,
+    `Status: ${statusLabel(order.status)}`,
+    ...(items.length ? ['', 'Detail Pesanan:', ...items] : []),
+    '',
+    `Total: ${rupiah(order.grandTotal)}`,
+    '',
+    order.status === 'OPEN_ORDER'
+      ? 'Silakan menunggu konfirmasi dari kasir.'
+      : 'Silakan lanjutkan pembayaran/konfirmasi ke kasir.',
+    'Terima kasih.'
+  ];
+  return lines.join('\n');
+};
+const openOrderWhatsapp = async (order: any) => {
+  const phone = normalizeWhatsappPhone(order.customerPhone);
+  if (!phone) {
+    appAlert('Nomor WhatsApp pemesan belum tersedia.', { tone: 'warning' });
+    return;
+  }
+  try {
+    const fullOrder = Array.isArray(order.items) && order.items.some((item: any) => Array.isArray(item.addons))
+      ? order
+      : await api<any>(`/orders/${order.id}`);
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(whatsappOrderMessage({ ...order, ...fullOrder }))}`, '_blank', 'noopener,noreferrer');
+  } catch (e) {
+    appAlert((e as Error).message, { tone: 'danger' });
+  }
+};
 
 export function Orders() {
-  const tabs = ['PENDING_PAYMENT', 'PAID', 'CANCELLED', 'VOID'];
+  const tabs = ['OPEN_ORDER', 'PENDING_PAYMENT', 'PAID', 'CANCELLED', 'VOID'];
   const navigate = useNavigate();
   const { selectedOutletId: outletId } = useOutlet();
-  const [status, setStatus] = useState('PENDING_PAYMENT');
+  const [status, setStatus] = useState(new URLSearchParams(window.location.search).get('status') || 'OPEN_ORDER');
   const [preset, setPreset] = useState('today');
   const initialRange = datePresetRange('today');
   const [from, setFrom] = useState(initialRange.from);
@@ -63,8 +116,13 @@ export function Orders() {
   const [summary, setSummary] = useState(zeroSummary);
   const [loading, setLoading] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [orderView, setOrderView] = useState<'list' | 'grid'>(() => localStorage.getItem('foru:orders_view') === 'grid' ? 'grid' : 'list');
   const [error, setError] = useState('');
   const [cancelTarget, setCancelTarget] = useState<any>(null);
+  function changeOrderView(next: 'list' | 'grid') {
+    setOrderView(next);
+    localStorage.setItem('foru:orders_view', next);
+  }
   function setQuickPreset(value: string) {
     setPreset(value);
     if (value !== 'custom') {
@@ -139,24 +197,26 @@ export function Orders() {
   const dangerMenuItem = 'flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-red-600 hover:bg-red-50';
   const DesktopActions = ({ o }: { o: any }) => <div className="flex flex-nowrap items-center justify-end gap-2">
     <Link title="View" aria-label="View order" className={iconBtn} to={`/orders/${o.id}`}><Eye size={18} /></Link>
-    {o.status === 'PENDING_PAYMENT' && <Link title="Edit" aria-label="Edit order" className={iconBtn} to={`/pos?editOrderId=${o.id}`}><Pencil size={18} /></Link>}
+    {(o.status === 'PENDING_PAYMENT' || o.status === 'OPEN_ORDER') && <Link title="Edit" aria-label="Edit order" className={iconBtn} to={`/pos?editOrderId=${o.id}`}><Pencil size={18} /></Link>}
+    {o.customerPhone && <button title="Kirim WhatsApp" aria-label="Kirim WhatsApp konfirmasi order" className={iconBtn} onClick={() => openOrderWhatsapp(o)}><MessageCircle size={18} /></button>}
     <button title="Item List" aria-label="Print item list" className={iconBtn} onClick={() => print(o, 'customer-item-list')}><Package size={18} /></button>
     <button title={o.status === 'PAID' ? 'Reprint Kitchen' : 'Kitchen'} aria-label="Print kitchen ticket" className={iconBtn} onClick={() => print(o, 'kitchen-ticket')}><Printer size={18} /></button>
     {o.status === 'PAID' && <button title="Reprint Receipt" aria-label="Print receipt" className={iconBtn} onClick={() => print(o, 'customer-receipt')}><ReceiptText size={18} /></button>}
     {o.status === 'PAID' && <button title="Void" aria-label="Void transaction" className={dangerBtn} onClick={() => voidOrder(o)}><XCircle size={18} /></button>}
-    {o.status === 'PENDING_PAYMENT' && <button title="Cancel" aria-label="Cancel order" className={dangerBtn} onClick={() => cancel(o)}><XCircle size={18} /></button>}
+    {(o.status === 'PENDING_PAYMENT' || o.status === 'OPEN_ORDER') && <button title="Cancel" aria-label="Cancel order" className={dangerBtn} onClick={() => cancel(o)}><XCircle size={18} /></button>}
   </div>;
   const MoreMenu = ({ o }: { o: any }) => <details className="relative">
     <summary aria-label="More actions" className="inline-flex h-12 w-12 cursor-pointer list-none items-center justify-center rounded-xl bg-slate-100 text-ink shadow-sm [&::-webkit-details-marker]:hidden">
       <MoreHorizontal size={22} />
     </summary>
     <div className="absolute right-0 z-20 mt-2 w-52 overflow-hidden rounded-2xl border border-slate-100 bg-white p-2 text-sm font-bold shadow-xl">
-      {o.status === 'PENDING_PAYMENT' && <Link className={menuItem} to={`/pos?editOrderId=${o.id}`}><Pencil size={16} />Edit</Link>}
+      {(o.status === 'PENDING_PAYMENT' || o.status === 'OPEN_ORDER') && <Link className={menuItem} to={`/pos?editOrderId=${o.id}`}><Pencil size={16} />Edit</Link>}
+      {o.customerPhone && <button className={menuItem} onClick={() => openOrderWhatsapp(o)}><MessageCircle size={16} />WhatsApp</button>}
       <button className={menuItem} onClick={() => print(o, 'customer-item-list')}><Package size={16} />Item List</button>
       <button className={menuItem} onClick={() => print(o, 'kitchen-ticket')}><Printer size={16} />Kitchen</button>
       {o.status === 'PAID' && <button className={menuItem} onClick={() => print(o, 'customer-receipt')}><ReceiptText size={16} />Receipt</button>}
       {o.status === 'PAID' && <button className={dangerMenuItem} onClick={() => voidOrder(o)}><XCircle size={16} />Void</button>}
-      {o.status === 'PENDING_PAYMENT' && <button className={dangerMenuItem} onClick={() => cancel(o)}><XCircle size={16} />Cancel</button>}
+      {(o.status === 'PENDING_PAYMENT' || o.status === 'OPEN_ORDER') && <button className={dangerMenuItem} onClick={() => cancel(o)}><XCircle size={16} />Cancel</button>}
     </div>
   </details>;
 
@@ -168,6 +228,26 @@ export function Orders() {
           <p className="mt-1 text-sm leading-relaxed text-slate-500">Open bill, paid, cancelled, dan void.</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <div className="hidden rounded-2xl bg-white p-1 shadow-sm ring-1 ring-slate-100 md:flex">
+            <button
+              type="button"
+              title="Tampilan list"
+              aria-label="Tampilan list"
+              onClick={() => changeOrderView('list')}
+              className={`grid h-11 w-11 place-items-center rounded-xl transition ${orderView === 'list' ? 'bg-ink text-white' : 'text-slate-500 hover:bg-brand-50 hover:text-brand-700'}`}
+            >
+              <List size={19} />
+            </button>
+            <button
+              type="button"
+              title="Tampilan grid"
+              aria-label="Tampilan grid"
+              onClick={() => changeOrderView('grid')}
+              className={`grid h-11 w-11 place-items-center rounded-xl transition ${orderView === 'grid' ? 'bg-ink text-white' : 'text-slate-500 hover:bg-brand-50 hover:text-brand-700'}`}
+            >
+              <LayoutGrid size={19} />
+            </button>
+          </div>
           <button onClick={() => navigate('/pos')} className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-black text-brand-700 shadow-sm ring-1 ring-brand-100 hover:bg-brand-50">
             <ShoppingCart size={18} />
             Kasir
@@ -199,7 +279,7 @@ export function Orders() {
     </div>
     <Err v={error} />
     {loading && <div className="mb-3 rounded-2xl bg-white p-3 text-sm font-bold text-slate-500 shadow-sm ring-1 ring-slate-100">Memuat orders...</div>}
-    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1 md:space-y-3">
+    <div className={`${orderView === 'grid' ? 'grid min-h-0 flex-1 auto-rows-max grid-cols-1 content-start gap-3 overflow-y-auto overscroll-contain pr-1 md:grid-cols-2 xl:grid-cols-3' : 'min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1 md:space-y-3'}`}>
       {data.map(o => {
         const meta = statusMeta(o.status);
         const Icon = meta.icon;
@@ -209,7 +289,7 @@ export function Orders() {
         const received = moneyNumber(o.amountPaid ?? o.paidAmount ?? o.receivedAmount ?? (o.status === 'PAID' ? o.grandTotal : 0));
         const change = Math.max(0, received - moneyNumber(o.grandTotal));
         return <article key={o.id} className="w-full overflow-visible rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-100 md:px-4 md:py-3 xl:px-5 xl:py-4">
-          <div className="md:hidden">
+          <div className={orderView === 'grid' ? 'block' : 'md:hidden'}>
           <div className="mb-4 flex min-w-0 items-start justify-between gap-3">
             <div className="min-w-0">
               <h3 className="truncate text-base font-black text-ink">{o.orderNumber || o.transactionNumber}</h3>
@@ -261,7 +341,7 @@ export function Orders() {
           </div>
           </div>
 
-          <div className="hidden min-w-0 items-center gap-3 md:grid md:grid-cols-[minmax(140px,1fr)_minmax(160px,1.1fr)_minmax(105px,0.75fr)_minmax(100px,0.7fr)_auto] xl:gap-4 xl:grid-cols-[minmax(170px,1.1fr)_minmax(200px,1.25fr)_minmax(130px,0.8fr)_minmax(120px,0.75fr)_auto]">
+          {orderView === 'list' && <div className="hidden min-w-0 items-center gap-3 md:grid md:grid-cols-[minmax(140px,1fr)_minmax(160px,1.1fr)_minmax(105px,0.75fr)_minmax(100px,0.7fr)_auto] xl:gap-4 xl:grid-cols-[minmax(170px,1.1fr)_minmax(200px,1.25fr)_minmax(130px,0.8fr)_minmax(120px,0.75fr)_auto]">
             <div className="min-w-0">
               <h3 className="truncate text-sm font-black text-ink">{o.orderNumber || o.transactionNumber}</h3>
               <p className="mt-1 truncate text-xs font-semibold text-slate-500">{o.customerName || 'Walk In customer'} - {o.cashier?.name || 'Kasir'}</p>
@@ -290,7 +370,7 @@ export function Orders() {
               <div className="hidden xl:block"><DesktopActions o={o} /></div>
               <div className="xl:hidden"><MoreMenu o={o} /></div>
             </div>
-          </div>
+          </div>}
         </article>;
       })}
       {!data.length && <Empty />}
@@ -339,12 +419,13 @@ export function OrderDetail() {
         <div className="mt-5 space-y-1 border-t pt-4 text-right"><p>Product discount: {rupiah(order.productDiscountTotal)}</p><p>Transaction discount: {rupiah(order.transactionDiscountAmount)}</p><p>Coupon discount: {rupiah(order.couponDiscountAmount)}</p><p className="text-sm text-slate-400">Total</p><b className="text-2xl text-brand-700">{rupiah(order.grandTotal)}</b></div>
       </div>
       <div className="card p-5"><h3 className="section-title mb-4">Actions</h3>
-        {order.status === 'PENDING_PAYMENT' && <button onClick={() => navigate(`/pos?editOrderId=${order.id}`)} className="btn-primary mb-2 w-full">Edit Open Bill</button>}
-        {order.status === 'PENDING_PAYMENT' && <button onClick={() => print('customer-item-list')} className="btn-soft mb-2 w-full">Customer Item List</button>}
+        {(order.status === 'PENDING_PAYMENT' || order.status === 'OPEN_ORDER') && <button onClick={() => navigate(`/pos?editOrderId=${order.id}`)} className="btn-primary mb-2 w-full">{order.status === 'OPEN_ORDER' ? 'Review di Kasir' : 'Edit Open Bill'}</button>}
+        {(order.status === 'PENDING_PAYMENT' || order.status === 'OPEN_ORDER') && <button onClick={() => print('customer-item-list')} className="btn-soft mb-2 w-full">Customer Item List</button>}
         <button onClick={() => print('kitchen-ticket')} className="btn-soft mb-2 w-full">Kitchen Ticket</button>
         {order.status === 'PAID' && <button onClick={() => print('customer-receipt')} className="btn-soft mb-2 w-full">Print Receipt</button>}
+        {order.customerPhone && <button onClick={() => openOrderWhatsapp(order)} className="btn-soft mb-2 flex w-full items-center justify-center gap-2"><MessageCircle size={18} />Kirim WhatsApp</button>}
         {order.status === 'PAID' && <button onClick={voidOrder} className="w-full rounded-xl bg-red-50 px-4 py-3 font-bold text-red-700">Void Transaction</button>}
-        {order.status === 'PENDING_PAYMENT' && <button onClick={cancel} className="mt-2 w-full rounded-xl bg-red-50 px-4 py-3 font-bold text-red-700">Cancel Order</button>}
+        {(order.status === 'PENDING_PAYMENT' || order.status === 'OPEN_ORDER') && <button onClick={cancel} className="mt-2 w-full rounded-xl bg-red-50 px-4 py-3 font-bold text-red-700">Cancel Order</button>}
       </div>
     </div>
     <CancelOrderDialog

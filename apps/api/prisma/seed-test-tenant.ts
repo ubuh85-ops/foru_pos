@@ -77,7 +77,12 @@ async function main() {
   });
 
   const outlet = await prisma.outlet.upsert({
-    where: { code: 'TEST-01' },
+    where: {
+      businessId_code: {
+        businessId: business.id,
+        code: 'TEST-01'
+      }
+    },
     update: {
       name: 'TEST CAFE 01',
       businessId: business.id,
@@ -92,7 +97,12 @@ async function main() {
   });
 
   const warehouse = await prisma.inventoryWarehouse.upsert({
-    where: { code: 'TEST-WH-01' },
+    where: {
+      businessId_code: {
+        businessId: business.id,
+        code: 'TEST-WH-01'
+      }
+    },
     update: {
       name: 'TEST CAFE 01 Warehouse',
       businessId: business.id,
@@ -195,15 +205,23 @@ async function main() {
     });
   }
 
-  const existingCategory = await prisma.category.findUnique({
-    where: { name: 'TEST CATEGORY' }
+  const existingCategory = await prisma.category.findFirst({
+    where: {
+      businessId: { not: business.id },
+      name: 'TEST CATEGORY'
+    }
   });
-  if (existingCategory && existingCategory.businessId !== business.id) {
+  if (existingCategory) {
     throw new Error('Kategori TEST CATEGORY sudah dipakai business lain. Gunakan nama kategori test yang berbeda.');
   }
 
   const category = await prisma.category.upsert({
-    where: { name: 'TEST CATEGORY' },
+    where: {
+      businessId_name: {
+        businessId: business.id,
+        name: 'TEST CATEGORY'
+      }
+    },
     update: {
       businessId: business.id,
       status: 'ACTIVE'
@@ -216,7 +234,12 @@ async function main() {
   });
 
   const product = await prisma.product.upsert({
-    where: { sku: 'TEST-TENANT-B-001' },
+    where: {
+      businessId_sku: {
+        businessId: business.id,
+        sku: 'TEST-TENANT-B-001'
+      }
+    },
     update: {
       name: 'Kopi Test Tenant B',
       category: category.name,
@@ -237,6 +260,34 @@ async function main() {
       status: 'ACTIVE'
     }
   });
+
+  const baseVariant = await prisma.productVariant.findFirst({
+    where: {
+      productId: product.id,
+      variantName: 'Base'
+    }
+  });
+
+  if (baseVariant) {
+    await prisma.productVariant.update({
+      where: { id: baseVariant.id },
+      data: {
+        sellingPrice: 10000,
+        hpp: 4000,
+        status: 'ACTIVE'
+      }
+    });
+  } else {
+    await prisma.productVariant.create({
+      data: {
+        productId: product.id,
+        variantName: 'Base',
+        sellingPrice: 10000,
+        hpp: 4000,
+        status: 'ACTIVE'
+      }
+    });
+  }
 
   await prisma.productOutlet.upsert({
     where: {

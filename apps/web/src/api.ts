@@ -9,6 +9,7 @@ console.log('API URL =', apiUrl);
 export const API = apiUrl;
 export const SERVER_UNAVAILABLE_MESSAGE = 'Server tidak tersedia. Silakan cek koneksi atau backend.';
 export const SESSION_EXPIRED_EVENT = 'foru:session-expired';
+const PUBLIC_AUTH_PATHS = new Set(['/auth/login', '/auth/register-business']);
 
 export function clearAuthSession() {
   localStorage.removeItem('token');
@@ -64,7 +65,7 @@ export async function api<T = any>(path: string, options: RequestInit = {}) {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (res.status === 401 && path !== '/auth/login') handleUnauthorizedSession(data.message);
+    if (res.status === 401 && token && !PUBLIC_AUTH_PATHS.has(path)) handleUnauthorizedSession(data.message);
     throw new Error(data.message || 'Permintaan gagal');
   }
 

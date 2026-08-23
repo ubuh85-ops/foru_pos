@@ -69,6 +69,75 @@ pnpm test
 
 Migration awal tersimpan di `apps/api/prisma/migrations/20260621160000_init/migration.sql`.
 
+## Tenant testing seed dan hapus permanen
+
+Seed tenant testing bersifat idempotent, aman dijalankan berulang, dan tidak mengubah data tenant `FORU`.
+
+### Seed tenant TEST CAFE
+
+Local:
+
+```bash
+pnpm --filter api seed:test-tenant
+```
+
+Docker/VPS:
+
+```bash
+cd /opt/foru-pos/deploy
+docker compose -f docker-compose.prod.yml --env-file .env.production run --rm api pnpm seed:test-tenant
+```
+
+Data yang dibuat:
+
+- Business: `TEST CAFE` / `TEST_CAFE`
+- Owner: `owner_test` / `test123456`
+- Cashier: `cashier_test` / `cashier123456`
+- Supervisor: `supervisor_test` / `supervisor123456`
+- Outlet: `TEST CAFE 01`
+- Warehouse outlet test
+- Category dan product test
+
+### Preview hapus tenant
+
+Default script delete hanya preview. Tidak ada data yang dihapus.
+
+Local:
+
+```bash
+pnpm --filter api tenant:delete -- --code TEST_CAFE
+```
+
+Docker/VPS:
+
+```bash
+cd /opt/foru-pos/deploy
+docker compose -f docker-compose.prod.yml --env-file .env.production run --rm api pnpm tenant:delete -- --code TEST_CAFE
+```
+
+### Hapus permanen tenant
+
+Perintah ini menghapus permanen tenant dan data terkait tenant tersebut. Jangan dipakai untuk tenant production aktif.
+
+Local:
+
+```bash
+pnpm --filter api tenant:delete -- --code TEST_CAFE --execute --confirm TEST_CAFE
+```
+
+Docker/VPS:
+
+```bash
+cd /opt/foru-pos/deploy
+docker compose -f docker-compose.prod.yml --env-file .env.production run --rm api pnpm tenant:delete -- --code TEST_CAFE --execute --confirm TEST_CAFE
+```
+
+Proteksi:
+
+- Tenant `FORU` tidak bisa dihapus oleh script ini.
+- Script wajib menerima `--execute --confirm <CODE>` sebelum delete berjalan.
+- User tenant ikut dihapus hanya jika user tersebut tidak punya membership business lain.
+
 ## Build Android APK
 
 Frontend web berada di `apps/web` dan sudah dikonfigurasi sebagai aplikasi Android Capacitor dengan:

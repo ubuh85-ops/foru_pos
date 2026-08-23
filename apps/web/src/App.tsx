@@ -6,6 +6,7 @@ import { BarChart3, Boxes, Calculator, ChevronDown, ClipboardList, Clock3, Layer
 import { api, clearAuthSession, SESSION_EXPIRED_EVENT, type User } from './api';
 import HeaderOutletSelector from './components/HeaderOutletSelector';
 import { ConfirmDialog } from './components/ForuDialog';
+import NewOrderNotifier from './components/NewOrderNotifier';
 import { OutletProvider } from './OutletContext';
 import Login from './pages/Login';
 import OutletSelect from './pages/OutletSelect';
@@ -22,6 +23,8 @@ import { Categories, Coupons, CustomerItemListPrint, KitchenTicketPrint, Printer
 import { OrderDetail, Orders } from './pages/Orders';
 import VariantGroupsPage from './pages/VariantGroupsPage';
 import UserManagementPage from './pages/UserManagementPage';
+import CustomerOrderPage from './pages/CustomerOrderPage';
+import CustomerOrderStatusPage from './pages/CustomerOrderStatusPage';
 import { initSyncService, recordLocalAudit } from './sync';
 import { checkInventoryStockAlerts } from './inventoryAlerts';
 import ShiftBanner from './components/ShiftBanner';
@@ -213,11 +216,15 @@ const rootPages = new Set([
 ]);
 
 export default function App() {
+  const loc = useLocation();
   const [user, setUser] = useState<User | null>(() => JSON.parse(localStorage.getItem('user') || 'null'));
   const [sessionExpiredOpen, setSessionExpiredOpen] = useState(false);
   useEffect(() => { initSyncService(); }, []);
   useEffect(() => {
-    const onSessionExpired = () => setSessionExpiredOpen(true);
+    const onSessionExpired = () => {
+      if (!localStorage.getItem('token')) return;
+      setSessionExpiredOpen(true);
+    };
     window.addEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
   }, []);
@@ -261,7 +268,7 @@ export default function App() {
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
-  const sessionExpiredDialog = sessionExpiredOpen ? <AppDialog
+  const sessionExpiredDialog = sessionExpiredOpen && user ? <AppDialog
     title="Sesi Berakhir"
     description="Silakan login kembali untuk melanjutkan."
     tone="warning"
@@ -275,8 +282,13 @@ export default function App() {
       }
     }]}
   /> : null;
+  if (loc.pathname.startsWith('/order/')) return <Routes>
+    <Route path="/order/status/:token" element={<CustomerOrderStatusPage />} />
+    <Route path="/order/:businessSlug/:outletSlug" element={<CustomerOrderPage />} />
+    <Route path="*" element={<Navigate to="/order/status/invalid" replace />} />
+  </Routes>;
   if (!user) return <>{sessionExpiredDialog}<Login onLogin={setUser} /></>;
-  return <OutletProvider user={user}><Routes><Route path="*" element={<Shell user={user} logout={() => { recordLocalAudit('LOGOUT','USER',user.id,{name:user.name}); clearAuthSession(); setUser(null); }} />} /></Routes>{sessionExpiredDialog}</OutletProvider>;
+  return <OutletProvider user={user}><NewOrderNotifier /><Routes><Route path="*" element={<Shell user={user} logout={() => { recordLocalAudit('LOGOUT','USER',user.id,{name:user.name}); clearAuthSession(); setUser(null); }} />} /></Routes>{sessionExpiredDialog}</OutletProvider>;
 }
 
 function Shell({ user, logout }: { user: User; logout: () => void }) {

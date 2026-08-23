@@ -10,6 +10,8 @@
     "prisma": "prisma",
     "seed:products": "tsx prisma/seed-products-only.ts",
     "seed:test-tenant": "tsx prisma/seed-test-tenant.ts",
+    "tenant:delete": "tsx prisma/delete-tenant-permanent.ts",
+    "copy-menu:outlet-pricing": "tsx prisma/copy-menu-outlet-pricing.ts",
     "recipe:template": "tsx prisma/create-product-recipe-template.ts",
     "recipe:import": "tsx prisma/import-product-recipes.ts",
     "recipe:category-template": "tsx prisma/create-product-recipe-category-template.ts",
@@ -22,6 +24,7 @@
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
+    "sharp": "0.32.6",
     "xlsx": "^0.18.5",
     "zod": "^3.25.67"
   },

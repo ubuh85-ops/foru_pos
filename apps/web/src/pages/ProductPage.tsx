@@ -1,20 +1,81 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Download, Edit, FileDown, FileUp, Plus, Search, Trash2 } from 'lucide-react';
+import { Camera, Download, Edit, FileDown, FileUp, Image as ImageIcon, Plus, Search, Trash2 } from 'lucide-react';
 import { API, api, handleUnauthorizedSession, rupiah } from '../api';
 import { downloadMasterData } from '../sync';
 import { emitMasterDataChanged, subscribeMasterDataChanged } from '../masterEvents';
 import { toast } from '../toast';
+import { appConfirm } from '../components/ui/AppDialog';
 
 const Page = ({ children }: { children: any }) => <div className="p-4 lg:p-8">{children}</div>;
 const Err = ({ v }: { v: string }) => v ? <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{v}</div> : null;
 const Head = ({ title, sub, action }: any) => <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><h2 className="text-3xl font-black">{title}</h2><p className="text-slate-500">{sub}</p></div>{action && <button onClick={action} className="btn-primary"><Plus size={18} /> Tambah</button>}</div>;
 const Modal = ({ title, close, children }: any) => <div data-back-modal="true" className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"><div className="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-3xl bg-white p-6 shadow-2xl"><div className="mb-5 flex items-center justify-between"><h3 className="text-2xl font-black">{title}</h3><button data-back-close="true" onClick={close} className="text-2xl">×</button></div>{children}</div></div>;
+const API_ORIGIN = API.replace(/\/api\/?$/, '');
+const productImageSrc = (url?: string | null) => !url ? '' : url.startsWith('/storage/') ? `${API_ORIGIN}${url}` : url;
 
 function Fields({ items, values = {} }: any) {
   return <>{items.map(([name, label, type = 'text']: any) => <label key={name} className="mb-3 block"><span className="label">{label}</span><input className="input" name={name} type={type} defaultValue={values[name] ?? ''} required={['name'].includes(name)} /></label>)}</>;
 }
 function CheckList({ title, name, rows, checked = [] }: any) {
   return <div className="mt-4"><p className="label">{title}</p><div className="grid gap-2 sm:grid-cols-2">{rows.map(([id, label]: any) => <label key={id} className="flex items-center gap-2 rounded-xl bg-slate-50 p-3 text-sm"><input name={name} value={id} type="checkbox" defaultChecked={checked.includes(id)} /> {label}</label>)}</div></div>;
+}
+
+function ProductImageUpload({ initialUrl }: { initialUrl?: string | null }) {
+  const [imageUrl, setImageUrl] = useState(initialUrl || '');
+  const [uploading, setUploading] = useState(false);
+  const preview = productImageSrc(imageUrl);
+
+  async function upload(file: File) {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      toast.error('Format foto harus JPG, PNG, atau WEBP.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Ukuran foto maksimal 5MB.');
+      return;
+    }
+    setUploading(true);
+    try {
+      const body = new FormData();
+      body.append('image', file);
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API}/products/images`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 401) handleUnauthorizedSession(data.message);
+        throw new Error(data.message || 'Upload foto gagal.');
+      }
+      setImageUrl(data.imageUrl || '');
+      toast.success('Foto produk berhasil diupload.');
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return <div className="mb-3 rounded-3xl border bg-slate-50 p-4">
+    <input type="hidden" name="imageUrl" value={imageUrl} />
+    <div className="grid gap-3 sm:grid-cols-[132px_minmax(0,1fr)]">
+      <div className="grid aspect-square place-items-center overflow-hidden rounded-2xl bg-white ring-1 ring-black/5">
+        {preview ? <img src={preview} alt="Preview produk" className="h-full w-full object-cover" onError={() => setImageUrl('')} /> : <div className="text-center text-slate-400"><ImageIcon className="mx-auto mb-2" size={28} /><p className="text-xs font-bold">Belum ada foto</p></div>}
+      </div>
+      <div className="min-w-0">
+        <p className="label mb-1">Foto produk</p>
+        <p className="mb-3 text-xs text-slate-400">Upload dari galeri atau kamera. File akan dikompres otomatis ke WEBP.</p>
+        <div className="flex flex-wrap gap-2">
+          <label className={`btn-soft cursor-pointer ${uploading ? 'pointer-events-none opacity-60' : ''}`}><FileUp size={16} /> {uploading ? 'Mengupload...' : 'Upload Foto'}<input className="hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={e => e.target.files?.[0] && upload(e.target.files[0])} /></label>
+          <label className={`btn-soft cursor-pointer ${uploading ? 'pointer-events-none opacity-60' : ''}`}><Camera size={16} /> Kamera<input className="hidden" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={e => e.target.files?.[0] && upload(e.target.files[0])} /></label>
+          {imageUrl && <button type="button" className="btn-soft text-red-700" onClick={() => setImageUrl('')}>Hapus Foto</button>}
+        </div>
+        {imageUrl && <p className="mt-2 truncate text-xs text-slate-400">{imageUrl}</p>}
+      </div>
+    </div>
+  </div>;
 }
 
 export default function ProductPage() {
@@ -61,6 +122,7 @@ export default function ProductPage() {
       return matchSearch && matchCategory;
     });
   }, [data, search, categoryId]);
+  const activeOutlets = useMemo(() => outlets.filter(o => o.status !== 'INACTIVE'), [outlets]);
 
   function authHeaders(): Record<string, string> {
     const token = localStorage.getItem('token');
@@ -168,14 +230,14 @@ export default function ProductPage() {
     setSubmitting(true);
     try {
       const f = new FormData(e.currentTarget);
-      const outletPricing = outlets.map(o => ({
+      const outletPricing = activeOutlets.map(o => ({
         outletId: o.id,
         isAvailable: f.get(`available_${o.id}`) === 'on',
         outletPrice: f.get(`price_${o.id}`) ? Number(f.get(`price_${o.id}`)) : null,
         outletHpp: f.get(`hpp_${o.id}`) ? Number(f.get(`hpp_${o.id}`)) : null,
         status: f.get(`status_${o.id}`) || 'ACTIVE'
       }));
-      const channelPricing = outlets.flatMap(o => ['GOFOOD', 'GRABFOOD', 'SHOPEEFOOD'].map(channel => ({
+      const channelPricing = activeOutlets.flatMap(o => ['GOFOOD', 'GRABFOOD', 'SHOPEEFOOD'].map(channel => ({
         outletId: o.id,
         channel,
         price: f.get(`channel_${channel}_${o.id}`) ? Number(f.get(`channel_${channel}_${o.id}`)) : null,
@@ -222,6 +284,23 @@ export default function ProductPage() {
       setSubmitting(false);
     }
   }
+  async function deletePermanentProduct(p: any) {
+    const ok = await appConfirm(
+      `Produk "${p.name}" akan dihapus permanen. Aksi ini tidak bisa dibatalkan. Produk yang sudah punya histori transaksi/inventory akan otomatis ditolak.`,
+      { title: 'Hapus Produk Permanen', confirmText: 'Hapus Permanen', cancelText: 'Kembali', danger: true }
+    );
+    if (!ok) return;
+    try {
+      await api(`/products/${p.id}/permanent`, { method: 'DELETE' });
+      setSelectedIds(v => v.filter(id => id !== p.id));
+      await downloadMasterData('ONLINE');
+      emitMasterDataChanged('product_master_updated');
+      await load();
+      toast.success('Produk berhasil dihapus permanen.');
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
   function rowFor(o: any) { return (edit?.outlets || []).find((x: any) => x.outletId === o.id); }
   function channelPriceFor(o: any, channel: string) { return (edit?.channelPrices || []).find((x: any) => x.outletId === o.id && x.channel === channel)?.price ?? ''; }
 
@@ -242,10 +321,10 @@ export default function ProductPage() {
       <select className="input" value={categoryId} onChange={e => setCategoryId(e.target.value)}><option value="">Semua kategori</option>{categories.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}</select>
     </div>
 
-    <div className="grid gap-3 md:grid-cols-2 xl:hidden">{filtered.map(p => <ProductCard key={p.id} p={p} setEdit={setEdit} selected={selectedIds.includes(p.id)} toggle={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} />)}{!filtered.length && <EmptyProduct />}</div>
-    <div className="card hidden overflow-hidden xl:block"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-4"><input type="checkbox" checked={!!filtered.length && filtered.every(p => selectedIds.includes(p.id))} onChange={e => setSelectedIds(e.target.checked ? filtered.map(p => p.id) : [])} /></th><th>Produk</th><th>SKU</th><th>Kategori</th><th>Base Price</th><th>Base HPP</th><th>Variant Groups</th><th>Outlet aktif</th><th>Status</th><th></th></tr></thead><tbody>{filtered.map(p => <tr className="border-t" key={p.id}><td className="p-4"><input type="checkbox" checked={selectedIds.includes(p.id)} onChange={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} /></td><td className="font-bold">{p.name}<p className="font-normal text-slate-400">{p.description}</p></td><td>{p.sku || '-'}</td><td>{p.categoryRef?.name || p.category}</td><td>{rupiah(p.basePrice)}</td><td>{rupiah(p.baseHpp)}</td><td>{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</td><td>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</td><td><span className="pill bg-brand-50 text-brand-700">{p.status}</span></td><td><button onClick={() => setEdit(p)} className="text-brand-600"><Edit size={17} /></button></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyProduct />}</div>
+    <div className="grid gap-3 md:grid-cols-2 xl:hidden">{filtered.map(p => <ProductCard key={p.id} p={p} setEdit={setEdit} onDelete={deletePermanentProduct} selected={selectedIds.includes(p.id)} toggle={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} />)}{!filtered.length && <EmptyProduct />}</div>
+    <div className="card hidden overflow-hidden xl:block"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-4"><input type="checkbox" checked={!!filtered.length && filtered.every(p => selectedIds.includes(p.id))} onChange={e => setSelectedIds(e.target.checked ? filtered.map(p => p.id) : [])} /></th><th>Produk</th><th>SKU</th><th>Kategori</th><th>Base Price</th><th>Base HPP</th><th>Variant Groups</th><th>Outlet aktif</th><th>Status</th><th></th></tr></thead><tbody>{filtered.map(p => <tr className="border-t" key={p.id}><td className="p-4"><input type="checkbox" checked={selectedIds.includes(p.id)} onChange={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} /></td><td className="font-bold">{p.name}<p className="font-normal text-slate-400">{p.description}</p></td><td>{p.sku || '-'}</td><td>{p.categoryRef?.name || p.category}</td><td>{rupiah(p.basePrice)}</td><td>{rupiah(p.baseHpp)}</td><td>{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</td><td>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</td><td><span className="pill bg-brand-50 text-brand-700">{p.status}</span></td><td><div className="flex items-center gap-2"><button onClick={() => setEdit(p)} className="rounded-xl bg-brand-50 p-2 text-brand-600" title="Edit produk"><Edit size={17} /></button><button onClick={() => deletePermanentProduct(p)} className="rounded-xl bg-red-50 p-2 text-red-600" title="Hapus permanen"><Trash2 size={17} /></button></div></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyProduct />}</div>
 
-    {edit && <Modal title={edit.id ? 'Edit produk' : 'Produk baru'} close={() => setEdit(null)}><form onSubmit={save}><Fields values={edit} items={[['sku', 'SKU / Product Code'], ['name', 'Nama produk'], ['description', 'Deskripsi'], ['imageUrl', 'Image URL'], ['basePrice', 'Base selling price', 'number'], ['baseHpp', 'Base HPP', 'number']]} /><label className="label">Kategori</label><select className="input mb-3" name="categoryId" defaultValue={edit.categoryId || categories[0]?.id} required>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><label className="label">Status produk master</label><select className="input mb-3" name="status" defaultValue={edit.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select><CheckList title="Variant Groups" name="variantGroupIds" rows={groups.map(g => [g.id, g.name])} checked={(edit.variantGroups || []).map((x: any) => x.variantGroupId)} /><RecipeSection product={edit} items={inventoryItems} units={inventoryUnits} /><div className="mt-5"><label className="label">Outlet Availability & Pricing</label><div className="overflow-auto rounded-2xl border"><table className="w-full min-w-[980px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Outlet</th><th>Available</th><th>Dine In Price</th><th>HPP</th><th>GoFood</th><th>GrabFood</th><th>ShopeeFood</th><th>Status</th></tr></thead><tbody>{outlets.map(o => { const r = rowFor(o), isNew = !edit.id; return <tr className="border-t" key={o.id}><td className="p-3 font-bold">{o.name}<p className="text-xs font-normal text-slate-400">{o.code}</p></td><td className="text-center"><input name={`available_${o.id}`} type="checkbox" defaultChecked={isNew ? true : !!r?.isAvailable} /></td><td className="p-2"><input className="input" name={`price_${o.id}`} type="number" min="0" placeholder={`Base ${edit.basePrice ?? 0}`} defaultValue={r?.outletPrice ?? ''} /></td><td className="p-2"><input className="input" name={`hpp_${o.id}`} type="number" min="0" placeholder={`Base ${edit.baseHpp ?? 0}`} defaultValue={r?.outletHpp ?? ''} /></td>{['GOFOOD','GRABFOOD','SHOPEEFOOD'].map(ch => <td className="p-2" key={ch}><input className="input" name={`channel_${ch}_${o.id}`} type="number" min="0" placeholder="Fallback Dine In" defaultValue={channelPriceFor(o, ch)} /></td>)}<td className="p-2"><select className="input" name={`status_${o.id}`} defaultValue={r?.status || (isNew ? 'ACTIVE' : 'INACTIVE')}><option>ACTIVE</option><option>INACTIVE</option></select></td></tr>; })}</tbody></table></div><p className="mt-2 text-xs text-slate-400">Kosongkan harga online untuk memakai harga Dine In outlet. HPP tetap memakai HPP produk/outlet.</p></div><button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan Produk'}</button></form></Modal>}
+    {edit && <Modal title={edit.id ? 'Edit produk' : 'Produk baru'} close={() => setEdit(null)}><form onSubmit={save}><Fields values={edit} items={[['sku', 'SKU / Product Code'], ['name', 'Nama produk'], ['description', 'Deskripsi'], ['basePrice', 'Base selling price', 'number'], ['baseHpp', 'Base HPP', 'number']]} /><ProductImageUpload initialUrl={edit.imageUrl} /><label className="label">Kategori</label><select className="input mb-3" name="categoryId" defaultValue={edit.categoryId || categories[0]?.id} required>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><label className="label">Status produk master</label><select className="input mb-3" name="status" defaultValue={edit.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select><CheckList title="Variant Groups" name="variantGroupIds" rows={groups.map(g => [g.id, g.name])} checked={(edit.variantGroups || []).map((x: any) => x.variantGroupId)} /><RecipeSection product={edit} items={inventoryItems} units={inventoryUnits} /><div className="mt-5"><label className="label">Outlet Availability & Pricing</label><div className="overflow-auto rounded-2xl border"><table className="w-full min-w-[980px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Outlet</th><th>Available</th><th>Dine In Price</th><th>HPP</th><th>GoFood</th><th>GrabFood</th><th>ShopeeFood</th><th>Status</th></tr></thead><tbody>{activeOutlets.map(o => { const r = rowFor(o), isNew = !edit.id; return <tr className="border-t" key={o.id}><td className="p-3 font-bold">{o.name}<p className="text-xs font-normal text-slate-400">{o.code}</p></td><td className="text-center"><input name={`available_${o.id}`} type="checkbox" defaultChecked={isNew ? true : !!r?.isAvailable} /></td><td className="p-2"><input className="input" name={`price_${o.id}`} type="number" min="0" placeholder={`Base ${edit.basePrice ?? 0}`} defaultValue={r?.outletPrice ?? ''} /></td><td className="p-2"><input className="input" name={`hpp_${o.id}`} type="number" min="0" placeholder={`Base ${edit.baseHpp ?? 0}`} defaultValue={r?.outletHpp ?? ''} /></td>{['GOFOOD','GRABFOOD','SHOPEEFOOD'].map(ch => <td className="p-2" key={ch}><input className="input" name={`channel_${ch}_${o.id}`} type="number" min="0" placeholder="Fallback Dine In" defaultValue={channelPriceFor(o, ch)} /></td>)}<td className="p-2"><select className="input" name={`status_${o.id}`} defaultValue={r?.status || (isNew ? 'ACTIVE' : 'INACTIVE')}><option>ACTIVE</option><option>INACTIVE</option></select></td></tr>; })}</tbody></table></div><p className="mt-2 text-xs text-slate-400">Kosongkan harga online untuk memakai harga Dine In outlet. HPP tetap memakai HPP produk/outlet.</p></div><button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan Produk'}</button></form></Modal>}
     {importOpen && <Modal title="Import Produk" close={() => setImportOpen(false)}>
       <div className="space-y-4">
         <div className="rounded-2xl bg-brand-50 p-4 text-sm text-brand-800">Gunakan template yang tersedia. Import mendukung CSV, XLS, dan XLSX. SKU boleh kosong, nanti dibuat otomatis dari nama produk. Category kosong akan masuk ke kategori Lainnya; category baru akan dibuat otomatis.</div>
@@ -301,7 +380,7 @@ function RecipeSection({ product, items, units }: { product: any; items: any[]; 
   </section>;
 }
 
-function ProductCard({ p, setEdit, selected, toggle }: any) {
-  return <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 gap-2"><input type="checkbox" checked={selected} onChange={toggle} /><div className="min-w-0"><h3 className="line-clamp-2 font-black text-ink">{p.name}</h3><p className="text-sm text-slate-400">{p.sku || 'Tanpa SKU'} · {p.categoryRef?.name || p.category}</p></div></div><button onClick={() => setEdit(p)} className="shrink-0 rounded-xl bg-brand-50 p-2 text-brand-600"><Edit size={17} /></button></div><div className="mt-4 grid grid-cols-2 gap-2 text-sm"><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Harga</p><b>{rupiah(p.basePrice)}</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">HPP</p><b>{rupiah(p.baseHpp)}</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Outlet aktif</p><b>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Status</p><span className="pill bg-brand-50 text-brand-700">{p.status}</span></div></div><div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm"><p className="text-xs text-slate-400">Variant Groups</p><p className="mt-1 line-clamp-2">{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</p></div></div>;
+function ProductCard({ p, setEdit, onDelete, selected, toggle }: any) {
+  return <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 gap-2"><input type="checkbox" checked={selected} onChange={toggle} /><div className="min-w-0"><h3 className="line-clamp-2 font-black text-ink">{p.name}</h3><p className="text-sm text-slate-400">{p.sku || 'Tanpa SKU'} · {p.categoryRef?.name || p.category}</p></div></div><div className="flex shrink-0 gap-2"><button onClick={() => setEdit(p)} className="rounded-xl bg-brand-50 p-2 text-brand-600" title="Edit produk"><Edit size={17} /></button><button onClick={() => onDelete(p)} className="rounded-xl bg-red-50 p-2 text-red-600" title="Hapus permanen"><Trash2 size={17} /></button></div></div><div className="mt-4 grid grid-cols-2 gap-2 text-sm"><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Harga</p><b>{rupiah(p.basePrice)}</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">HPP</p><b>{rupiah(p.baseHpp)}</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Outlet aktif</p><b>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Status</p><span className="pill bg-brand-50 text-brand-700">{p.status}</span></div></div><div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm"><p className="text-xs text-slate-400">Variant Groups</p><p className="mt-1 line-clamp-2">{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</p></div></div>;
 }
 function EmptyProduct() { return <div className="p-8 text-center text-slate-400">Produk tidak ditemukan.</div>; }

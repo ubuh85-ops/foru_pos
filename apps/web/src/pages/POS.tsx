@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Check, ChevronLeft, ChevronRight, ClipboardList, LayoutGrid, List, Minus, Plus, Power, Printer, Search, ShoppingBag, Tag, Trash2, X } from 'lucide-react';
-import { api, rupiah } from '../api';
+import { API, api, rupiah } from '../api';
 import { printWithBluetoothFallback } from '../printer';
 import { subscribeMasterDataChanged } from '../masterEvents';
 import { toast } from '../toast';
@@ -23,6 +23,8 @@ type PosDialog =
 const calcDisc = (base: number, d?: Line['discount']) => !d ? 0 : Math.min(base, d.type === 'PERCENTAGE' ? base * d.value / 100 : d.value);
 const catName = (p: Product) => p.categoryRef?.name || p.category;
 const searchKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+const API_ORIGIN = API.replace(/\/api\/?$/, '');
+const productImageSrc = (url?: string | null) => !url ? foruLogo : url.startsWith('/storage/') ? `${API_ORIGIN}${url}` : url;
 const orderChannels = ['DINE_IN', 'TAKE_AWAY', 'GOFOOD', 'GRABFOOD', 'SHOPEEFOOD'];
 const normalizeOrderType = (value: string | null | undefined) => orderChannels.includes(String(value || '').toUpperCase()) ? String(value).toUpperCase() : 'DINE_IN';
 const normalizedLineKey = (x: Pick<Line, 'productId' | 'variantId' | 'selectedVariantOptionIds'>) => `${x.productId}:${x.variantId || 'base'}:${[...(x.selectedVariantOptionIds || [])].sort().join('|')}`;
@@ -62,6 +64,9 @@ export default function POS() {
   const [activeShift, setActiveShift] = useState<any>(null);
   const [error, setError] = useState('');
   const [orderSubmitting, setOrderSubmitting] = useState(false);
+  const [openOrders, setOpenOrders] = useState<any[]>([]);
+  const [openOrdersOpen, setOpenOrdersOpen] = useState(false);
+  const [reviewOpenOrder, setReviewOpenOrder] = useState<any>(null);
   const [dialog, setDialog] = useState<PosDialog | null>(null);
 
   function askConfirm(options: Omit<Extract<PosDialog, { kind: 'confirm' }>, 'kind' | 'resolve'>) {
@@ -110,6 +115,18 @@ export default function POS() {
       return null;
     }
   }
+  async function loadOpenOrders() {
+    if (!outlet) {
+      setOpenOrders([]);
+      return;
+    }
+    try {
+      const rows = await api<any[]>(`/orders/open?outletId=${outlet}&_=${Date.now()}`);
+      setOpenOrders(rows);
+    } catch {
+      setOpenOrders([]);
+    }
+  }
 
   useEffect(() => { refreshActiveShift(); }, []);
   useEffect(() => {
@@ -125,6 +142,11 @@ export default function POS() {
     };
   }, [outlet, orderType]);
   useEffect(() => { if (outlet) { loadProductsForOutlet(outlet); refreshActiveShift(); setCouponDiscount(0); } }, [outlet, orderType]);
+  useEffect(() => {
+    loadOpenOrders();
+    const timer = window.setInterval(loadOpenOrders, 15000);
+    return () => window.clearInterval(timer);
+  }, [outlet]);
   useEffect(() => subscribeMasterDataChanged(() => { if (!outlet) return; loadProductsForOutlet(outlet); }), [outlet, orderType]);
   useEffect(() => { setPage(1); }, [q, cat, pageSize]);
   useEffect(() => {
@@ -148,10 +170,13 @@ export default function POS() {
   useEffect(() => {
     if (!editOrderId) return;
     api<any>(`/orders/${editOrderId}`).then(order => {
-      if (order.status !== 'PENDING_PAYMENT') throw new Error('Order sudah tidak bisa diedit karena status berubah.');
+      if (order.status !== 'PENDING_PAYMENT' && order.status !== 'OPEN_ORDER') throw new Error('Order sudah tidak bisa diedit karena status berubah.');
       setEditingOrder(order);
       setSelectedOutletId(order.outletId);
       setCustomerName(order.customerName || '');
+      setTableNumber(order.tableNumber || '');
+      setOrderNote(order.orderNote || '');
+      setOrderType(normalizeOrderType(order.orderType));
       setCoupon(order.couponCode || '');
       setCouponDiscount(Number(order.couponDiscountAmount || 0));
       setTrxDisc(Number(order.transactionDiscountAmount || 0) > 0 ? { type: 'NOMINAL', value: Number(order.transactionDiscountAmount) } : undefined);
@@ -320,6 +345,23 @@ export default function POS() {
   }
   async function applyCoupon() { try { const r = await api<any>('/coupons/validate', { method: 'POST', body: JSON.stringify({ couponCode: coupon, outletId: outlet, orderType, items: cart.map(itemPayload) }) }); setCouponDiscount(r.discountAmount); setCouponMsg(`${r.coupon.name} diterapkan`); } catch (e) { setCouponDiscount(0); setCouponMsg((e as Error).message); } }
   const orderPayload = (active?: any) => ({ outletId: outlet, cashSessionId: active?.id, customerName, orderType, tableNumber, orderNote, items: cart.map(itemPayload), transactionDiscount: trxDisc, couponCode: couponDiscount ? coupon : undefined });
+  async function rejectOpenOrder(order: any) {
+    const reason = await askText({
+      title: 'Tolak Open Order',
+      description: 'Masukkan alasan penolakan untuk pelanggan/order ini.',
+      label: 'Alasan',
+      placeholder: 'Contoh: produk tidak tersedia'
+    });
+    if (!reason?.trim()) return;
+    try {
+      await api(`/orders/${order.id}/reject`, { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) });
+      toast.success('Open order berhasil ditolak.');
+      setReviewOpenOrder(null);
+      await loadOpenOrders();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
   function resetCart() { setCart([]); setCoupon(''); setCouponDiscount(0); setTrxDisc(undefined); setCustomerName(''); setTableNumber(''); setOrderNote(''); }
   async function saveOrder() {
     if (orderSubmitting) return;
@@ -400,7 +442,7 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
               <div className="relative grid aspect-[4/3] place-items-center overflow-hidden bg-gradient-to-br from-brand-50 via-amber-50 to-white text-4xl">
               {p.imageUrl ? (
   <img
-    src={p.imageUrl}
+    src={productImageSrc(p.imageUrl)}
     alt={p.name}
     className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
   />
@@ -428,7 +470,7 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
           {pagedProducts.map(p => {
             const price = Number(p.basePrice || p.variants[0]?.sellingPrice || 0);
             return <button key={p.id} onClick={() => quickAdd(p)} disabled={!shiftOpen} className="flex min-w-0 items-center gap-3 rounded-2xl bg-white p-3 text-left shadow-sm ring-1 ring-black/5 disabled:opacity-60">
-              <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-gradient-to-br from-brand-50 to-amber-50 text-2xl">{p.imageUrl ? <img src={p.imageUrl || foruLogo} alt={p.name} className="h-full w-full object-cover" loading="lazy" onError={(e) => { e.currentTarget.src = foruLogo;}} /> : ''}</div>
+              <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-gradient-to-br from-brand-50 to-amber-50 text-2xl">{p.imageUrl ? <img src={productImageSrc(p.imageUrl)} alt={p.name} className="h-full w-full object-cover" loading="lazy" onError={(e) => { e.currentTarget.src = foruLogo;}} /> : ''}</div>
               <div className="min-w-0 flex-1"><h3 className=" line-clamp-3 truncate  text-sm">{p.name}</h3><p className="truncate text-xs text-slate-400">{p.variantGroups?.length ? 'Pilih opsi' : p.variants[0]?.variantName || 'Base'}</p></div>
               <b className="money shrink-0 text-brand-700">{rupiah(price)}</b>
             </button>;
@@ -445,6 +487,7 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
           <button disabled={currentPage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))} className="rounded-xl border px-3 py-2 font-bold disabled:opacity-40 sm:px-4">Prev</button>
           <b className="whitespace-nowrap">{currentPage} / {totalPages}</b>
           <button disabled={currentPage >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))} className="rounded-xl border px-3 py-2 font-bold disabled:opacity-40 sm:px-4">Next</button>
+          <button onClick={() => setOpenOrdersOpen(true)} className="relative hidden items-center gap-1.5 rounded-xl border border-amber-200 px-3 py-2 font-bold text-amber-700 hover:bg-amber-50 md:flex lg:gap-2 lg:px-4"><ClipboardList size={16} /> Open{openOrders.length > 0 && <span className="absolute -right-2 -top-2 grid h-5 min-w-5 place-items-center rounded-full bg-brand-600 px-1 text-[10px] text-white">{openOrders.length}</span>}</button>
           <button onClick={() => navigate('/orders?status=PENDING_PAYMENT')} className="hidden items-center gap-1.5 rounded-xl border border-brand-200 px-3 py-2 font-bold text-brand-700 hover:bg-brand-50 md:flex lg:gap-2 lg:px-4"><ClipboardList size={16} /> Orders</button>
         </div>
       </div>
@@ -593,6 +636,20 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
       onCancel={() => { dialog.resolve(null); setDialog(null); }}
       onSubmit={value => { dialog.resolve(value); setDialog(null); }}
     />}
+    {openOrdersOpen && <OpenOrdersModal
+      orders={openOrders}
+      onClose={() => setOpenOrdersOpen(false)}
+      onRefresh={loadOpenOrders}
+      onReview={setReviewOpenOrder}
+      onEdit={order => { setOpenOrdersOpen(false); navigate(`/pos?editOrderId=${order.id}`); }}
+      onReject={rejectOpenOrder}
+    />}
+    {reviewOpenOrder && <OpenOrderReviewModal
+      order={reviewOpenOrder}
+      onClose={() => setReviewOpenOrder(null)}
+      onEdit={order => { setReviewOpenOrder(null); setOpenOrdersOpen(false); navigate(`/pos?editOrderId=${order.id}`); }}
+      onReject={rejectOpenOrder}
+    />}
     {config && <ConfigProduct product={config} close={() => setConfig(null)} add={addLine} />}
     {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); const payload = { ...orderPayload(active), customerName: paidCustomerName }; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); if (editingOrder) setEditingOrder(null); toast.success('Data berhasil disimpan.'); await runAutoPrint(result, 'paid-sale'); } catch (e) { const msg = (e as Error).message; toast.error(msg); throw e; } }} />}
     {receipt && <Receipt sale={receipt} close={() => setReceipt(null)} />}
@@ -610,6 +667,57 @@ function ConfigProduct({ product, close, add }: { product: Product; close: () =>
 }
 
 function Row({ label, n }: { label: string; n: number }) { return <div className="flex justify-between text-slate-500"><span>{label}</span><span className="money">{rupiah(n)}</span></div>; }
+
+function OpenOrdersModal({ orders, onClose, onRefresh, onReview, onEdit, onReject }: { orders: any[]; onClose: () => void; onRefresh: () => void; onReview: (order: any) => void; onEdit: (order: any) => void; onReject: (order: any) => void }) {
+  return <div data-back-modal="true" className="fixed inset-0 z-[65] grid place-items-end bg-black/40 p-3 md:place-items-center">
+    <div className="max-h-[86vh] w-full max-w-2xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+      <div className="flex items-center justify-between border-b p-4">
+        <div><h2 className="text-xl font-black">Open Orders</h2><p className="text-sm text-slate-500">{orders.length} pesanan menunggu konfirmasi</p></div>
+        <div className="flex items-center gap-2"><button onClick={onRefresh} className="rounded-xl border px-3 py-2 text-sm font-bold">Refresh</button><button data-back-close="true" onClick={onClose} className="rounded-xl p-2 text-slate-500 hover:bg-slate-50"><X /></button></div>
+      </div>
+      <div className="max-h-[65vh] space-y-3 overflow-y-auto p-4">
+        {!orders.length && <div className="rounded-2xl border border-dashed p-8 text-center text-slate-400">Belum ada open order.</div>}
+        {orders.map(order => <div key={order.id} className="rounded-2xl border p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0"><b className="block truncate">{order.orderNumber}</b><p className="truncate text-sm text-slate-500">{order.customerName || 'Walk In'} · {order.orderType || 'DINE_IN'}</p></div>
+            <b className="shrink-0 text-brand-700">{rupiah(order.grandTotal)}</b>
+          </div>
+          <p className="mt-2 line-clamp-2 text-sm text-slate-600">{(order.items || []).map((item: any) => `${item.qty}x ${item.productName}`).join(', ')}</p>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <button onClick={() => onReview(order)} className="rounded-xl border px-3 py-2 text-sm font-bold">Review</button>
+            <button onClick={() => onEdit(order)} className="rounded-xl bg-brand-600 px-3 py-2 text-sm font-bold text-white">Edit POS</button>
+            <button onClick={() => onReject(order)} className="rounded-xl border border-red-200 px-3 py-2 text-sm font-bold text-red-700">Tolak</button>
+          </div>
+        </div>)}
+      </div>
+    </div>
+  </div>;
+}
+
+function OpenOrderReviewModal({ order, onClose, onEdit, onReject }: { order: any; onClose: () => void; onEdit: (order: any) => void; onReject: (order: any) => void }) {
+  return <div data-back-modal="true" className="fixed inset-0 z-[70] grid place-items-end bg-black/40 p-3 md:place-items-center">
+    <div className="max-h-[86vh] w-full max-w-lg overflow-hidden rounded-3xl bg-white shadow-2xl">
+      <div className="flex items-start justify-between border-b p-4">
+        <div><h2 className="text-xl font-black">Review Open Order</h2><p className="text-sm text-slate-500">{order.orderNumber}</p></div>
+        <button data-back-close="true" onClick={onClose} className="rounded-xl p-2 text-slate-500 hover:bg-slate-50"><X /></button>
+      </div>
+      <div className="max-h-[62vh] space-y-3 overflow-y-auto p-4">
+        <div className="rounded-2xl bg-slate-50 p-3"><p className="font-black">{order.customerName || 'Walk In'}</p><p className="text-sm text-slate-500">{order.customerPhone || '-'} · {order.orderType || 'DINE_IN'}{order.tableNumber ? ` · Meja ${order.tableNumber}` : ''}</p>{order.orderNote && <p className="mt-2 text-sm">{order.orderNote}</p>}</div>
+        {(order.items || []).map((item: any) => <div key={item.id} className="rounded-2xl border p-3">
+          <div className="flex justify-between gap-3"><div><b>{item.qty}x {item.productName}</b><p className="text-sm text-slate-500">{item.variantName || 'Base'}</p></div><b>{rupiah(item.subtotalAfterDiscount || item.subtotal || 0)}</b></div>
+          {item.itemNote && <p className="mt-2 rounded-xl bg-amber-50 p-2 text-sm text-amber-800">{item.itemNote}</p>}
+        </div>)}
+        <div className="flex justify-between border-t pt-3 text-lg font-black"><span>Total</span><span className="text-brand-700">{rupiah(order.grandTotal)}</span></div>
+      </div>
+      <div className="grid grid-cols-3 gap-2 border-t p-4">
+        <button onClick={onClose} className="rounded-xl border px-3 py-3 font-bold">Tutup</button>
+        <button onClick={() => onReject(order)} className="rounded-xl border border-red-200 px-3 py-3 font-bold text-red-700">Tolak</button>
+        <button onClick={() => onEdit(order)} className="rounded-xl bg-brand-600 px-3 py-3 font-bold text-white">Edit POS</button>
+      </div>
+    </div>
+  </div>;
+}
+
 function Payment({ total, initialCustomerName = '', onClose, onPay }: { total: number; initialCustomerName?: string; onClose: () => void; onPay: (m: string, c: number | undefined, customerName: string) => void | Promise<void> }) {
   const [m, setM] = useState('CASH');
   const [cash, setCash] = useState(0);
