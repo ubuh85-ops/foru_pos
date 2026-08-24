@@ -1,0 +1,2 @@
+SHELL=/bin/sh
+15 3 * * * root docker run --rm -v /etc/letsencrypt:/etc/letsencrypt certbot/certbot renew --quiet --deploy-hook "cd /opt/foru-pos/deploy && docker compose -f docker-compose.prod.yml --env-file .env.production -f docker-compose.https.yml restart web" >> /var/log/foru-certbot-renew.log 2>&1
