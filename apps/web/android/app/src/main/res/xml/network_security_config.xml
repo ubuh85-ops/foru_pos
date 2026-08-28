@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Development only: allow HTTP backend access from Android WebView. Use HTTPS in production. -->
+    <!-- Local development exceptions only. Production API uses https://foru.web.id. -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">192.168.1.24</domain>
 
-        <domain includeSubdomains="true">168.110.201.2</domain>
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">10.0.2.2</domain>
     </domain-config>

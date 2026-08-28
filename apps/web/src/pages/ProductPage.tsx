@@ -5,6 +5,7 @@ import { downloadMasterData } from '../sync';
 import { emitMasterDataChanged, subscribeMasterDataChanged } from '../masterEvents';
 import { toast } from '../toast';
 import { appConfirm } from '../components/ui/AppDialog';
+import { useSearchParams } from 'react-router-dom';
 
 const Page = ({ children }: { children: any }) => <div className="p-4 lg:p-8">{children}</div>;
 const Err = ({ v }: { v: string }) => v ? <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{v}</div> : null;
@@ -79,6 +80,7 @@ function ProductImageUpload({ initialUrl }: { initialUrl?: string | null }) {
 }
 
 export default function ProductPage() {
+  const [urlParams,setUrlParams]=useSearchParams();
   const [data, setData] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
@@ -87,8 +89,12 @@ export default function ProductPage() {
   const [inventoryUnits, setInventoryUnits] = useState<any[]>([]);
   const [edit, setEdit] = useState<any>(null);
   const [error, setError] = useState('');
-  const [search, setSearch] = useState('');
-  const [categoryId, setCategoryId] = useState('');
+  const [search, setSearch] = useState(urlParams.get('search')||'');
+  const [categoryId, setCategoryId] = useState(urlParams.get('categoryId')||'');
+  const [outletId,setOutletId]=useState(urlParams.get('outletId')||'');
+  const [productStatus,setProductStatus]=useState(urlParams.get('status')||'');
+  const [availability,setAvailability]=useState(urlParams.get('availability')||'');
+  const [refreshKey,setRefreshKey]=useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [importOpen, setImportOpen] = useState(false);
@@ -99,30 +105,27 @@ export default function ProductPage() {
   const [importPreview, setImportPreview] = useState<any>(null);
   const [importing, setImporting] = useState(false);
 
-  const load = () => api<any[]>('/products').then(setData);
+  const load = () => {const params=new URLSearchParams();if(outletId)params.set('outletId',outletId);if(categoryId)params.set('categoryId',categoryId);if(productStatus)params.set('status',productStatus);if(availability&&outletId)params.set('availability',availability);if(search.trim())params.set('search',search.trim());return api<any[]>(`/products${params.size?`?${params}`:''}`).then(setData);};
   useEffect(() => {
-    load();
     api<any[]>('/categories').then(setCategories);
     api<any[]>('/variant-groups').then(setGroups);
     api<any[]>('/outlets').then(setOutlets);
     api<any[]>('/inventory/items').then(setInventoryItems).catch(() => setInventoryItems([]));
     api<any[]>('/inventory/units').then(setInventoryUnits).catch(() => setInventoryUnits([]));
     return subscribeMasterDataChanged(() => {
-      load();
+      setRefreshKey(value=>value+1);
       api<any[]>('/variant-groups').then(setGroups);
     });
   }, []);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return data.filter(p => {
-      const cat = String(p.categoryRef?.name || p.category || '').toLowerCase();
-      const matchSearch = !q || String(p.name || '').toLowerCase().includes(q) || String(p.description || '').toLowerCase().includes(q) || cat.includes(q);
-      const matchCategory = !categoryId || p.categoryId === categoryId || p.categoryRef?.id === categoryId;
-      return matchSearch && matchCategory;
-    });
-  }, [data, search, categoryId]);
+  useEffect(()=>{const params:any={};if(outletId)params.outletId=outletId;if(categoryId)params.categoryId=categoryId;if(productStatus)params.status=productStatus;if(availability&&outletId)params.availability=availability;if(search.trim())params.search=search.trim();setUrlParams(params,{replace:true});const timer=window.setTimeout(()=>load().catch(e=>setError(e.message)),200);return()=>window.clearTimeout(timer);},[outletId,categoryId,productStatus,availability,search,refreshKey]);
+
+  const filtered = data;
   const activeOutlets = useMemo(() => outlets.filter(o => o.status !== 'INACTIVE'), [outlets]);
+  const selectedOutlet=activeOutlets.find(outlet=>outlet.id===outletId);
+  const outletRow=(product:any)=>(product.outlets||[]).find((row:any)=>row.outletId===outletId);
+  const summary=useMemo(()=>({total:data.length,available:data.filter(product=>outletRow(product)?.isAvailable&&outletRow(product)?.isActive&&outletRow(product)?.status==='ACTIVE').length,soldOut:data.filter(product=>outletId&&!outletRow(product)?.isAvailable).length,inactive:data.filter(product=>product.status==='INACTIVE'||(outletId&&outletRow(product)?.status==='INACTIVE')).length}),[data,outletId]);
+  async function toggleAvailability(product:any){const row=outletRow(product);if(!outletId||!row)return;try{await api('/menu-availability',{method:'PATCH',body:JSON.stringify({outletId,productId:product.id,isAvailable:!row.isAvailable})});await load();toast.success(`${product.name} ${row.isAvailable?'ditandai habis':'tersedia'}.`);}catch(e){toast.error((e as Error).message);}}
 
   function authHeaders(): Record<string, string> {
     const token = localStorage.getItem('token');
@@ -316,13 +319,18 @@ export default function ProductPage() {
       </div>
     </div>
     <Err v={error} />
-    <div className="mb-4 grid gap-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5 md:grid-cols-[minmax(0,1fr)_260px]">
+    <div className="mb-4 grid gap-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5 md:grid-cols-2 xl:grid-cols-5">
       <div className="relative"><Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><input className="input pl-11" placeholder="Cari produk, deskripsi, atau kategori..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+      <select className="input" value={outletId} onChange={e=>{setOutletId(e.target.value);if(!e.target.value)setAvailability('')}}><option value="">Semua outlet</option>{activeOutlets.map(outlet=><option key={outlet.id} value={outlet.id}>{outlet.name}</option>)}</select>
       <select className="input" value={categoryId} onChange={e => setCategoryId(e.target.value)}><option value="">Semua kategori</option>{categories.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}</select>
+      <select className="input" value={productStatus} onChange={e=>setProductStatus(e.target.value)}><option value="">Semua status produk</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select>
+      <select className="input" disabled={!outletId} value={availability} onChange={e=>setAvailability(e.target.value)}><option value="">Semua availability</option><option value="AVAILABLE">Tersedia</option><option value="SOLD_OUT">Habis</option></select>
     </div>
 
-    <div className="grid gap-3 md:grid-cols-2 xl:hidden">{filtered.map(p => <ProductCard key={p.id} p={p} setEdit={setEdit} onDelete={deletePermanentProduct} selected={selectedIds.includes(p.id)} toggle={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} />)}{!filtered.length && <EmptyProduct />}</div>
-    <div className="card hidden overflow-hidden xl:block"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-4"><input type="checkbox" checked={!!filtered.length && filtered.every(p => selectedIds.includes(p.id))} onChange={e => setSelectedIds(e.target.checked ? filtered.map(p => p.id) : [])} /></th><th>Produk</th><th>SKU</th><th>Kategori</th><th>Base Price</th><th>Base HPP</th><th>Variant Groups</th><th>Outlet aktif</th><th>Status</th><th></th></tr></thead><tbody>{filtered.map(p => <tr className="border-t" key={p.id}><td className="p-4"><input type="checkbox" checked={selectedIds.includes(p.id)} onChange={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} /></td><td className="font-bold">{p.name}<p className="font-normal text-slate-400">{p.description}</p></td><td>{p.sku || '-'}</td><td>{p.categoryRef?.name || p.category}</td><td>{rupiah(p.basePrice)}</td><td>{rupiah(p.baseHpp)}</td><td>{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</td><td>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</td><td><span className="pill bg-brand-50 text-brand-700">{p.status}</span></td><td><div className="flex items-center gap-2"><button onClick={() => setEdit(p)} className="rounded-xl bg-brand-50 p-2 text-brand-600" title="Edit produk"><Edit size={17} /></button><button onClick={() => deletePermanentProduct(p)} className="rounded-xl bg-red-50 p-2 text-red-600" title="Hapus permanen"><Trash2 size={17} /></button></div></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyProduct />}</div>
+    {selectedOutlet&&<div className="mb-4 grid grid-cols-2 gap-3 rounded-3xl bg-brand-50 p-4 sm:grid-cols-4"><div><p className="text-xs font-bold text-brand-700">{selectedOutlet.name}</p><b className="text-xl">{summary.total}</b><p className="text-xs text-slate-500">Total produk</p></div><div><b className="text-xl text-emerald-700">{summary.available}</b><p className="text-xs text-slate-500">Tersedia</p></div><div><b className="text-xl text-amber-700">{summary.soldOut}</b><p className="text-xs text-slate-500">Habis</p></div><div><b className="text-xl text-slate-600">{summary.inactive}</b><p className="text-xs text-slate-500">Inactive</p></div></div>}
+
+    <div className="grid gap-3 md:grid-cols-2 xl:hidden">{filtered.map(p => <ProductCard key={p.id} p={p} outlet={selectedOutlet} outletRow={outletRow(p)} setEdit={setEdit} onToggleAvailability={()=>toggleAvailability(p)} onDelete={deletePermanentProduct} selected={selectedIds.includes(p.id)} toggle={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} />)}{!filtered.length && <EmptyProduct />}</div>
+    <div className="card hidden overflow-hidden xl:block"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-4"><input type="checkbox" checked={!!filtered.length && filtered.every(p => selectedIds.includes(p.id))} onChange={e => setSelectedIds(e.target.checked ? filtered.map(p => p.id) : [])} /></th><th>Produk</th><th>SKU</th><th>Kategori</th><th>{selectedOutlet?'Harga Outlet':'Base Price'}</th><th>{selectedOutlet?'Availability':'Base HPP'}</th><th>{selectedOutlet?'Outlet':'Variant Groups'}</th><th>Status</th><th></th></tr></thead><tbody>{filtered.map(p => {const row=outletRow(p);return <tr className="border-t" key={p.id}><td className="p-4"><input type="checkbox" checked={selectedIds.includes(p.id)} onChange={() => setSelectedIds(v => v.includes(p.id) ? v.filter(x => x !== p.id) : [...v, p.id])} /></td><td className="font-bold">{p.name}<p className="font-normal text-slate-400">{p.description}</p></td><td>{p.sku || '-'}</td><td>{p.categoryRef?.name || p.category}</td><td>{selectedOutlet?<div><b>{rupiah(row?.outletPrice??p.basePrice)}</b>{row?.outletPrice==null&&<p className="text-xs text-slate-400">Default {rupiah(p.basePrice)}</p>}</div>:rupiah(p.basePrice)}</td><td>{selectedOutlet?<button onClick={()=>toggleAvailability(p)} className={`pill ${row?.isAvailable?'bg-emerald-50 text-emerald-700':'bg-amber-50 text-amber-700'}`}>{row?.isAvailable?'Tersedia':'Habis'}</button>:rupiah(p.baseHpp)}</td><td>{selectedOutlet?selectedOutlet.name:(p.variantGroups?.map((x:any)=>x.group.name).join(', ')||'-')}</td><td><span className={`pill ${p.status==='ACTIVE'?'bg-brand-50 text-brand-700':'bg-slate-100 text-slate-600'}`}>{p.status}</span></td><td><div className="flex items-center gap-2"><button onClick={() => setEdit(p)} className="rounded-xl bg-brand-50 p-2 text-brand-600" title="Edit produk"><Edit size={17} /></button><button onClick={() => deletePermanentProduct(p)} className="rounded-xl bg-red-50 p-2 text-red-600" title="Hapus permanen"><Trash2 size={17} /></button></div></td></tr>})}</tbody></table></div>{!filtered.length && <EmptyProduct />}</div>
 
     {edit && <Modal title={edit.id ? 'Edit produk' : 'Produk baru'} close={() => setEdit(null)}><form onSubmit={save}><Fields values={edit} items={[['sku', 'SKU / Product Code'], ['name', 'Nama produk'], ['description', 'Deskripsi'], ['basePrice', 'Base selling price', 'number'], ['baseHpp', 'Base HPP', 'number']]} /><ProductImageUpload initialUrl={edit.imageUrl} /><label className="label">Kategori</label><select className="input mb-3" name="categoryId" defaultValue={edit.categoryId || categories[0]?.id} required>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><label className="label">Status produk master</label><select className="input mb-3" name="status" defaultValue={edit.status || 'ACTIVE'}><option>ACTIVE</option><option>INACTIVE</option></select><CheckList title="Variant Groups" name="variantGroupIds" rows={groups.map(g => [g.id, g.name])} checked={(edit.variantGroups || []).map((x: any) => x.variantGroupId)} /><RecipeSection product={edit} items={inventoryItems} units={inventoryUnits} /><div className="mt-5"><label className="label">Outlet Availability & Pricing</label><div className="overflow-auto rounded-2xl border"><table className="w-full min-w-[980px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Outlet</th><th>Available</th><th>Dine In Price</th><th>HPP</th><th>GoFood</th><th>GrabFood</th><th>ShopeeFood</th><th>Status</th></tr></thead><tbody>{activeOutlets.map(o => { const r = rowFor(o), isNew = !edit.id; return <tr className="border-t" key={o.id}><td className="p-3 font-bold">{o.name}<p className="text-xs font-normal text-slate-400">{o.code}</p></td><td className="text-center"><input name={`available_${o.id}`} type="checkbox" defaultChecked={isNew ? true : !!r?.isAvailable} /></td><td className="p-2"><input className="input" name={`price_${o.id}`} type="number" min="0" placeholder={`Base ${edit.basePrice ?? 0}`} defaultValue={r?.outletPrice ?? ''} /></td><td className="p-2"><input className="input" name={`hpp_${o.id}`} type="number" min="0" placeholder={`Base ${edit.baseHpp ?? 0}`} defaultValue={r?.outletHpp ?? ''} /></td>{['GOFOOD','GRABFOOD','SHOPEEFOOD'].map(ch => <td className="p-2" key={ch}><input className="input" name={`channel_${ch}_${o.id}`} type="number" min="0" placeholder="Fallback Dine In" defaultValue={channelPriceFor(o, ch)} /></td>)}<td className="p-2"><select className="input" name={`status_${o.id}`} defaultValue={r?.status || (isNew ? 'ACTIVE' : 'INACTIVE')}><option>ACTIVE</option><option>INACTIVE</option></select></td></tr>; })}</tbody></table></div><p className="mt-2 text-xs text-slate-400">Kosongkan harga online untuk memakai harga Dine In outlet. HPP tetap memakai HPP produk/outlet.</p></div><button disabled={submitting} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Simpan Produk'}</button></form></Modal>}
     {importOpen && <Modal title="Import Produk" close={() => setImportOpen(false)}>
@@ -380,7 +388,8 @@ function RecipeSection({ product, items, units }: { product: any; items: any[]; 
   </section>;
 }
 
-function ProductCard({ p, setEdit, onDelete, selected, toggle }: any) {
-  return <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 gap-2"><input type="checkbox" checked={selected} onChange={toggle} /><div className="min-w-0"><h3 className="line-clamp-2 font-black text-ink">{p.name}</h3><p className="text-sm text-slate-400">{p.sku || 'Tanpa SKU'} · {p.categoryRef?.name || p.category}</p></div></div><div className="flex shrink-0 gap-2"><button onClick={() => setEdit(p)} className="rounded-xl bg-brand-50 p-2 text-brand-600" title="Edit produk"><Edit size={17} /></button><button onClick={() => onDelete(p)} className="rounded-xl bg-red-50 p-2 text-red-600" title="Hapus permanen"><Trash2 size={17} /></button></div></div><div className="mt-4 grid grid-cols-2 gap-2 text-sm"><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Harga</p><b>{rupiah(p.basePrice)}</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">HPP</p><b>{rupiah(p.baseHpp)}</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Outlet aktif</p><b>{(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Status</p><span className="pill bg-brand-50 text-brand-700">{p.status}</span></div></div><div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm"><p className="text-xs text-slate-400">Variant Groups</p><p className="mt-1 line-clamp-2">{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</p></div></div>;
+function ProductCard({ p, outlet, outletRow, setEdit, onToggleAvailability, onDelete, selected, toggle }: any) {
+  const price=outletRow?.outletPrice??p.basePrice;
+  return <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 gap-2"><input type="checkbox" checked={selected} onChange={toggle} /><div className="min-w-0"><h3 className="line-clamp-2 font-black text-ink">{p.name}</h3><p className="text-sm text-slate-400">{p.sku || 'Tanpa SKU'} · {p.categoryRef?.name || p.category}</p></div></div><div className="flex shrink-0 gap-2"><button onClick={() => setEdit(p)} className="rounded-xl bg-brand-50 p-2 text-brand-600" title="Edit produk"><Edit size={17} /></button><button onClick={() => onDelete(p)} className="rounded-xl bg-red-50 p-2 text-red-600" title="Hapus permanen"><Trash2 size={17} /></button></div></div><div className="mt-4 grid grid-cols-2 gap-2 text-sm"><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">{outlet?`Harga ${outlet.code}`:'Harga'}</p><b>{rupiah(price)}</b>{outlet&&outletRow?.outletPrice==null&&<p className="text-xs text-slate-400">Harga default</p>}</div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">{outlet?'Availability':'HPP'}</p>{outlet?<button onClick={onToggleAvailability} className={`font-black ${outletRow?.isAvailable?'text-emerald-700':'text-amber-700'}`}>{outletRow?.isAvailable?'● Tersedia':'○ Habis'}</button>:<b>{rupiah(p.baseHpp)}</b>}</div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">{outlet?'Outlet':'Outlet aktif'}</p><b>{outlet?.name||`${(p.outlets || []).filter((x: any) => x.isAvailable && x.status === 'ACTIVE').length} outlet`}</b></div><div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Status</p><span className="pill bg-brand-50 text-brand-700">{p.status}</span></div></div><div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm"><p className="text-xs text-slate-400">Variant Groups</p><p className="mt-1 line-clamp-2">{p.variantGroups?.map((x: any) => x.group.name).join(', ') || '-'}</p></div></div>;
 }
 function EmptyProduct() { return <div className="p-8 text-center text-slate-400">Produk tidak ditemukan.</div>; }

@@ -22,8 +22,17 @@ type Outlet = {
   acceptingCustomerOrders?: boolean;
   customerOrderAllowDineIn?: boolean;
   customerOrderAllowTakeAway?: boolean;
+  customerOrderAllowDelivery?: boolean;
   customerOrderRequestPhone?: boolean;
   customerOrderSoundEnabled?: boolean;
+  preOrderEnabled?: boolean;
+  preOrderMinLeadMinutes?: number;
+  preOrderMaxDaysAhead?: number;
+  preOrderSlotMinutes?: number;
+  customerOrderOpenTime?: string;
+  customerOrderCloseTime?: string;
+  customerOrderOperatingDays?: number[];
+  timezone?: string;
   defaultInventoryWarehouse?: { id: string; name: string } | null;
 };
 
@@ -105,8 +114,17 @@ export default function OutletPage() {
         acceptingCustomerOrders: f.get('acceptingCustomerOrders') === 'on',
         customerOrderAllowDineIn: f.get('customerOrderAllowDineIn') === 'on',
         customerOrderAllowTakeAway: f.get('customerOrderAllowTakeAway') === 'on',
+        customerOrderAllowDelivery: f.get('customerOrderAllowDelivery') === 'on',
         customerOrderRequestPhone: f.get('customerOrderRequestPhone') === 'on',
-        customerOrderSoundEnabled: f.get('customerOrderSoundEnabled') === 'on'
+        customerOrderSoundEnabled: f.get('customerOrderSoundEnabled') === 'on',
+        preOrderEnabled: f.get('preOrderEnabled') === 'on',
+        preOrderMinLeadMinutes: Number(f.get('preOrderMinLeadMinutes') || 60),
+        preOrderMaxDaysAhead: Number(f.get('preOrderMaxDaysAhead') || 14),
+        preOrderSlotMinutes: Number(f.get('preOrderSlotMinutes') || 30),
+        customerOrderOpenTime: String(f.get('customerOrderOpenTime') || '08:00'),
+        customerOrderCloseTime: String(f.get('customerOrderCloseTime') || '21:00'),
+        customerOrderOperatingDays: [0,1,2,3,4,5,6].filter(day=>f.get(`operatingDay${day}`)==='on'),
+        timezone: String(f.get('timezone') || 'Asia/Jakarta')
       };
       await api(edit?.id ? `/outlets/${edit.id}` : '/outlets', {
         method: edit?.id ? 'PUT' : 'POST',
@@ -127,7 +145,7 @@ export default function OutletPage() {
   return <Page>
     <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
       <div><h2 className="text-3xl font-black">Master outlet</h2><p className="text-slate-500">Kelola lokasi operasional dan warehouse inventory outlet.</p></div>
-      <button onClick={() => setEdit({ blockSaleWhenIngredientOutOfStock: true, allowSaleWithoutRecipe: true, autoPrintReceipt: false, autoPrintKitchen: false, autoPrintCustomerItemList: false, customerOrderingEnabled: false, acceptingCustomerOrders: true, customerOrderAllowDineIn: true, customerOrderAllowTakeAway: true, customerOrderRequestPhone: false, customerOrderSoundEnabled: false, status: 'ACTIVE' })} className="btn-primary"><Plus size={18} /> Tambah</button>
+      <button onClick={() => setEdit({ blockSaleWhenIngredientOutOfStock: true, allowSaleWithoutRecipe: true, autoPrintReceipt: false, autoPrintKitchen: false, autoPrintCustomerItemList: false, customerOrderingEnabled: false, acceptingCustomerOrders: true, customerOrderAllowDineIn: true, customerOrderAllowTakeAway: true, customerOrderAllowDelivery:false, customerOrderRequestPhone: true, customerOrderSoundEnabled: false, preOrderEnabled:true, preOrderMinLeadMinutes:60, preOrderMaxDaysAhead:14, preOrderSlotMinutes:30, customerOrderOpenTime:'08:00', customerOrderCloseTime:'21:00', customerOrderOperatingDays:[0,1,2,3,4,5,6], timezone:'Asia/Jakarta', status: 'ACTIVE' })} className="btn-primary"><Plus size={18} /> Tambah</button>
     </div>
     <Err value={error} />
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -198,9 +216,11 @@ export default function OutletPage() {
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="flex items-center gap-2 text-sm font-bold"><input name="customerOrderAllowDineIn" type="checkbox" defaultChecked={edit.customerOrderAllowDineIn !== false} /> Allow Dine In</label>
             <label className="flex items-center gap-2 text-sm font-bold"><input name="customerOrderAllowTakeAway" type="checkbox" defaultChecked={edit.customerOrderAllowTakeAway !== false} /> Allow Take Away</label>
+            <label className="flex items-center gap-2 text-sm font-bold"><input name="customerOrderAllowDelivery" type="checkbox" defaultChecked={!!edit.customerOrderAllowDelivery} /> Allow Delivery</label>
             <label className="flex items-center gap-2 text-sm font-bold"><input name="customerOrderRequestPhone" type="checkbox" defaultChecked={!!edit.customerOrderRequestPhone} /> Request Phone Number</label>
             <label className="flex items-center gap-2 text-sm font-bold"><input name="customerOrderSoundEnabled" type="checkbox" defaultChecked={!!edit.customerOrderSoundEnabled} /> Customer Order Sound</label>
           </div>
+          <div className="mt-4 border-t pt-4"><label className="mb-3 flex items-center gap-2 text-sm font-black"><input name="preOrderEnabled" type="checkbox" defaultChecked={edit.preOrderEnabled!==false}/> Enable Pre-Order</label><div className="grid grid-cols-3 gap-2"><Field name="preOrderMinLeadMinutes" label="Lead (menit)" value={edit.preOrderMinLeadMinutes??60}/><Field name="preOrderMaxDaysAhead" label="Maks. hari" value={edit.preOrderMaxDaysAhead??14}/><Field name="preOrderSlotMinutes" label="Slot (menit)" value={edit.preOrderSlotMinutes??30}/></div><div className="grid grid-cols-2 gap-2"><Field name="customerOrderOpenTime" label="Jam buka" value={edit.customerOrderOpenTime||'08:00'}/><Field name="customerOrderCloseTime" label="Jam tutup" value={edit.customerOrderCloseTime||'21:00'}/></div><Field name="timezone" label="Timezone" value={edit.timezone||'Asia/Jakarta'}/><p className="label">Hari operasional</p><div className="flex flex-wrap gap-2">{['Min','Sen','Sel','Rab','Kam','Jum','Sab'].map((label,day)=><label key={day} className="rounded-lg bg-white p-2 text-xs font-bold"><input className="mr-1" name={`operatingDay${day}`} type="checkbox" defaultChecked={(edit.customerOrderOperatingDays||[0,1,2,3,4,5,6]).includes(day)}/>{label}</label>)}</div></div>
           <div className="mt-3 rounded-xl bg-white p-3 text-xs text-slate-500">
             Order URL: <span className="font-bold text-slate-700">{edit.id ? customerOrderUrl(edit) : 'Simpan outlet dulu untuk link final.'}</span>
           </div>

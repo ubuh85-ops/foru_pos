@@ -22,6 +22,11 @@ function percentMargin(price:number,hpp:number){return price>0?money((price-hpp)
 
 export async function priceCart(items:CartLine[],outletId:string,channel?:string|null,businessId?:string):Promise<PricedLine[]>{
   if(!items.length) throw new ApiError(400,'Cart masih kosong');
+  const productIds=[...new Set(items.map(item=>item.productId))];
+  const availability=await prisma.product.findMany({where:{AND:[businessId?{businessId}:{},{id:{in:productIds}}]},select:{id:true,name:true,status:true,outlets:{where:{outletId},select:{isAvailable:true,isActive:true,status:true}}}});
+  const byId=new Map(availability.map(product=>[product.id,product]));
+  const unavailable=productIds.map(id=>byId.get(id)).filter(product=>!product||product.status!=='ACTIVE'||!product.outlets[0]?.isAvailable||!product.outlets[0]?.isActive||product.outlets[0]?.status!=='ACTIVE').map(product=>product?.name||'Produk tidak dikenal');
+  if(unavailable.length)throw new ApiError(409,`Beberapa menu sudah tidak tersedia: ${unavailable.join(', ')}. Silakan perbarui pesanan.`);
   const onlineChannel=normalizedChannel(channel);
   return Promise.all(items.map(async line=>{
     if(!Number.isInteger(line.qty)||line.qty<1) throw new ApiError(400,'Qty produk tidak valid');

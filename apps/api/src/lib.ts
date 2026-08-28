@@ -8,6 +8,7 @@ export class ApiError extends Error { constructor(public status:number, message:
 export const DASHBOARD_PERMISSION = 'dashboard.view';
 export const INVENTORY_PERMISSIONS = [
   'inventory.view',
+  'inventory.dashboard',
   'inventory.stock_in',
   'inventory.stock_out',
   'inventory.adjustment',

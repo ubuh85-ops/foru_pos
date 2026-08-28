@@ -210,6 +210,7 @@ export function Orders() {
       <MoreHorizontal size={22} />
     </summary>
     <div className="absolute right-0 z-20 mt-2 w-52 overflow-hidden rounded-2xl border border-slate-100 bg-white p-2 text-sm font-bold shadow-xl">
+      <Link className={menuItem} to={`/orders/${o.id}`}><Eye size={16} />Lihat Detail</Link>
       {(o.status === 'PENDING_PAYMENT' || o.status === 'OPEN_ORDER') && <Link className={menuItem} to={`/pos?editOrderId=${o.id}`}><Pencil size={16} />Edit</Link>}
       {o.customerPhone && <button className={menuItem} onClick={() => openOrderWhatsapp(o)}><MessageCircle size={16} />WhatsApp</button>}
       <button className={menuItem} onClick={() => print(o, 'customer-item-list')}><Package size={16} />Item List</button>
@@ -293,6 +294,7 @@ export function Orders() {
           <div className="mb-4 flex min-w-0 items-start justify-between gap-3">
             <div className="min-w-0">
               <h3 className="truncate text-base font-black text-ink">{o.orderNumber || o.transactionNumber}</h3>
+              {o.isPreOrder && <span className="mt-1 inline-flex rounded-lg bg-violet-100 px-2 py-1 text-[10px] font-black text-violet-700">PRE-ORDER</span>}
               <p className="mt-0.5 truncate text-xs font-bold text-slate-400">{o.transactionNumber || o.orderNumber}</p>
               <div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-slate-500">
                 <Package size={14} className="shrink-0 text-pink-500" />
@@ -327,6 +329,7 @@ export function Orders() {
             <div className="min-w-0">
               <p className="mb-1 flex items-center gap-1.5 font-semibold text-slate-500"><Pencil size={13} className="text-pink-500" />Transaksi Ditempat</p>
               <p className="font-medium text-slate-800">{o.orderType || '-'}</p>
+              {o.scheduledAt && <p className="mt-1 font-bold text-violet-700">{dt(o.scheduledAt)}</p>}
             </div>
             <div className="min-w-0">
               <p className="mb-1 flex items-center gap-1.5 font-semibold text-slate-500"><Package size={13} className="text-pink-500" />Items</p>
@@ -344,6 +347,7 @@ export function Orders() {
           {orderView === 'list' && <div className="hidden min-w-0 items-center gap-3 md:grid md:grid-cols-[minmax(140px,1fr)_minmax(160px,1.1fr)_minmax(105px,0.75fr)_minmax(100px,0.7fr)_auto] xl:gap-4 xl:grid-cols-[minmax(170px,1.1fr)_minmax(200px,1.25fr)_minmax(130px,0.8fr)_minmax(120px,0.75fr)_auto]">
             <div className="min-w-0">
               <h3 className="truncate text-sm font-black text-ink">{o.orderNumber || o.transactionNumber}</h3>
+              {o.isPreOrder && <span className="mt-1 inline-flex rounded-lg bg-violet-100 px-2 py-0.5 text-[10px] font-black text-violet-700">PRE-ORDER · {o.scheduledAt ? dt(o.scheduledAt) : ''}</span>}
               <p className="mt-1 truncate text-xs font-semibold text-slate-500">{o.customerName || 'Walk In customer'} - {o.cashier?.name || 'Kasir'}</p>
             </div>
             <div className="min-w-0">

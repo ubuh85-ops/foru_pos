@@ -34,7 +34,7 @@ const tabs = [
   ['/inventory/alerts', 'Notifikasi Stok']
 ];
 const tabPermissions: Record<string, string> = {
-  '/inventory': 'inventory.report',
+  '/inventory': 'inventory.dashboard',
   '/inventory/warehouses': 'inventory.warehouse',
   '/inventory/items': 'inventory.item_management',
   '/inventory/stock-in': 'inventory.stock_in',
@@ -46,7 +46,7 @@ const tabPermissions: Record<string, string> = {
   '/inventory/alerts': 'inventory.view'
 };
 function hasInv(user: User, permission: string) {
-  return user.role === 'OWNER' || (user.inventoryPermissions || []).includes(permission);
+  return user.role === 'OWNER' || (user.inventoryPermissions || []).includes(permission) || (permission === 'inventory.dashboard' && (user.inventoryPermissions || []).includes('inventory.report'));
 }
 function canOpenInventoryPath(user: User, path: string) {
   if (!hasInv(user, 'inventory.view')) return false;
@@ -95,9 +95,13 @@ export default function InventoryPage({ user }: { user: User }) {
   }
   function loadItems(nextWarehouseId = warehouseId) {
     const p = new URLSearchParams();
-    if (q) p.set('q', q);
-    if (categoryId) p.set('category_id', categoryId);
-    if (status) p.set('status', status);
+    // Filter daftar bahan hanya milik tab Bahan Baku. Tab inventory lain
+    // membutuhkan daftar item lengkap untuk transaksi dan pilihan barang.
+    if (mode === 'items') {
+      if (q) p.set('q', q);
+      if (categoryId) p.set('category_id', categoryId);
+      if (status) p.set('status', status);
+    }
     if (nextWarehouseId) p.set('warehouseId', nextWarehouseId);
     return api<Item[]>(`/inventory/items?${p}`).then(setItems);
   }

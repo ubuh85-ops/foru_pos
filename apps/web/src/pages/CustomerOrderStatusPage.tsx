@@ -9,6 +9,7 @@ const publicFetch = async <T,>(path: string) => {
   if (!res.ok) throw new Error(data.message || 'Permintaan gagal');
   return data as T;
 };
+const slug=(value='')=>value.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
 
 function statusInfo(status?: string) {
   if (status === 'PAID') return { title: 'Pesanan lunas', icon: CheckCircle2, className: 'bg-green-50 text-green-700' };
@@ -35,9 +36,11 @@ export default function CustomerOrderStatusPage() {
     <div className="w-full max-w-lg rounded-3xl bg-white p-6 text-center shadow-sm">
       {error ? <div className="rounded-2xl bg-red-50 p-4 font-semibold text-red-700">{error}</div> : <>
         <div className={`mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl ${info.className}`}><Icon size={32} /></div>
-        <h1 className="text-2xl font-black">{info.title}</h1>
+        <h1 className="text-2xl font-black">{order?.status === 'OPEN_ORDER' ? (order?.isPreOrder ? 'Pre-Order Berhasil' : 'Pesanan Berhasil') : info.title}</h1>
         <p className="mt-1 text-slate-500">{order?.orderNumber}</p>
         <p className="font-bold">{order?.customerName}</p>
+        <p className="mt-2 font-bold">{String(order?.orderType || '').replace('_',' ')}</p>
+        {order?.isPreOrder && order?.scheduledAt && <div className="mt-3 rounded-2xl bg-violet-50 p-3 text-violet-800"><p className="text-xs font-bold uppercase">Jadwal</p><b>{new Intl.DateTimeFormat('id-ID',{dateStyle:'long',timeStyle:'short',timeZone:order?.outlet?.timezone||'Asia/Jakarta'}).format(new Date(order.scheduledAt))}</b></div>}
         <div className="my-5 rounded-3xl bg-slate-50 p-4">
           <p className="text-sm text-slate-500">Total</p>
           <b className="text-3xl text-brand-700">{rupiah(order?.grandTotal || 0)}</b>
@@ -49,6 +52,8 @@ export default function CustomerOrderStatusPage() {
           </div>)}
         </div>
         {order?.rejectionReason && <p className="mt-4 rounded-2xl bg-red-50 p-3 text-sm font-semibold text-red-700">{order.rejectionReason}</p>}
+        {order?.status === 'OPEN_ORDER' && <p className="mt-4 font-semibold text-slate-600">Pesanan sedang menunggu konfirmasi outlet.</p>}
+        {order?.business && order?.outlet && <a href={`/order/${slug(order.business.code||order.business.name)}/${slug(order.outlet.code||order.outlet.name)}`} className="btn mt-4 inline-flex border">Buat Pesanan Baru</a>}
         <p className="mt-4 text-xs text-slate-400">Halaman ini otomatis diperbarui.</p>
       </>}
     </div>

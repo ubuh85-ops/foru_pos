@@ -21,6 +21,7 @@ type ManagedUser = {
 
 const inventoryPermissions = [
   ['inventory.view', 'View Inventory'],
+  ['inventory.dashboard', 'Inventory Dashboard'],
   ['inventory.stock_in', 'Stock In'],
   ['inventory.stock_out', 'Stock Out'],
   ['inventory.adjustment', 'Stock Adjustment'],

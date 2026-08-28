@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
-import { BarChart3, Boxes, Calculator, ChevronDown, ClipboardList, Clock3, Layers, LayoutDashboard, LogOut, Menu, Package, PackageSearch, Printer, Settings, ShoppingCart, Smartphone, Store, Tags, TrendingUp, Users, Wallet, Warehouse, X } from 'lucide-react';
+import { BarChart3, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, Clock3, Layers, LayoutDashboard, LogOut, Menu, Package, PackageSearch, Printer, Settings, ShoppingCart, Smartphone, Store, Tags, TrendingUp, Users, Wallet, Warehouse, X } from 'lucide-react';
 import { api, clearAuthSession, SESSION_EXPIRED_EVENT, type User } from './api';
 import HeaderOutletSelector from './components/HeaderOutletSelector';
 import { ConfirmDialog } from './components/ForuDialog';
@@ -25,6 +25,8 @@ import VariantGroupsPage from './pages/VariantGroupsPage';
 import UserManagementPage from './pages/UserManagementPage';
 import CustomerOrderPage from './pages/CustomerOrderPage';
 import CustomerOrderStatusPage from './pages/CustomerOrderStatusPage';
+import PreOrderRecapPage from './pages/PreOrderRecapPage';
+import MenuAvailabilityPage from './pages/MenuAvailabilityPage';
 import { initSyncService, recordLocalAudit } from './sync';
 import { checkInventoryStockAlerts } from './inventoryAlerts';
 import ShiftBanner from './components/ShiftBanner';
@@ -52,7 +54,9 @@ const navGroups: NavGroup[] = [
     label: 'OPERASIONAL',
     items: [
       ['/pos', 'POS / Kasir', ShoppingCart],
+      ['/menu-availability', 'Ketersediaan Menu', PackageSearch],
       ['/orders', 'Order', ClipboardList],
+      ['/orders/preorder-recap', 'Rekap Pre-Order', CalendarDays],
       ['/shift', 'Shift', Clock3],
       ['/inventory', 'Inventory', PackageSearch],
       ['/expenses', 'Pengeluaran', Wallet]
@@ -92,7 +96,9 @@ function businessIdOf(user: Partial<User> | null | undefined) {
 
 const knownRoutes = new Set([
   '/pos',
+  '/menu-availability',
   '/orders',
+  '/orders/preorder-recap',
   '/shift',
   '/expenses',
   '/sales',
@@ -119,7 +125,7 @@ const knownRoutes = new Set([
 ]);
 
 const inventoryRoutePermissions: Record<string, string> = {
-  '/inventory': 'inventory.view',
+  '/inventory': 'inventory.dashboard',
   '/inventory/warehouses': 'inventory.warehouse',
   '/inventory/items': 'inventory.item_management',
   '/inventory/stock-in': 'inventory.stock_in',
@@ -131,7 +137,7 @@ const inventoryRoutePermissions: Record<string, string> = {
   '/inventory/alerts': 'inventory.view'
 };
 function hasInventoryPermission(user: User, permission: string) {
-  return user.role === 'OWNER' || (user.inventoryPermissions || []).includes(permission);
+  return user.role === 'OWNER' || (user.inventoryPermissions || []).includes(permission) || (permission === 'inventory.dashboard' && (user.inventoryPermissions || []).includes('inventory.report'));
 }
 function hasUserPermission(user: User, permission: string) {
   return user.role === 'OWNER' || (user.inventoryPermissions || []).includes(permission);
@@ -427,8 +433,10 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
       <header className="sticky top-0 z-30 flex h-16 max-w-full items-center justify-between gap-3 overflow-hidden border-b border-slate-200 bg-white px-4 md:px-6 lg:px-8"><button onClick={() => setOpen(true)} className="shrink-0 text-slate-700 md:hidden"><Menu /></button><button onClick={toggleSidebar} title={sidebarHidden?'Tampilkan menu':'Sembunyikan menu'} className="hidden shrink-0 rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:bg-brand-50 hover:text-brand-700 md:block"><Menu size={20}/></button><HeaderOutletSelector /><ShiftBanner /><div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">{user.role === 'OWNER' && <button onClick={() => navigate('/users')} className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-brand-50 hover:text-brand-700 sm:flex"><Users size={16} /> User</button>}<span className="pill bg-brand-100 text-brand-700">{user.role}</span></div></header>
       <Routes>
         <Route path="/pos" element={<POS />} />
+        <Route path="/menu-availability" element={<MenuAvailabilityPage />} />
         <Route path="/select-outlet" element={<OutletSelect user={user} logout={logout} />} />
         <Route path="/orders" element={<Orders />} />
+        <Route path="/orders/preorder-recap" element={<PreOrderRecapPage />} />
         <Route path="/orders/:id" element={<OrderDetail />} />
         <Route path="/shift" element={<Shift />} />
         <Route path="/expenses" element={<ExpensesPage />} />

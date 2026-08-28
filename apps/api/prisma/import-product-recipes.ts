@@ -77,26 +77,54 @@ function readRows(filePath: string): Row[] {
   }).filter(row => row.productSku || row.productName || row.ingredientCode || row.ingredientSku || row.ingredientName);
 }
 
-async function findProduct(row: Row) {
+async function findBusiness(label: string) {
+  const businesses = await prisma.business.findMany({
+    where: {
+      status: 'ACTIVE',
+      OR: [
+        { id: label },
+        { code: { equals: label, mode: 'insensitive' } },
+        { name: { equals: label, mode: 'insensitive' } },
+      ],
+    },
+    select: { id: true, code: true, name: true },
+    take: 2,
+  });
+
+  if (!businesses.length) throw new Error(`Bisnis aktif tidak ditemukan: ${label}`);
+  if (businesses.length > 1) throw new Error(`Bisnis tidak unik: ${label}. Gunakan business code atau ID.`);
+  return businesses[0]!;
+}
+
+async function findProduct(row: Row, businessId: string) {
   if (row.productSku) {
-    const bySku = await prisma.product.findFirst({ where: { sku: { equals: row.productSku, mode: 'insensitive' } } });
+    const bySku = await prisma.product.findFirst({
+      where: { businessId, sku: { equals: row.productSku, mode: 'insensitive' } },
+    });
     if (bySku) return bySku;
   }
   if (row.productName) {
-    const byName = await prisma.product.findFirst({ where: { name: { equals: row.productName, mode: 'insensitive' } } });
-    if (byName) return byName;
+    const byName = await prisma.product.findMany({
+      where: { businessId, name: { equals: row.productName, mode: 'insensitive' } },
+      take: 2,
+    });
+    if (byName.length > 1) throw new Error(`Nama produk tidak unik dalam bisnis: ${row.productName}. Isi product_sku.`);
+    if (byName[0]) return byName[0];
   }
   return null;
 }
 
-async function findIngredient(row: Row) {
+async function findIngredient(row: Row, businessId: string) {
   if (row.ingredientCode) {
-    const byCode = await prisma.inventoryItem.findFirst({ where: { code: { equals: row.ingredientCode, mode: 'insensitive' }, status: 'ACTIVE' } });
+    const byCode = await prisma.inventoryItem.findFirst({
+      where: { businessId, code: { equals: row.ingredientCode, mode: 'insensitive' }, status: 'ACTIVE' },
+    });
     if (byCode) return byCode;
   }
   if (row.ingredientSku) {
     const bySku = await prisma.inventoryItem.findFirst({
       where: {
+        businessId,
         status: 'ACTIVE',
         OR: [
           { sku: { equals: row.ingredientSku, mode: 'insensitive' } },
@@ -107,27 +135,38 @@ async function findIngredient(row: Row) {
     if (bySku) return bySku;
   }
   if (row.ingredientName) {
-    const byName = await prisma.inventoryItem.findFirst({ where: { name: { equals: row.ingredientName, mode: 'insensitive' }, status: 'ACTIVE' } });
-    if (byName) return byName;
+    const byName = await prisma.inventoryItem.findMany({
+      where: { businessId, name: { equals: row.ingredientName, mode: 'insensitive' }, status: 'ACTIVE' },
+      take: 2,
+    });
+    if (byName.length > 1) throw new Error(`Nama bahan tidak unik dalam bisnis: ${row.ingredientName}. Isi ingredient_code atau ingredient_sku.`);
+    if (byName[0]) return byName[0];
   }
   return null;
 }
 
-async function findUnit(name: string) {
+async function findUnit(name: string, businessId: string) {
   if (!name) return null;
-  return prisma.inventoryUnit.findFirst({ where: { name: { equals: name, mode: 'insensitive' }, status: 'ACTIVE' } });
+  return prisma.inventoryUnit.findFirst({
+    where: { businessId, name: { equals: name, mode: 'insensitive' }, status: 'ACTIVE' },
+  });
 }
 
 async function main() {
   const positionalArgs = process.argv.slice(2).filter(x => x !== '--' && !x.startsWith('--'));
   const filePath = positionalArgs[0] || arg('file');
+  const businessLabel = arg('business') || clean(process.env.BUSINESS);
   const apply = hasFlag('apply') || String(process.env.APPLY || '').toLowerCase() === 'true';
   if (!filePath) {
-    throw new Error('File wajib diisi. Contoh: pnpm exec tsx prisma/import-product-recipes.ts ./recipe-import.xlsx --apply');
+    throw new Error('File wajib diisi. Contoh: pnpm exec tsx prisma/import-product-recipes.ts ./recipe-import.xlsx --business=DPC --apply');
   }
+  if (!businessLabel) throw new Error('Business wajib diisi dengan --business=<kode/id/nama>. Contoh: --business=DPC');
 
+  const business = await findBusiness(businessLabel);
   const rows = readRows(path.resolve(filePath));
   const results: Result[] = [];
+
+  console.log(`Business: ${business.name} (${business.code}) [${business.id}]`);
 
   for (const row of rows) {
     const productLabel = row.productSku || row.productName || '-';
@@ -137,9 +176,9 @@ async function main() {
       if (!Number.isFinite(row.wastePercent) || row.wastePercent < 0 || row.wastePercent > 100) throw new Error('Waste percent wajib 0 - 100.');
 
       const [product, ingredient, unit] = await Promise.all([
-        findProduct(row),
-        findIngredient(row),
-        findUnit(row.unit),
+        findProduct(row, business.id),
+        findIngredient(row, business.id),
+        findUnit(row.unit, business.id),
       ]);
 
       if (!product) throw new Error(`Produk tidak ditemukan: ${productLabel}`);
@@ -207,7 +246,7 @@ async function main() {
   }, {});
 
   console.table(results);
-  console.log(JSON.stringify({ apply, totalRows: rows.length, summary }, null, 2));
+  console.log(JSON.stringify({ business, apply, totalRows: rows.length, summary }, null, 2));
 
   if (results.some(row => row.status === 'ERROR')) {
     process.exitCode = 1;

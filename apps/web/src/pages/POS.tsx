@@ -8,11 +8,12 @@ import { toast } from '../toast';
 import foruLogo from '/images/foru.png';
 import { useOutlet } from '../OutletContext';
 import { ConfirmDialog, DiscountDialog, TextInputDialog, type DiscountKind, type ForuDialogTone } from '../components/ForuDialog';
+import { isValidWhatsAppNumber, openWhatsAppInvoice } from '../whatsappInvoice';
 
 type Option = { id: string; name: string; additionalPrice: number; hpp: number };
 type Group = { id: string; name: string; minSelect: number; maxSelect: number; required: boolean; options: Option[] };
 type Variant = { id: string; variantName: string; sellingPrice: number };
-type Product = { id: string; name: string; category: string; categoryRef?: { name: string }; basePrice: number; baseHpp: number; imageUrl?: string; variants: Variant[]; variantGroups: { group: Group }[] };
+type Product = { id: string; name: string; category: string; categoryRef?: { name: string }; basePrice: number; baseHpp: number; imageUrl?: string; isAvailable?: boolean; variants: Variant[]; variantGroups: { group: Group }[] };
 type Line = { key: string; productId: string; variantId?: string; selectedVariantOptionIds?: string[]; name: string; variant: string; price: number; qty: number; itemNote?: string; discount?: { type: 'NOMINAL' | 'PERCENTAGE'; value: number } };
 type CartQtySnapshot = Record<string, number>;
 type PosDialog =
@@ -54,6 +55,7 @@ export default function POS() {
   const [couponMsg, setCouponMsg] = useState('');
   const [trxDisc, setTrxDisc] = useState<Line['discount']>();
   const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
   const [orderType, setOrderType] = useState(normalizeOrderType(localStorage.getItem('foru:pos_order_type')));
   const [tableNumber, setTableNumber] = useState('');
   const [orderNote, setOrderNote] = useState('');
@@ -157,6 +159,7 @@ export default function POS() {
       const draft = JSON.parse(raw);
       setCart(draft.cart || []);
       setCustomerName(draft.customerName || '');
+      setCustomerPhone(draft.customerPhone || '');
       setOrderType(normalizeOrderType(draft.orderType));
       setTableNumber(draft.tableNumber || '');
       setOrderNote(draft.orderNote || '');
@@ -165,8 +168,8 @@ export default function POS() {
   useEffect(() => {
     if (!outlet) return;
     localStorage.setItem('foru:pos_order_type', orderType);
-    localStorage.setItem(`foru:pos_cart:${outlet}`, JSON.stringify({ cart, customerName, orderType, tableNumber, orderNote, updatedAt: new Date().toISOString() }));
-  }, [outlet, cart, customerName, orderType, tableNumber, orderNote]);
+    localStorage.setItem(`foru:pos_cart:${outlet}`, JSON.stringify({ cart, customerName, customerPhone, orderType, tableNumber, orderNote, updatedAt: new Date().toISOString() }));
+  }, [outlet, cart, customerName, customerPhone, orderType, tableNumber, orderNote]);
   useEffect(() => {
     if (!editOrderId) return;
     api<any>(`/orders/${editOrderId}`).then(order => {
@@ -174,6 +177,7 @@ export default function POS() {
       setEditingOrder(order);
       setSelectedOutletId(order.outletId);
       setCustomerName(order.customerName || '');
+      setCustomerPhone(order.customerPhone || '');
       setTableNumber(order.tableNumber || '');
       setOrderNote(order.orderNote || '');
       setOrderType(normalizeOrderType(order.orderType));
@@ -280,7 +284,7 @@ export default function POS() {
   function changeMenuView(view: 'grid' | 'list') { setMenuView(view); localStorage.setItem('foru:pos_menu_view', view); }
   function changePageSize(size: number) { setPageSize(size); setPage(1); localStorage.setItem('foru:pos_page_size', String(size)); }
   function addLine(line: Line) { if (!shiftOpen) { toast.error('Shift belum dibuka. Silakan buka kasir terlebih dahulu.'); return; } setCart(c => { const i = c.findIndex(x => x.key === line.key && !x.discount && !x.itemNote); return i < 0 ? [...c, line] : c.map((x, j) => j === i ? { ...x, qty: x.qty + 1 } : x); }); setCouponDiscount(0); }
-  function quickAdd(p: Product) { if (!shiftOpen) return; if (p.variantGroups?.length) return setConfig(p); const v = p.variants[0]; const price = v && v.variantName !== 'Base' ? Number(v.sellingPrice) : Number(p.basePrice || v?.sellingPrice || 0); addLine({ key: v ? `${p.id}:${v.id}` : `${p.id}:base`, productId: p.id, variantId: v?.id, name: p.name, variant: v?.variantName || 'Base', price, qty: 1 }); }
+  function quickAdd(p: Product) { if (!shiftOpen) return; if (p.isAvailable===false){toast.error(`${p.name} sedang habis.`);return;} if (p.variantGroups?.length) return setConfig(p); const v = p.variants[0]; const price = v && v.variantName !== 'Base' ? Number(v.sellingPrice) : Number(p.basePrice || v?.sellingPrice || 0); addLine({ key: v ? `${p.id}:${v.id}` : `${p.id}:base`, productId: p.id, variantId: v?.id, name: p.name, variant: v?.variantName || 'Base', price, qty: 1 }); }
   async function qty(i: number, n: number) {
     if (n < 1) {
       const item = cart[i];
@@ -344,7 +348,7 @@ export default function POS() {
     if (discount) setTrxDisc(discount);
   }
   async function applyCoupon() { try { const r = await api<any>('/coupons/validate', { method: 'POST', body: JSON.stringify({ couponCode: coupon, outletId: outlet, orderType, items: cart.map(itemPayload) }) }); setCouponDiscount(r.discountAmount); setCouponMsg(`${r.coupon.name} diterapkan`); } catch (e) { setCouponDiscount(0); setCouponMsg((e as Error).message); } }
-  const orderPayload = (active?: any) => ({ outletId: outlet, cashSessionId: active?.id, customerName, orderType, tableNumber, orderNote, items: cart.map(itemPayload), transactionDiscount: trxDisc, couponCode: couponDiscount ? coupon : undefined });
+  const orderPayload = (active?: any) => ({ outletId: outlet, cashSessionId: active?.id, customerName, customerPhone: customerPhone.trim() || undefined, orderType, tableNumber, orderNote, items: cart.map(itemPayload), transactionDiscount: trxDisc, couponCode: couponDiscount ? coupon : undefined });
   async function rejectOpenOrder(order: any) {
     const reason = await askText({
       title: 'Tolak Open Order',
@@ -362,7 +366,7 @@ export default function POS() {
       toast.error((e as Error).message);
     }
   }
-  function resetCart() { setCart([]); setCoupon(''); setCouponDiscount(0); setTrxDisc(undefined); setCustomerName(''); setTableNumber(''); setOrderNote(''); }
+  function resetCart() { setCart([]); setCoupon(''); setCouponDiscount(0); setTrxDisc(undefined); setCustomerName(''); setCustomerPhone(''); setTableNumber(''); setOrderNote(''); }
   async function saveOrder() {
     if (orderSubmitting) return;
     if (!customerName.trim() || customerName.trim().toLowerCase() === 'walk in') {
@@ -438,7 +442,8 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
           {pagedProducts.map(p => {
             const price = Number(p.basePrice || p.variants[0]?.sellingPrice || 0);
             const outOfStock = Number((p as any).stock || (p as any).stockQty || 1) <= 0;
-            return <button key={p.id} onClick={() => quickAdd(p)} disabled={!shiftOpen || outOfStock} className="group relative overflow-hidden rounded-3xl bg-white text-left shadow-sm ring-1 ring-black/5 transition hover:-translate-y-0.5 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60">
+            const soldOut=p.isAvailable===false;
+            return <button key={p.id} onClick={() => quickAdd(p)} disabled={!shiftOpen || outOfStock || soldOut} className="group relative overflow-hidden rounded-3xl bg-white text-left shadow-sm ring-1 ring-black/5 transition hover:-translate-y-0.5 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60">
               <div className="relative grid aspect-[4/3] place-items-center overflow-hidden bg-gradient-to-br from-brand-50 via-amber-50 to-white text-4xl">
               {p.imageUrl ? (
   <img
@@ -455,6 +460,7 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
     />
   </div>
 )}
+              {soldOut&&<span className="absolute right-2 top-2 rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white">HABIS</span>}
               </div>
               <div className="p-3">
                 <p className="truncate text-[11px] font-bold text-slate-400">{catName(p)}</p>
@@ -469,10 +475,11 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
         </div> : <div className={`grid gap-2 ${cartCollapsed ? 'md:grid-cols-2 xl:grid-cols-3' : 'xl:grid-cols-2'}`}>
           {pagedProducts.map(p => {
             const price = Number(p.basePrice || p.variants[0]?.sellingPrice || 0);
-            return <button key={p.id} onClick={() => quickAdd(p)} disabled={!shiftOpen} className="flex min-w-0 items-center gap-3 rounded-2xl bg-white p-3 text-left shadow-sm ring-1 ring-black/5 disabled:opacity-60">
+            const soldOut=p.isAvailable===false;
+            return <button key={p.id} onClick={() => quickAdd(p)} disabled={!shiftOpen||soldOut} className="flex min-w-0 items-center gap-3 rounded-2xl bg-white p-3 text-left shadow-sm ring-1 ring-black/5 disabled:cursor-not-allowed disabled:opacity-60">
               <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-gradient-to-br from-brand-50 to-amber-50 text-2xl">{p.imageUrl ? <img src={productImageSrc(p.imageUrl)} alt={p.name} className="h-full w-full object-cover" loading="lazy" onError={(e) => { e.currentTarget.src = foruLogo;}} /> : ''}</div>
               <div className="min-w-0 flex-1"><h3 className=" line-clamp-3 truncate  text-sm">{p.name}</h3><p className="truncate text-xs text-slate-400">{p.variantGroups?.length ? 'Pilih opsi' : p.variants[0]?.variantName || 'Base'}</p></div>
-              <b className="money shrink-0 text-brand-700">{rupiah(price)}</b>
+              {soldOut?<b className="shrink-0 text-xs text-slate-500">HABIS</b>:<b className="money shrink-0 text-brand-700">{rupiah(price)}</b>}
             </button>;
           })}
         </div>}
@@ -651,7 +658,7 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
       onReject={rejectOpenOrder}
     />}
     {config && <ConfigProduct product={config} close={() => setConfig(null)} add={addLine} />}
-    {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); const payload = { ...orderPayload(active), customerName: paidCustomerName }; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); if (editingOrder) setEditingOrder(null); toast.success('Data berhasil disimpan.'); await runAutoPrint(result, 'paid-sale'); } catch (e) { const msg = (e as Error).message; toast.error(msg); throw e; } }} />}
+    {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} initialCustomerPhone={customerPhone} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName, paidCustomerPhone) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); setCustomerPhone(paidCustomerPhone); const payload = { ...orderPayload(active), customerName: paidCustomerName, customerPhone: paidCustomerPhone.trim() || undefined }; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); if (editingOrder) setEditingOrder(null); toast.success('Data berhasil disimpan.'); await runAutoPrint(result, 'paid-sale'); } catch (e) { const msg = (e as Error).message; toast.error(msg); throw e; } }} />}
     {receipt && <Receipt sale={receipt} close={() => setReceipt(null)} />}
   </div>;
 }
@@ -718,10 +725,11 @@ function OpenOrderReviewModal({ order, onClose, onEdit, onReject }: { order: any
   </div>;
 }
 
-function Payment({ total, initialCustomerName = '', onClose, onPay }: { total: number; initialCustomerName?: string; onClose: () => void; onPay: (m: string, c: number | undefined, customerName: string) => void | Promise<void> }) {
+function Payment({ total, initialCustomerName = '', initialCustomerPhone = '', onClose, onPay }: { total: number; initialCustomerName?: string; initialCustomerPhone?: string; onClose: () => void; onPay: (m: string, c: number | undefined, customerName: string, customerPhone: string) => void | Promise<void> }) {
   const [m, setM] = useState('CASH');
   const [cash, setCash] = useState(0);
   const [customerName, setCustomerName] = useState(initialCustomerName);
+  const [customerPhone, setCustomerPhone] = useState(initialCustomerPhone);
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const methods = ['CASH', 'QRIS', 'GOFOOD', 'GRABFOOD', 'SHOPEEFOOD', 'VOUCHER'];
@@ -752,6 +760,8 @@ function Payment({ total, initialCustomerName = '', onClose, onPay }: { total: n
       </div>
       <label className="label">Customer Name</label>
       <input className="input mb-3" value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Masukkan nama pelanggan" />
+      <label className="label">Nomor WhatsApp (opsional)</label>
+      <input className="input mb-3" inputMode="tel" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} placeholder="Contoh: 081234567890" />
       {m === 'CASH' && <>
         <label className="label">Jumlah Uang <span className="text-red-500">*</span></label>
         <input className="input mb-3" type="number" value={cash || ''} onChange={e => setCash(Number(e.target.value))} placeholder="Masukkan Uang" />
@@ -759,7 +769,7 @@ function Payment({ total, initialCustomerName = '', onClose, onPay }: { total: n
       </>}
       <label className="label">Catatan</label>
       <textarea className="input min-h-20" value={note} onChange={e => setNote(e.target.value)} placeholder="Catatan pembayaran (opsional)" />
-      <button disabled={submitting || (m === 'CASH' && cash < total)} onClick={async () => { if (submitting) return; setSubmitting(true); try { await onPay(m, m === 'CASH' ? cash : undefined, customerName); } finally { setSubmitting(false); } }} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Selesaikan Transaksi'}</button>
+      <button disabled={submitting || (m === 'CASH' && cash < total)} onClick={async () => { if (submitting) return; if (customerPhone.trim() && !isValidWhatsAppNumber(customerPhone)) { toast.error('Nomor WhatsApp tidak valid.'); return; } setSubmitting(true); try { await onPay(m, m === 'CASH' ? cash : undefined, customerName, customerPhone); } finally { setSubmitting(false); } }} className="btn-primary mt-5 w-full">{submitting ? 'Menyimpan...' : 'Selesaikan Transaksi'}</button>
     </div>
   </div>;
 }
@@ -767,6 +777,7 @@ function Receipt({ sale, close }: { sale: any; close: () => void }) {
   const paid = sale.status === 'PAID';
   const [customerPrint, setCustomerPrint] = useState(true);
   const [kitchenPrint, setKitchenPrint] = useState(true);
+  const [whatsAppPhone, setWhatsAppPhone] = useState(sale.customerPhone || '');
   async function print(type: 'customer-receipt' | 'kitchen-ticket' | 'customer-item-list') {
     await printWithBluetoothFallback(sale, type, type === 'customer-receipt' ? `/receipt/${sale.id}` : type === 'kitchen-ticket' ? `/kitchen-ticket/${sale.id}` : `/customer-item-list/${sale.id}`);
     if (type === 'customer-item-list') await api(`/orders/${sale.id}/print/customer-item-list`, { method: 'POST' }).catch(() => {});
@@ -796,6 +807,7 @@ function Receipt({ sale, close }: { sale: any; close: () => void }) {
         <label className="flex min-h-8 items-center gap-2 py-0.5 text-xs font-medium leading-tight"><input className="h-3.5 w-3.5 accent-brand-600" type="checkbox" checked={kitchenPrint} onChange={e => setKitchenPrint(e.target.checked)} />Kitchen Ticket (Dapur)</label>
       </div>
       <button onClick={printSelected} className="btn-soft mb-1 h-10 w-full justify-center border-brand-600 text-sm text-brand-700">Cetak Sekarang <Printer size={15} /></button>
+      {paid && <div className="mb-1 flex gap-1"><input className="input h-10 min-w-0 flex-1 text-sm" inputMode="tel" value={whatsAppPhone} onChange={e=>setWhatsAppPhone(e.target.value)} placeholder="Nomor WhatsApp"/><button onClick={()=>{try{openWhatsAppInvoice(sale,whatsAppPhone)}catch(e){toast.error((e as Error).message)}}} className="btn-soft h-10 shrink-0 px-3 text-sm text-emerald-700">Kirim WA</button></div>}
       <button data-back-close="true" onClick={close} className="btn-primary h-10 w-full text-sm">Selesai</button>
     </div>
   </div>;
