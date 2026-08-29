@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "296087648581",
+    "project_id": "foru-2f3fd",
+    "storage_bucket": "foru-2f3fd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:296087648581:android:d202733ca0897c746ba62c",
+        "android_client_info": {
+          "package_name": "com.foru.pos"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBY6XbfUo1pjYCp-UsY4U23661zR49MhxM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

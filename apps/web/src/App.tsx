@@ -7,6 +7,7 @@ import { api, clearAuthSession, SESSION_EXPIRED_EVENT, type User } from './api';
 import HeaderOutletSelector from './components/HeaderOutletSelector';
 import { ConfirmDialog } from './components/ForuDialog';
 import NewOrderNotifier from './components/NewOrderNotifier';
+import AndroidOrderPush, { deactivateAndroidOrderPush } from './components/AndroidOrderPush';
 import { OutletProvider } from './OutletContext';
 import Login from './pages/Login';
 import OutletSelect from './pages/OutletSelect';
@@ -295,7 +296,7 @@ export default function App() {
     <Route path="*" element={<Navigate to="/order/status/invalid" replace />} />
   </Routes>;
   if (!user) return <>{sessionExpiredDialog}<Login onLogin={setUser} /></>;
-  return <OutletProvider user={user}><NewOrderNotifier /><Routes><Route path="*" element={<Shell user={user} logout={() => { recordLocalAudit('LOGOUT','USER',user.id,{name:user.name}); clearAuthSession(); setUser(null); }} />} /></Routes>{sessionExpiredDialog}</OutletProvider>;
+  return <OutletProvider user={user}><NewOrderNotifier /><AndroidOrderPush /><Routes><Route path="*" element={<Shell user={user} logout={() => { recordLocalAudit('LOGOUT','USER',user.id,{name:user.name}); void deactivateAndroidOrderPush().catch(() => {}).finally(() => { clearAuthSession(); setUser(null); }); }} />} /></Routes>{sessionExpiredDialog}</OutletProvider>;
 }
 
 function Shell({ user, logout }: { user: User; logout: () => void }) {

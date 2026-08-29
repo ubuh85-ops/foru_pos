@@ -13,6 +13,7 @@ import sharp from 'sharp';
 import { allow, ApiError, assertOutlet, asyncRoute, auth, dayRange, defaultBusinessForUser, defaultInventoryPermissions, hasPermission, money, prisma, requirePermission, tenantAnd, tenantScope } from './lib.js';
 import { discountAmount, legacyVariantPrice, priceCart, validateCoupon } from './discount.js';
 import { validatePublicSchedule } from './preorder.js';
+import { sendCustomerWebOrderPush } from './push.js';
 
 const defaultCorsOrigins = [
   'http://localhost',
@@ -302,9 +303,31 @@ api.post('/public/order/:businessSlug/:outletSlug/orders',asyncRoute(async(req,r
   const publicOrderToken=crypto.randomBytes(24).toString('hex');
   const created=await prisma.$transaction(async tx=>tx.sale.create({data:{businessId:business.id,orderNumber,outletId:outlet.id,customerName:d.customerName,customerPhone:d.customerPhone.trim(),tableNumber:d.orderType==='DINE_IN'?d.tableNumber?.trim()||null:null,orderNote:d.orderNote?.trim()||null,orderType:d.orderType,orderSource:'CUSTOMER_WEB',customerOrderRequestId:d.customerOrderRequestId,publicOrderToken,isPreOrder:d.isPreOrder,scheduledAt,submittedAt:new Date(),subtotal:totals.gross,discountAmount:money(totals.productDiscount+totals.transactionDiscount+totals.couponDiscount),totalAmount:totals.grand,subtotalBeforeDiscount:totals.gross,productDiscountTotal:totals.productDiscount,transactionDiscountAmount:totals.transactionDiscount,couponCode:totals.couponResult?.coupon.couponCode,couponDiscountAmount:totals.couponDiscount,grandTotal:totals.grand,totalHpp:totals.totalHpp,grossProfit:0,status:'OPEN_ORDER',items:{create:totals.lines.map(saleItemCreate)}},include:{items:{include:{addons:true}},outlet:true}}));
   res.status(201).json({id:created.id,orderNumber:created.orderNumber,publicOrderToken:created.publicOrderToken,status:created.status,grandTotal:created.grandTotal,outlet:{name:created.outlet.name,code:created.outlet.code}});
+  void sendCustomerWebOrderPush(created).catch(error=>console.error('Customer web order push failed',error));
 }));
 
 api.use(auth);
+const pushDeviceBody=z.object({
+  token:z.string().trim().min(20).max(4096),
+  outletId:z.string().trim().min(1),
+  platform:z.literal('ANDROID').default('ANDROID'),
+  deviceName:z.string().trim().max(120).optional()
+});
+api.post('/push-devices',asyncRoute(async(req,res)=>{
+  const d=pushDeviceBody.parse(req.body);
+  await assertTenantOutlet(req,d.outletId);
+  const device=await prisma.pushDevice.upsert({
+    where:{token:d.token},
+    create:{token:d.token,platform:d.platform,deviceName:d.deviceName,userId:req.user!.id,businessId:req.user!.businessId,outletId:d.outletId},
+    update:{platform:d.platform,deviceName:d.deviceName,userId:req.user!.id,businessId:req.user!.businessId,outletId:d.outletId,isActive:true,lastSeenAt:new Date()}
+  });
+  res.status(201).json({id:device.id,registered:true});
+}));
+api.delete('/push-devices/current',asyncRoute(async(req,res)=>{
+  const token=z.object({token:z.string().trim().min(20).max(4096)}).parse(req.body).token;
+  await prisma.pushDevice.updateMany({where:{token,userId:req.user!.id,businessId:req.user!.businessId},data:{isActive:false}});
+  res.json({ok:true});
+}));
 function tenantWhere(req:any){return tenantScope(req as any);}
 function tenantWhereAnd(req:any,...clauses:any[]){return tenantAnd(req as any,...clauses);}
 async function assertTenantOutlet(req:any,outletId:string){
