@@ -217,6 +217,7 @@ function publicProductShape(p:any,outletId:string,channel='DINE_IN'){
     description:p.description,
     imageUrl:p.imageUrl,
     isAvailable:!!po&&po.isAvailable&&po.isActive&&po.status==='ACTIVE',
+    isRecommended:!!po?.isRecommended,
     basePrice:Number(activePrice),
     priceChannel:channel,
     variants:(p.variants||[]).map((v:any)=>({id:v.id,variantName:v.variantName,sellingPrice:legacyVariantPrice(Number(p.basePrice),Number(activePrice),Number(v.sellingPrice))})),
@@ -614,7 +615,7 @@ const onlineChannels=['GOFOOD','GRABFOOD','SHOPEEFOOD'] as const;
 const orderChannels=['DINE_IN','TAKE_AWAY',...onlineChannels] as const;
 const onlineChannelSchema=z.enum(onlineChannels);
 const orderChannelSchema=z.enum(orderChannels);
-const outletPricingInput=z.object({outletId:z.string(),isAvailable:z.coerce.boolean().default(true),outletPrice:z.coerce.number().nonnegative().nullable().optional(),outletHpp:z.coerce.number().nonnegative().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
+const outletPricingInput=z.object({outletId:z.string(),isAvailable:z.coerce.boolean().default(true),isRecommended:z.coerce.boolean().default(false),outletPrice:z.coerce.number().nonnegative().nullable().optional(),outletHpp:z.coerce.number().nonnegative().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
 const channelPricingInput=z.object({outletId:z.string(),channel:onlineChannelSchema,price:z.coerce.number().nonnegative().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
 const productImageUrlSchema=z.string().trim().optional().nullable().refine(value=>!value||value===''||/^https?:\/\//i.test(value)||value.startsWith('/storage/products/'),{message:'Image URL tidak valid'});
 const productInput=z.object({sku:z.string().trim().optional().nullable(),name:z.string().min(2),categoryId:z.string().optional(),category:z.string().optional(),description:z.string().optional(),imageUrl:productImageUrlSchema,basePrice:z.coerce.number().nonnegative().optional(),baseHpp:z.coerce.number().nonnegative().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE'),variantGroupIds:z.array(z.string()).default([]),outletIds:z.array(z.string()).default([]),outletPricing:z.array(outletPricingInput).optional(),channelPricing:z.array(channelPricingInput).optional(),variants:z.array(z.object({variantName:z.string(),sellingPrice:z.coerce.number().nonnegative(),hpp:z.coerce.number().nonnegative()})).optional()});
@@ -914,15 +915,15 @@ api.post('/products',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const category=await categoryName(req,d.categoryId,d.category);
   const basePrice=d.basePrice??d.variants?.[0]?.sellingPrice??0,baseHpp=d.baseHpp??d.variants?.[0]?.hpp??0;
   for(const variantGroupId of d.variantGroupIds)await assertTenantVariantGroup(req,variantGroupId);
-  let outletRows=(d.outletPricing??d.outletIds.map(outletId=>({outletId,isAvailable:true,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}))).map(x=>({...x,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null}));
+  let outletRows=(d.outletPricing??d.outletIds.map(outletId=>({outletId,isAvailable:true,isRecommended:false,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}))).map(x=>({...x,isRecommended:x.isRecommended??false,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null}));
   for(const row of outletRows)await assertTenantOutlet(req,row.outletId);
   if(!outletRows.length){
     const outlets=await prisma.outlet.findMany({where:tenantWhereAnd(req,{status:'ACTIVE'}),select:{id:true}});
-    outletRows=outlets.map(o=>({outletId:o.id,isAvailable:true,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}));
+    outletRows=outlets.map(o=>({outletId:o.id,isAvailable:true,isRecommended:false,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}));
   }
   const channelRows=(d.channelPricing||[]).filter(x=>x.price!=null&&x.status==='ACTIVE');
   for(const row of channelRows)await assertTenantOutlet(req,row.outletId);
-  res.status(201).json(await prisma.product.create({data:{businessId:req.user!.businessId,sku:d.sku?.trim()||null,name:d.name,category,categoryId:d.categoryId,description:d.description,imageUrl:d.imageUrl||null,basePrice,baseHpp,status:d.status,variants:{create:d.variants?.length?d.variants:[{variantName:'Base',sellingPrice:basePrice,hpp:baseHpp}]},variantGroups:{create:d.variantGroupIds.map((variantGroupId,i)=>({variantGroupId,sortOrder:i}))},outlets:{create:outletRows.map(x=>({outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))},channelPrices:{create:channelRows.map(x=>({outletId:x.outletId,channel:x.channel,price:x.price!,status:x.status}))}},include:productInclude}));
+  res.status(201).json(await prisma.product.create({data:{businessId:req.user!.businessId,sku:d.sku?.trim()||null,name:d.name,category,categoryId:d.categoryId,description:d.description,imageUrl:d.imageUrl||null,basePrice,baseHpp,status:d.status,variants:{create:d.variants?.length?d.variants:[{variantName:'Base',sellingPrice:basePrice,hpp:baseHpp}]},variantGroups:{create:d.variantGroupIds.map((variantGroupId,i)=>({variantGroupId,sortOrder:i}))},outlets:{create:outletRows.map(x=>({outletId:x.outletId,isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))},channelPrices:{create:channelRows.map(x=>({outletId:x.outletId,channel:x.channel,price:x.price!,status:x.status}))}},include:productInclude}));
 }));
 api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const d=productInput.partial().parse(req.body);
@@ -943,7 +944,7 @@ api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
         const rawPrice=x.outletPrice??null,rawHpp=x.outletHpp??null;
         const outletPrice=rawPrice!==null&&d.basePrice!==undefined&&Number(rawPrice)===oldBasePrice?d.basePrice:rawPrice;
         const outletHpp=rawHpp!==null&&d.baseHpp!==undefined&&Number(rawHpp)===oldBaseHpp?d.baseHpp:rawHpp;
-        await tx.productOutlet.upsert({where:{productId_outletId:{productId:id,outletId:x.outletId}},update:{isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice,outletHpp},create:{productId:id,outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice,outletHpp}});
+        await tx.productOutlet.upsert({where:{productId_outletId:{productId:id,outletId:x.outletId}},update:{isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice,outletHpp},create:{productId:id,outletId:x.outletId,isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice,outletHpp}});
       }
     }else if(d.outletIds){await tx.productOutlet.deleteMany({where:{productId:id}});await tx.productOutlet.createMany({data:d.outletIds.map(outletId=>({productId:id,outletId,isAvailable:true,isActive:true,status:'ACTIVE'})),skipDuplicates:true});}
     if(d.channelPricing){
@@ -984,8 +985,8 @@ api.delete('/products/:id/permanent',allow('OWNER'),asyncRoute(async(req,res)=>{
   });
   res.json({message:'Produk berhasil dihapus permanen.'});
 }));
-api.get('/products/:id/outlets',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const productId=String(req.params.id);await assertTenantProduct(req,productId);const [outlets,rows]=await Promise.all([prisma.outlet.findMany({where:tenantWhere(req),orderBy:{name:'asc'}}),prisma.productOutlet.findMany({where:{productId,outlet:tenantWhere(req)},include:{outlet:true}})]);res.json(outlets.map(outlet=>rows.find(r=>r.outletId===outlet.id)||{productId,outletId:outlet.id,outlet,isAvailable:false,isActive:false,outletPrice:null,outletHpp:null,status:'INACTIVE'}));}));
-api.put('/products/:id/outlets',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const productId=String(req.params.id);await assertTenantProduct(req,productId);const rows=z.object({outlets:z.array(outletPricingInput)}).parse(req.body).outlets;for(const x of rows)await assertTenantOutlet(req,x.outletId);res.json(await prisma.$transaction(async tx=>{for(const x of rows)await tx.productOutlet.upsert({where:{productId_outletId:{productId,outletId:x.outletId}},update:{isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null},create:{productId,outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null}});return tx.productOutlet.findMany({where:{productId,outlet:tenantWhere(req)},include:{outlet:true},orderBy:{outlet:{name:'asc'}}});}));}));
+api.get('/products/:id/outlets',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const productId=String(req.params.id);await assertTenantProduct(req,productId);const [outlets,rows]=await Promise.all([prisma.outlet.findMany({where:tenantWhere(req),orderBy:{name:'asc'}}),prisma.productOutlet.findMany({where:{productId,outlet:tenantWhere(req)},include:{outlet:true}})]);res.json(outlets.map(outlet=>rows.find(r=>r.outletId===outlet.id)||{productId,outletId:outlet.id,outlet,isAvailable:false,isRecommended:false,isActive:false,outletPrice:null,outletHpp:null,status:'INACTIVE'}));}));
+api.put('/products/:id/outlets',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const productId=String(req.params.id);await assertTenantProduct(req,productId);const rows=z.object({outlets:z.array(outletPricingInput)}).parse(req.body).outlets;for(const x of rows)await assertTenantOutlet(req,x.outletId);res.json(await prisma.$transaction(async tx=>{for(const x of rows)await tx.productOutlet.upsert({where:{productId_outletId:{productId,outletId:x.outletId}},update:{isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null},create:{productId,outletId:x.outletId,isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null}});return tx.productOutlet.findMany({where:{productId,outlet:tenantWhere(req)},include:{outlet:true},orderBy:{outlet:{name:'asc'}}});}));}));
 api.get('/products/:id/recipe',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const productId=String(req.params.id);await assertProduct(req,productId);res.json(await prisma.productRecipe.findMany({where:{productId},include:recipeInclude,orderBy:{createdAt:'asc'}}));}));
 api.post('/products/:id/recipe',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const productId=String(req.params.id);

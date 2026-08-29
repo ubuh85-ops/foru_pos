@@ -330,6 +330,7 @@ model ProductOutlet {
   outletId    String   @map("outlet_id")
   isActive    Boolean  @default(true) @map("is_active")
   isAvailable Boolean  @default(true) @map("is_available")
+  isRecommended Boolean @default(false) @map("is_recommended")
   outletPrice Decimal? @map("outlet_price") @db.Decimal(14, 2)
   outletHpp   Decimal? @map("outlet_hpp") @db.Decimal(14, 2)
   status      Status   @default(ACTIVE)
@@ -339,6 +340,7 @@ model ProductOutlet {
   product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@unique([productId, outletId])
+  @@index([outletId, isRecommended])
   @@map("product_outlets")
 }
 
