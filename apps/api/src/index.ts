@@ -11,7 +11,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import sharp from 'sharp';
 import { allow, ApiError, assertOutlet, asyncRoute, auth, dayRange, defaultBusinessForUser, defaultInventoryPermissions, hasPermission, money, prisma, requirePermission, tenantAnd, tenantScope } from './lib.js';
-import { discountAmount, priceCart, validateCoupon } from './discount.js';
+import { discountAmount, legacyVariantPrice, priceCart, validateCoupon } from './discount.js';
 import { validatePublicSchedule } from './preorder.js';
 
 const defaultCorsOrigins = [
@@ -212,13 +212,13 @@ function publicProductShape(p:any,outletId:string,channel='DINE_IN'){
     sku:p.sku,
     name:p.name,
     category:p.categoryRef?.name||p.category,
-    categoryRef:p.categoryRef?{id:p.categoryRef.id,name:p.categoryRef.name}:null,
+    categoryRef:p.categoryRef?{id:p.categoryRef.id,name:p.categoryRef.name,sortOrder:p.categoryRef.sortOrder}:null,
     description:p.description,
     imageUrl:p.imageUrl,
     isAvailable:!!po&&po.isAvailable&&po.isActive&&po.status==='ACTIVE',
     basePrice:Number(activePrice),
     priceChannel:channel,
-    variants:(p.variants||[]).map((v:any)=>({id:v.id,variantName:v.variantName,sellingPrice:Number(v.sellingPrice)})),
+    variants:(p.variants||[]).map((v:any)=>({id:v.id,variantName:v.variantName,sellingPrice:legacyVariantPrice(Number(p.basePrice),Number(activePrice),Number(v.sellingPrice))})),
     addons:(p.addons||[]).map((a:any)=>({id:a.id,addonName:a.addonName,price:Number(a.price)})),
     variantGroups:(p.variantGroups||[]).map((vg:any)=>({
       id:vg.id,
@@ -272,7 +272,7 @@ api.get('/public/order/:businessSlug/:outletSlug',asyncRoute(async(req,res)=>{
 api.get('/public/order/:businessSlug/:outletSlug/products',asyncRoute(async(req,res)=>{
   const {business,outlet}=await resolvePublicOrderOutlet(String(req.params.businessSlug),String(req.params.outletSlug));
   if(!outlet.customerOrderingEnabled||!outlet.acceptingCustomerOrders)throw new ApiError(403,'Pesanan online sedang ditutup');
-  const products=await prisma.product.findMany({where:{businessId:business.id,status:'ACTIVE',OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}],outlets:{some:{outletId:outlet.id,isActive:true,status:'ACTIVE'}}},include:{categoryRef:true,outlets:{where:{outletId:outlet.id,isActive:true}},variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId:outlet.id}}}}}}}}},orderBy:{name:'asc'}});
+  const products=await prisma.product.findMany({where:{businessId:business.id,status:'ACTIVE',OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}],outlets:{some:{outletId:outlet.id,isActive:true,status:'ACTIVE'}}},include:{categoryRef:true,outlets:{where:{outletId:outlet.id,isActive:true}},variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId:outlet.id}}}}}}}}},orderBy:[{categoryRef:{sortOrder:'asc'}},{name:'asc'}]});
   res.json(products.map(p=>publicProductShape(p,outlet.id)));
 }));
 api.post('/public/order/:businessSlug/:outletSlug/preview',asyncRoute(async(req,res)=>{
@@ -546,10 +546,35 @@ api.post('/printers',allow('OWNER'),asyncRoute(async(req,res)=>{const d=printerB
 api.put('/printers/:id',allow('OWNER'),asyncRoute(async(req,res)=>{const d=printerBody.partial().parse(req.body);const existing=await assertTenantPrinter(req,String(req.params.id));await assertTenantOutlet(req,d.outletId||existing.outletId);res.json(await prisma.printer.update({where:{id:existing.id},data:d,include:{outlet:true}}));}));
 api.delete('/printers/:id',allow('OWNER'),asyncRoute(async(req,res)=>{await assertTenantPrinter(req,String(req.params.id));res.json(await prisma.printer.update({where:{id:String(req.params.id)},data:{status:'INACTIVE'}}));}));
 
-const categoryBody=z.object({name:z.string().min(2),description:z.string().nullable().optional(),sortOrder:z.coerce.number().int().default(0),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
+const categoryBody=z.object({name:z.string().trim().min(2),description:z.string().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
+const categoryUpdateBody=categoryBody.partial();
+const categoryReorderBody=z.object({
+  categories:z.array(z.object({id:z.string().min(1),sortOrder:z.coerce.number().int().nonnegative()})).min(1)
+});
 api.get('/categories',asyncRoute(async(req,res)=>res.json(await prisma.category.findMany({where:tenantWhere(req),orderBy:[{sortOrder:'asc'},{name:'asc'}]}))));
-api.post('/categories',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>res.status(201).json(await prisma.category.create({data:{...categoryBody.parse(req.body),businessId:req.user!.businessId}}))));
-api.put('/categories/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertTenantCategory(req,id);res.json(await prisma.category.update({where:{id},data:categoryBody.partial().parse(req.body)}));}));
+api.post('/categories',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
+  const d=categoryBody.parse(req.body);
+  const max=await prisma.category.aggregate({where:tenantWhere(req),_max:{sortOrder:true}});
+  const sortOrder=(max._max.sortOrder??-10)+10;
+  res.status(201).json(await prisma.category.create({data:{...d,sortOrder,businessId:req.user!.businessId}}));
+}));
+api.put('/categories/reorder',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
+  const d=categoryReorderBody.parse(req.body);
+  const ids=d.categories.map(category=>category.id);
+  if(new Set(ids).size!==ids.length)throw new ApiError(400,'Kategori duplikat dalam urutan.');
+  const existing=await prisma.category.findMany({where:tenantWhereAnd(req,{id:{in:ids}}),select:{id:true}});
+  if(existing.length!==ids.length)throw new ApiError(403,'Kategori tidak diizinkan.');
+  const sortOrders=d.categories.map(category=>category.sortOrder);
+  if(new Set(sortOrders).size!==sortOrders.length)throw new ApiError(400,'Urutan kategori harus unik.');
+  const updated=await prisma.$transaction(async tx=>{
+    for(const category of d.categories){
+      await tx.category.update({where:{id:category.id},data:{sortOrder:category.sortOrder}});
+    }
+    return tx.category.findMany({where:tenantWhere(req),orderBy:[{sortOrder:'asc'},{name:'asc'}]});
+  });
+  res.json(updated);
+}));
+api.put('/categories/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertTenantCategory(req,id);res.json(await prisma.category.update({where:{id},data:categoryUpdateBody.parse(req.body)}));}));
 api.delete('/categories/:id',allow('OWNER'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertTenantCategory(req,id);res.json(await prisma.category.update({where:{id},data:{status:'INACTIVE'}}));}));
 
 const variantGroupBase=z.object({name:z.string().min(2),description:z.string().nullable().optional(),minSelect:z.coerce.number().int().min(0).default(0),maxSelect:z.coerce.number().int().min(1).default(1),required:z.coerce.boolean().default(false),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE'),options:z.array(z.object({name:z.string().min(1),additionalPrice:z.coerce.number().nonnegative().default(0),hpp:z.coerce.number().nonnegative().default(0),sortOrder:z.coerce.number().int().default(0),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')})).optional()});
@@ -840,7 +865,7 @@ api.post('/products/import',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res
   await prisma.auditLog.create({data:{businessId:req.user!.businessId,entityType:'PRODUCT_IMPORT',entityId:`import-${Date.now()}`,action:'PRODUCT_IMPORT',oldValue:Prisma.JsonNull,newValue:{filename:d.filename,imported,updated,failed,total:validated.products.length},changedBy:req.user!.id}});
   res.json({summary:{imported,updated,failed,total:validated.products.length},results});
 }));
-api.get('/pos/products',asyncRoute(async(req,res)=>{ const outletId=String(req.query.outlet_id||''); await assertTenantOutlet(req,outletId); const channel=String(req.query.channel||req.query.orderType||'DINE_IN').toUpperCase(); const onlineChannel=onlineChannels.includes(channel as any)?channel as typeof onlineChannels[number]:undefined; const products=await prisma.product.findMany({where:tenantWhereAnd(req,{status:'ACTIVE',OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}],outlets:{some:{outletId,isActive:true,status:'ACTIVE'}}}),include:{categoryRef:true,outlets:{where:{outletId,isActive:true}},channelPrices:onlineChannel?{where:{outletId,channel:onlineChannel,status:'ACTIVE'}}:false,variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId}}}}}}}}},orderBy:{name:'asc'}});res.json(products.map(p=>{const po=p.outlets[0];const dineInPrice=po?.outletPrice??p.basePrice;const cp=(p as any).channelPrices?.[0];const activePrice=cp?.price??dineInPrice;return {...p,isAvailable:!!po&&po.isAvailable&&po.isActive&&po.status==='ACTIVE',basePrice:activePrice,baseHpp:po?.outletHpp??p.baseHpp,masterBasePrice:p.basePrice,masterBaseHpp:p.baseHpp,dineInPrice,channelPrice:cp?.price??null,priceChannel:onlineChannel||'DINE_IN',priceSource:cp?'CHANNEL':(po?.outletPrice!=null?'OUTLET':'BASE'),variantGroups:p.variantGroups.map(vg=>({...vg,group:{...vg.group,options:vg.group.options.filter(o=>!o.outlets[0]||o.outlets[0].status==='ACTIVE').map(o=>({...o,additionalPrice:o.outlets[0]?.additionalPrice??o.additionalPrice,hpp:o.outlets[0]?.hpp??o.hpp,masterAdditionalPrice:o.additionalPrice,masterHpp:o.hpp}))}}))};})); }));
+api.get('/pos/products',asyncRoute(async(req,res)=>{ const outletId=String(req.query.outlet_id||''); await assertTenantOutlet(req,outletId); const channel=String(req.query.channel||req.query.orderType||'DINE_IN').toUpperCase(); const onlineChannel=onlineChannels.includes(channel as any)?channel as typeof onlineChannels[number]:undefined; const products=await prisma.product.findMany({where:tenantWhereAnd(req,{status:'ACTIVE',OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}],outlets:{some:{outletId,isActive:true,status:'ACTIVE'}}}),include:{categoryRef:true,outlets:{where:{outletId,isActive:true}},channelPrices:onlineChannel?{where:{outletId,channel:onlineChannel,status:'ACTIVE'}}:false,variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId}}}}}}}}},orderBy:[{categoryRef:{sortOrder:'asc'}},{name:'asc'}]});res.json(products.map(p=>{const po=p.outlets[0];const dineInPrice=po?.outletPrice??p.basePrice;const cp=(p as any).channelPrices?.[0];const activePrice=cp?.price??dineInPrice;return {...p,isAvailable:!!po&&po.isAvailable&&po.isActive&&po.status==='ACTIVE',basePrice:activePrice,baseHpp:po?.outletHpp??p.baseHpp,masterBasePrice:p.basePrice,masterBaseHpp:p.baseHpp,dineInPrice,channelPrice:cp?.price??null,priceChannel:onlineChannel||'DINE_IN',priceSource:cp?'CHANNEL':(po?.outletPrice!=null?'OUTLET':'BASE'),variantGroups:p.variantGroups.map(vg=>({...vg,group:{...vg.group,options:vg.group.options.filter(o=>!o.outlets[0]||o.outlets[0].status==='ACTIVE').map(o=>({...o,additionalPrice:o.outlets[0]?.additionalPrice??o.additionalPrice,hpp:o.outlets[0]?.hpp??o.hpp,masterAdditionalPrice:o.additionalPrice,masterHpp:o.hpp}))}}))};})); }));
 
 api.get('/menu-availability',allow('OWNER','SUPERVISOR','CASHIER'),asyncRoute(async(req,res)=>{
   const outletId=String(req.query.outletId||'');

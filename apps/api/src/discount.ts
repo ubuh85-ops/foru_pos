@@ -20,6 +20,10 @@ function normalizedChannel(channel?:string|null):PaymentMethod|undefined{
 }
 function percentMargin(price:number,hpp:number){return price>0?money((price-hpp)/price*100):0;}
 
+export function legacyVariantPrice(masterBasePrice:number,effectiveBasePrice:number,masterVariantPrice:number){
+  return money(Math.max(0,effectiveBasePrice+(masterVariantPrice-masterBasePrice)));
+}
+
 export async function priceCart(items:CartLine[],outletId:string,channel?:string|null,businessId?:string):Promise<PricedLine[]>{
   if(!items.length) throw new ApiError(400,'Cart masih kosong');
   const productIds=[...new Set(items.map(item=>item.productId))];
@@ -53,7 +57,7 @@ export async function priceCart(items:CartLine[],outletId:string,channel?:string
     if((line.addonIds?.length||0)!==selectedAddons.length) throw new ApiError(400,'Add-on tidak valid');
     const optionIds=[...new Set(line.selectedVariantOptionIds||[])];
     const selectedVariants:PricedLine['selectedVariants']=[];
-    let basePrice=Number(product.basePrice), baseHpp=Number(product.baseHpp), outletPrice=productOutlet?.outletPrice===null||!productOutlet?undefined:Number(productOutlet.outletPrice), outletHpp=productOutlet?.outletHpp===null||!productOutlet?undefined:Number(productOutlet.outletHpp), variantName='Base', variantId=line.variantId;
+    let basePrice=Number(product.basePrice), baseHpp=Number(product.baseHpp), outletPrice=productOutlet?.outletPrice===null||!productOutlet?undefined:Number(productOutlet.outletPrice), outletHpp=productOutlet?.outletHpp===null||!productOutlet?undefined:Number(productOutlet.outletHpp), variantName='Base', variantId=line.variantId, legacyVariantMasterPrice:number|undefined;
     if(product.variantGroups.length){
       const seen=new Set<string>();
       for(const attached of product.variantGroups){
@@ -71,7 +75,7 @@ export async function priceCart(items:CartLine[],outletId:string,channel?:string
       variantName=selectedVariants.length?selectedVariants.map(v=>v.optionName).join(', '):'Base';
     } else {
       const variant=line.variantId?product.variants.find(v=>v.id===line.variantId):product.variants[0];
-      if(variant){variantId=variant.id; variantName=variant.variantName;}
+      if(variant){variantId=variant.id; variantName=variant.variantName; legacyVariantMasterPrice=Number(variant.sellingPrice);}
       else {variantId=undefined; variantName='Base';}
     }
     const variantPriceTotal=selectedVariants.reduce((s,v)=>s+v.additionalPrice,0);
@@ -80,11 +84,13 @@ export async function priceCart(items:CartLine[],outletId:string,channel?:string
     const channelPrice=onlineChannel?Number((product as any).channelPrices?.[0]?.price??NaN):NaN;
     const hasChannelPrice=Number.isFinite(channelPrice);
     const effectiveBasePrice=hasChannelPrice?channelPrice:dineInPrice, effectiveBaseHpp=outletHpp??baseHpp;
+    const legacyVariantPriceTotal=legacyVariantMasterPrice===undefined?0:legacyVariantPrice(basePrice,effectiveBasePrice,legacyVariantMasterPrice)-effectiveBasePrice;
+    const combinedVariantPriceTotal=legacyVariantPriceTotal+variantPriceTotal;
     const priceSource=hasChannelPrice?'CHANNEL':(outletPrice!==undefined?'OUTLET':'BASE');
-    const unit=effectiveBasePrice+variantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0);
+    const unit=effectiveBasePrice+combinedVariantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0);
     const hpp=effectiveBaseHpp+variantHppTotal+selectedAddons.reduce((s,a)=>s+Number(a.hpp),0);
     const gross=money(unit*line.qty), disc=discountAmount(gross,line.discount);
-    return {outletId,productId:line.productId,variantId,productName:product.name,variantName,category:product.categoryRef?.name||product.category,qty:line.qty,unitPrice:money(unit),hpp:money(hpp),gross,discountType:line.discount?.type,discountValue:line.discount?.value,discountAmount:disc,net:money(gross-disc),itemNote:itemNote||undefined,addons:selectedAddons.map(a=>({id:a.id,name:a.addonName,price:Number(a.price),hpp:Number(a.hpp)})),selectedVariants,basePrice:money(basePrice),outletPrice:outletPrice===undefined?undefined:money(outletPrice),channel:onlineChannel,dineInPriceSnapshot:money(dineInPrice+variantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)),channelPriceSnapshot:hasChannelPrice?money(channelPrice+variantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)):undefined,priceSource,baseMarginPercent:percentMargin(dineInPrice+variantPriceTotal, hpp),actualMarginPercent:percentMargin(unit,hpp),variantPriceTotal:money(variantPriceTotal),baseHpp:money(baseHpp),outletHpp:outletHpp===undefined?undefined:money(outletHpp),variantHppTotal:money(variantHppTotal)};
+    return {outletId,productId:line.productId,variantId,productName:product.name,variantName,category:product.categoryRef?.name||product.category,qty:line.qty,unitPrice:money(unit),hpp:money(hpp),gross,discountType:line.discount?.type,discountValue:line.discount?.value,discountAmount:disc,net:money(gross-disc),itemNote:itemNote||undefined,addons:selectedAddons.map(a=>({id:a.id,name:a.addonName,price:Number(a.price),hpp:Number(a.hpp)})),selectedVariants,basePrice:money(basePrice),outletPrice:outletPrice===undefined?undefined:money(outletPrice),channel:onlineChannel,dineInPriceSnapshot:money(dineInPrice+combinedVariantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)),channelPriceSnapshot:hasChannelPrice?money(channelPrice+combinedVariantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)):undefined,priceSource,baseMarginPercent:percentMargin(dineInPrice+combinedVariantPriceTotal, hpp),actualMarginPercent:percentMargin(unit,hpp),variantPriceTotal:money(combinedVariantPriceTotal),baseHpp:money(baseHpp),outletHpp:outletHpp===undefined?undefined:money(outletHpp),variantHppTotal:money(variantHppTotal)};
   }));
 }
 export async function validateCoupon(code:string,outletId:string,lines:PricedLine[],customerKey?:string,businessId?:string){

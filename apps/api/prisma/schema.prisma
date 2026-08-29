@@ -204,6 +204,7 @@ model Category {
 
   @@unique([businessId, name])
   @@index([businessId])
+  @@index([businessId, sortOrder])
   @@map("categories")
 }
 
