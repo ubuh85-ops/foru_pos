@@ -8,7 +8,6 @@ import HeaderOutletSelector from './components/HeaderOutletSelector';
 import { ConfirmDialog } from './components/ForuDialog';
 import NewOrderNotifier from './components/NewOrderNotifier';
 import AndroidOrderPush, { deactivateAndroidOrderPush } from './components/AndroidOrderPush';
-import OrderNotificationSettings from './components/OrderNotificationSettings';
 import { OutletProvider } from './OutletContext';
 import Login from './pages/Login';
 import OutletSelect from './pages/OutletSelect';
@@ -22,6 +21,7 @@ import ReportsPage from './pages/ReportsPage';
 import ExpensesPage from './pages/ExpensesPage';
 import SalesHistoryPage from './pages/SalesHistoryPage';
 import { Coupons, CustomerItemListPrint, KitchenTicketPrint, PrinterSettings, ReceiptPrint, SaleDetail } from './pages/Pages';
+import SettingsPage from './pages/SettingsPage';
 import { OrderDetail, Orders } from './pages/Orders';
 import VariantGroupsPage from './pages/VariantGroupsPage';
 import UserManagementPage from './pages/UserManagementPage';
@@ -111,6 +111,8 @@ const knownRoutes = new Set([
   '/variant-groups',
   '/printers',
   '/users',
+  '/device',
+  '/settings',
   '/products',
   '/outlets',
   '/reports',
@@ -208,6 +210,8 @@ const rootPages = new Set([
   '/variant-groups',
   '/printers',
   '/users',
+  '/device',
+  '/settings',
   '/products',
   '/outlets',
   '/reports',
@@ -433,7 +437,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
       <div className={`mt-4 shrink-0 rounded-2xl border border-slate-200 bg-slate-50 ${sidebarHidden ? 'p-2 text-center' : 'p-4 text-left'}`}><b className={`block truncate font-semibold ${sidebarHidden ? 'md:hidden' : 'md:block'}`}>{user.name}</b><div className={`mb-3 truncate text-xs text-slate-500 ${sidebarHidden ? 'md:hidden' : 'md:block'}`}>{user.role}</div><button onClick={logout} title="Keluar" className={`flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-brand-700 ${sidebarHidden ? 'justify-center' : 'justify-start'}`}><LogOut size={16} /><span className={sidebarHidden ? 'md:hidden' : 'md:inline'}>Keluar</span></button></div>
     </aside>
     <main className="min-w-0 max-w-full flex-1 overflow-x-hidden pb-20 md:pb-0">
-      <header className="sticky top-0 z-30 flex h-16 max-w-full items-center justify-between gap-3 overflow-hidden border-b border-slate-200 bg-white px-4 md:px-6 lg:px-8"><button onClick={() => setOpen(true)} className="shrink-0 text-slate-700 md:hidden"><Menu /></button><button onClick={toggleSidebar} title={sidebarHidden?'Tampilkan menu':'Sembunyikan menu'} className="hidden shrink-0 rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:bg-brand-50 hover:text-brand-700 md:block"><Menu size={20}/></button><HeaderOutletSelector /><ShiftBanner /><div className="ml-auto flex min-w-0 shrink-0 items-center gap-2"><OrderNotificationSettings />{user.role === 'OWNER' && <button onClick={() => navigate('/users')} className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-brand-50 hover:text-brand-700 sm:flex"><Users size={16} /> User</button>}<span className="pill bg-brand-100 text-brand-700">{user.role}</span></div></header>
+      <header className="sticky top-0 z-30 flex h-16 max-w-full items-center justify-between gap-3 overflow-hidden border-b border-slate-200 bg-white px-4 md:px-6 lg:px-8"><button onClick={() => setOpen(true)} className="shrink-0 text-slate-700 md:hidden"><Menu /></button><button onClick={toggleSidebar} title={sidebarHidden?'Tampilkan menu':'Sembunyikan menu'} className="hidden shrink-0 rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:bg-brand-50 hover:text-brand-700 md:block"><Menu size={20}/></button><HeaderOutletSelector /><ShiftBanner /><div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">{user.role === 'OWNER' && <button onClick={() => navigate('/users')} className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-brand-50 hover:text-brand-700 sm:flex"><Users size={16} /> User</button>}<span className="pill bg-brand-100 text-brand-700">{user.role}</span></div></header>
       <Routes>
         <Route path="/pos" element={<POS />} />
         <Route path="/menu-availability" element={<MenuAvailabilityPage />} />
@@ -450,6 +454,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
         <Route path="/categories" element={user.role === 'OWNER' ? <CategoriesPage /> : <Navigate to="/pos" />} />
         <Route path="/variant-groups" element={user.role === 'OWNER' ? <VariantGroupsPage /> : <Navigate to="/pos" />} />
         <Route path="/printers" element={user.role === 'OWNER' ? <PrinterSettings /> : <Navigate to="/pos" />} />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route path="/users" element={user.role === 'OWNER' ? <UserManagementPage /> : <Navigate to="/pos" />} />
         <Route path="/products" element={<ProductPage />} />
         <Route path="/outlets" element={user.role === 'OWNER' ? <OutletPage /> : <Navigate to="/pos" />} />

@@ -4,9 +4,18 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useOutlet } from '../OutletContext';
 import { getOrderNotificationSettings, ORDER_NOTIFICATION_SETTINGS_CHANGED, type OrderNotificationSettings } from '../orderNotificationSettings';
+import { registerPlugin } from '@capacitor/core';
 
 const TOKEN_KEY = 'foru:android_push_token';
 const allowedRoute = /^\/orders(?:\/preorder-recap|\/[A-Za-z0-9_-]+)$/;
+const DeviceNotificationSound = registerPlugin<{ createChannel: (options: { channelId: string; channelName?: string; soundUri?: string }) => Promise<void> }>('DeviceNotificationSound');
+const SOUND_MAP_KEY = 'foru:device-notification-sounds';
+
+function selectedAndroidChannel(settings: OrderNotificationSettings) {
+  if (!settings.soundEnabled) return 'customer-web-orders-silent';
+  if (settings.soundName?.startsWith('device-')) return settings.soundName;
+  return 'customer-web-orders';
+}
 
 export async function deactivateAndroidOrderPush() {
   const token = localStorage.getItem(TOKEN_KEY);
@@ -59,12 +68,13 @@ export default function AndroidOrderPush() {
       actionHandle = await PushNotifications.addListener('pushNotificationActionPerformed', event => openNotification(event.notification.data || {}));
       const { LocalNotifications } = await import('@capacitor/local-notifications');
       receivedHandle = await PushNotifications.addListener('pushNotificationReceived', notification => {
+        const channelId = selectedAndroidChannel(settings);
         void LocalNotifications.schedule({ notifications: [{
           id: Math.floor(Date.now() % 2147483000),
           title: notification.title || 'Order Web Baru',
           body: notification.body || 'Ada order baru dari Customer Web Order.',
-          channelId: settings.soundEnabled ? 'customer-web-orders' : 'customer-web-orders-silent',
-          ...(settings.soundEnabled ? { sound: settings.soundName || 'default' } : {}),
+          channelId,
+          ...(settings.soundEnabled && channelId === 'customer-web-orders' ? { sound: settings.soundName || 'default' } : {}),
           extra: notification.data || {}
         }] }).catch(() => {});
       });
@@ -80,6 +90,14 @@ export default function AndroidOrderPush() {
         visibility: 1,
         sound: 'default'
       });
+      try {
+        const soundMap = JSON.parse(localStorage.getItem(SOUND_MAP_KEY) || '{}') as Record<string, { uri?: string; name?: string }>;
+        const selectedId = settings.soundName?.startsWith('device-') ? settings.soundName : '';
+        const selected = selectedId ? soundMap[selectedId] : undefined;
+        if (settings.soundEnabled && selectedId && selected?.uri) {
+          await DeviceNotificationSound.createChannel({ channelId: selectedId, channelName: `Customer Web Orders - ${selected.name || 'Device Sound'}`, soundUri: selected.uri });
+        }
+      } catch { /* use default channel */ }
       await PushNotifications.createChannel({
         id: 'customer-web-orders-silent',
         name: 'Customer Web Orders (Silent)',

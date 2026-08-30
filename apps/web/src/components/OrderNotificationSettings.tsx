@@ -1,33 +1,99 @@
-import { Bell, BellOff } from 'lucide-react';
+import { Bell, BellOff, Play, Save } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import { api } from '../api';
 import { getOrderNotificationSettings, ORDER_NOTIFICATION_SETTINGS_CHANGED, setOrderNotificationSettings, type OrderNotificationSettings } from '../orderNotificationSettings';
 
+type DeviceSound = { id: string; name: string; uri: string };
+const DeviceNotificationSound = registerPlugin<{ listSounds: () => Promise<{ sounds: DeviceSound[] }>; createChannel: (options: { channelId: string; channelName?: string; soundUri?: string }) => Promise<void>; previewSound: (options: { soundUri: string }) => Promise<void>; stopPreview: () => Promise<void> }>('DeviceNotificationSound');
+const SOUND_MAP_KEY = 'foru:device-notification-sounds';
+
 export default function OrderNotificationSettings() {
   const [settings, setSettings] = useState<OrderNotificationSettings>(() => getOrderNotificationSettings());
+  const [draft, setDraft] = useState<OrderNotificationSettings>(() => getOrderNotificationSettings());
+  const [deviceSounds, setDeviceSounds] = useState<DeviceSound[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
 
   useEffect(() => {
-    const onChange = (event: Event) => setSettings((event as CustomEvent<OrderNotificationSettings>).detail);
+    const onChange = (event: Event) => {
+      const next = (event as CustomEvent<OrderNotificationSettings>).detail;
+      setSettings(next);
+      setDraft(next);
+    };
     window.addEventListener(ORDER_NOTIFICATION_SETTINGS_CHANGED, onChange);
     return () => window.removeEventListener(ORDER_NOTIFICATION_SETTINGS_CHANGED, onChange);
   }, []);
 
-  async function update(next: OrderNotificationSettings) {
-    setOrderNotificationSettings(next);
-    await api('/push-devices/current/preferences', { method: 'PUT', body: JSON.stringify(next) }).catch(() => {});
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    void DeviceNotificationSound.listSounds().then(result => {
+      const map = Object.fromEntries((result.sounds || []).map(sound => [sound.id, sound]));
+      localStorage.setItem(SOUND_MAP_KEY, JSON.stringify(map));
+      setDeviceSounds(result.sounds || []);
+    }).catch(() => {});
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setMessage('');
+    try {
+      setOrderNotificationSettings(draft);
+      await api('/push-devices/current/preferences', { method: 'PUT', body: JSON.stringify(draft) });
+      setSettings(draft);
+      setMessage('Pengaturan suara berhasil disimpan.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Pengaturan suara gagal disimpan.');
+    } finally {
+      setSaving(false);
+    }
   }
 
-  return <label className="hidden shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-600 sm:flex" title="Pengaturan suara notifikasi order web">
-    {settings.soundEnabled ? <Bell size={16} className="text-brand-600" /> : <BellOff size={16} />}
-    <span>Notif</span>
-    <select aria-label="Suara notifikasi order" value={settings.soundEnabled ? settings.soundName : 'off'} onChange={event => {
+  async function preview() {
+    const selected = deviceSounds.find(sound => sound.id === draft.soundName);
+    if (selected) {
+      await DeviceNotificationSound.previewSound({ soundUri: selected.uri }).catch(() => {});
+      return;
+    }
+    if (draft.soundName === 'off') return;
+    if (typeof AudioContext !== 'undefined') {
+      const context = new AudioContext();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.frequency.value = draft.soundName === 'bell' ? 880 : draft.soundName === 'chime' ? 740 : 660;
+      gain.gain.value = 0.08;
+      oscillator.connect(gain).connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.35);
+    }
+  }
+
+  return <section className="card p-5" aria-labelledby="order-notification-settings-title">
+    <div className="flex items-start gap-3">
+      <div className="rounded-xl bg-brand-50 p-3 text-brand-700">{settings.soundEnabled ? <Bell size={20} /> : <BellOff size={20} />}</div>
+      <div className="min-w-0 flex-1">
+        <h3 id="order-notification-settings-title" className="text-lg font-black">Notifikasi order web</h3>
+        <p className="mt-1 text-sm text-slate-500">Atur suara notifikasi saat order masuk ke outlet aktif.</p>
+      </div>
+    </div>
+    <label className="label mt-4">Suara notifikasi</label>
+    <select aria-label="Suara notifikasi order" value={draft.soundEnabled ? draft.soundName : 'off'} onChange={event => {
       const value = event.target.value;
-      void update({ soundEnabled: value !== 'off', soundName: value === 'off' ? settings.soundName : value });
-    }} className="max-w-28 bg-transparent text-xs font-bold outline-none">
-      <option value="default">Default</option>
+      const selected = deviceSounds.find(sound => sound.id === value);
+      if (selected) void DeviceNotificationSound.createChannel({ channelId: selected.id, channelName: 'Customer Web Orders', soundUri: selected.uri }).catch(() => {});
+      setDraft({ soundEnabled: value !== 'off', soundName: value === 'off' ? draft.soundName : value });
+    }} className="input max-w-md">
+      <option value="default">Suara perangkat (Default)</option>
+      {deviceSounds.map(sound => <option key={sound.id} value={sound.id}>{sound.name}</option>)}
       <option value="chime">Chime</option>
       <option value="bell">Bell</option>
       <option value="off">Mati</option>
     </select>
-  </label>;
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      <button type="button" onClick={() => void preview()} disabled={!draft.soundEnabled || draft.soundName === 'off'} className="btn-secondary inline-flex items-center gap-2"><Play size={16} /> Preview Suara</button>
+      <button type="button" onClick={() => void save()} disabled={saving} className="btn-primary inline-flex items-center gap-2"><Save size={16} /> {saving ? 'Menyimpan...' : 'Simpan Pengaturan'}</button>
+    </div>
+    {message && <p className="mt-2 text-sm text-slate-500" role="status">{message}</p>}
+    <p className="mt-2 text-xs text-slate-400">Di Android, pilihan suara diambil dari ringtone/alarm perangkat dan tetap berlaku saat aplikasi berjalan di background. Chime dan Bell digunakan oleh browser.</p>
+  </section>;
 }

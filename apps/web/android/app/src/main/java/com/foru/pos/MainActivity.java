@@ -7,6 +7,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(android.os.Bundle savedInstanceState) {
         registerPlugin(BluetoothPrinterPlugin.class);
         registerPlugin(ForuSQLitePlugin.class);
+        registerPlugin(DeviceNotificationSoundPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

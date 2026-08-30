@@ -93,14 +93,16 @@ export async function sendCustomerWebOrderPush(order: CustomerWebOrderPush) {
     }
     for (const group of groups.values()) {
       const tokens = group.map(device => device.token);
-      const sound = group[0]?.soundEnabled ? (group[0].soundName || 'default') : undefined;
+      const soundName = group[0]?.soundName || 'default';
+      const sound = group[0]?.soundEnabled && soundName === 'default' ? 'default' : undefined;
+      const channelId = group[0]?.soundEnabled && soundName.startsWith('device-') ? soundName : (sound ? 'customer-web-orders' : 'customer-web-orders-silent');
       const response = await fcm.sendEachForMulticast({
         tokens,
         notification: { title: content.title, body: content.body },
         data: content.data,
         android: {
           priority: 'high',
-          notification: { channelId: sound ? 'customer-web-orders' : 'customer-web-orders-silent', ...(sound ? { sound } : {}), tag: `web-order-${order.id}` }
+          notification: { channelId, ...(sound ? { sound } : {}), tag: `web-order-${order.id}` }
         }
       });
       successCount += response.successCount;
