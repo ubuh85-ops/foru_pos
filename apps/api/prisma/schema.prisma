@@ -171,6 +171,10 @@ model PushDevice {
   businessId String   @map("business_id")
   outletId   String   @map("outlet_id")
   isActive   Boolean  @default(true) @map("is_active")
+  isPosActive Boolean  @default(false) @map("is_pos_active")
+  posLastSeenAt DateTime? @map("pos_last_seen_at")
+  soundEnabled Boolean  @default(true) @map("sound_enabled")
+  soundName String? @map("sound_name")
   lastSeenAt DateTime @default(now()) @map("last_seen_at")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
@@ -179,7 +183,7 @@ model PushDevice {
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   outlet   Outlet   @relation(fields: [outletId], references: [id], onDelete: Cascade)
 
-  @@index([businessId, outletId, isActive])
+  @@index([businessId, outletId, isActive, isPosActive, posLastSeenAt])
   @@index([userId])
   @@map("push_devices")
 }

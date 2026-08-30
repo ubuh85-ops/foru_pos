@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { api } from '../api';
 import { useOutlet } from '../OutletContext';
+import { getOrderNotificationSettings, ORDER_NOTIFICATION_SETTINGS_CHANGED, type OrderNotificationSettings } from '../orderNotificationSettings';
 
 type OpenOrder = {
   id: string;
@@ -35,7 +36,7 @@ function showPassiveOrderToast(message: string) {
   }, 5_000);
 }
 
-function playNewOrderSound() {
+function playNewOrderSound(soundName: string) {
   if (typeof window === 'undefined') return;
   const AudioCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioCtor) return;
@@ -55,8 +56,16 @@ function playNewOrderSound() {
     oscillator.stop(context.currentTime + start + duration);
   };
 
-  playTone(0, 880, 0.14);
-  playTone(0.18, 1174.66, 0.18);
+  if (soundName === 'bell') {
+    playTone(0, 659.25, 0.18);
+    playTone(0.22, 783.99, 0.28);
+  } else if (soundName === 'chime') {
+    playTone(0, 880, 0.12);
+    playTone(0.16, 1174.66, 0.2);
+  } else {
+    playTone(0, 880, 0.14);
+    playTone(0.18, 1174.66, 0.18);
+  }
   window.setTimeout(() => context.close().catch(() => {}), 700);
 }
 
@@ -65,6 +74,15 @@ export default function NewOrderNotifier() {
   const baselineReadyRef = useRef(false);
   const knownOrderIdsRef = useRef<Set<string>>(new Set());
   const soundAllowedRef = useRef(false);
+  const soundSettingsRef = useRef<OrderNotificationSettings>(getOrderNotificationSettings());
+
+  useEffect(() => {
+    const onSettingsChanged = (event: Event) => {
+      soundSettingsRef.current = (event as CustomEvent<OrderNotificationSettings>).detail;
+    };
+    window.addEventListener(ORDER_NOTIFICATION_SETTINGS_CHANGED, onSettingsChanged);
+    return () => window.removeEventListener(ORDER_NOTIFICATION_SETTINGS_CHANGED, onSettingsChanged);
+  }, []);
 
   useEffect(() => {
     const enableSound = () => {
@@ -112,8 +130,8 @@ export default function NewOrderNotifier() {
 
         if (!newOrders.length) return;
 
-        if (soundAllowedRef.current) {
-          try { playNewOrderSound(); } catch { /* ignore audio device/browser issues */ }
+        if (soundAllowedRef.current && soundSettingsRef.current.soundEnabled) {
+          try { playNewOrderSound(soundSettingsRef.current.soundName); } catch { /* ignore audio device/browser issues */ }
         }
 
         const first = newOrders[0];

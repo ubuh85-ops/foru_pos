@@ -312,15 +312,18 @@ const pushDeviceBody=z.object({
   token:z.string().trim().min(20).max(4096),
   outletId:z.string().trim().min(1),
   platform:z.literal('ANDROID').default('ANDROID'),
-  deviceName:z.string().trim().max(120).optional()
+  deviceName:z.string().trim().max(120).optional(),
+  isPosActive:z.coerce.boolean().default(false),
+  soundEnabled:z.coerce.boolean().default(true),
+  soundName:z.string().trim().max(40).optional().nullable()
 });
 api.post('/push-devices',asyncRoute(async(req,res)=>{
   const d=pushDeviceBody.parse(req.body);
   await assertTenantOutlet(req,d.outletId);
   const device=await prisma.pushDevice.upsert({
     where:{token:d.token},
-    create:{token:d.token,platform:d.platform,deviceName:d.deviceName,userId:req.user!.id,businessId:req.user!.businessId,outletId:d.outletId},
-    update:{platform:d.platform,deviceName:d.deviceName,userId:req.user!.id,businessId:req.user!.businessId,outletId:d.outletId,isActive:true,lastSeenAt:new Date()}
+    create:{token:d.token,platform:d.platform,deviceName:d.deviceName,userId:req.user!.id,businessId:req.user!.businessId,outletId:d.outletId,isPosActive:d.isPosActive,posLastSeenAt:d.isPosActive?new Date():null,soundEnabled:d.soundEnabled,soundName:d.soundName||null},
+    update:{platform:d.platform,deviceName:d.deviceName,userId:req.user!.id,businessId:req.user!.businessId,outletId:d.outletId,isActive:true,isPosActive:d.isPosActive,posLastSeenAt:d.isPosActive?new Date():null,soundEnabled:d.soundEnabled,soundName:d.soundName||null,lastSeenAt:new Date()}
   });
   res.status(201).json({id:device.id,registered:true});
 }));
@@ -328,6 +331,20 @@ api.delete('/push-devices/current',asyncRoute(async(req,res)=>{
   const token=z.object({token:z.string().trim().min(20).max(4096)}).parse(req.body).token;
   await prisma.pushDevice.updateMany({where:{token,userId:req.user!.id,businessId:req.user!.businessId},data:{isActive:false}});
   res.json({ok:true});
+}));
+const pushPresenceBody=z.object({outletId:z.string().trim().min(1),isPosActive:z.coerce.boolean()});
+api.put('/push-devices/current/presence',asyncRoute(async(req,res)=>{
+  const d=pushPresenceBody.parse(req.body);
+  await assertTenantOutlet(req,d.outletId);
+  const now=new Date();
+  const result=await prisma.pushDevice.updateMany({where:{userId:req.user!.id,businessId:req.user!.businessId,isActive:true},data:{outletId:d.outletId,isPosActive:d.isPosActive,posLastSeenAt:d.isPosActive?now:null,lastSeenAt:now}});
+  res.json({ok:true,updated:result.count});
+}));
+const pushPreferenceBody=z.object({soundEnabled:z.coerce.boolean(),soundName:z.string().trim().max(40).optional().nullable()});
+api.put('/push-devices/current/preferences',asyncRoute(async(req,res)=>{
+  const d=pushPreferenceBody.parse(req.body);
+  const result=await prisma.pushDevice.updateMany({where:{userId:req.user!.id,businessId:req.user!.businessId,isActive:true},data:{soundEnabled:d.soundEnabled,soundName:d.soundName||null,lastSeenAt:new Date()}});
+  res.json({ok:true,updated:result.count});
 }));
 function tenantWhere(req:any){return tenantScope(req as any);}
 function tenantWhereAnd(req:any,...clauses:any[]){return tenantAnd(req as any,...clauses);}

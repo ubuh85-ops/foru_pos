@@ -3,6 +3,7 @@ import { Capacitor } from '@capacitor/core';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useOutlet } from '../OutletContext';
+import { getOrderNotificationSettings, ORDER_NOTIFICATION_SETTINGS_CHANGED, type OrderNotificationSettings } from '../orderNotificationSettings';
 
 const TOKEN_KEY = 'foru:android_push_token';
 const allowedRoute = /^\/orders(?:\/preorder-recap|\/[A-Za-z0-9_-]+)$/;
@@ -25,6 +26,7 @@ export default function AndroidOrderPush() {
     let actionHandle: { remove: () => Promise<void> } | undefined;
     let receivedHandle: { remove: () => Promise<void> } | undefined;
     let localActionHandle: { remove: () => Promise<void> } | undefined;
+    let settings: OrderNotificationSettings = getOrderNotificationSettings();
 
     const openNotification = (data: Record<string, unknown>) => {
       const outletId = typeof data.outletId === 'string' ? data.outletId : '';
@@ -38,9 +40,16 @@ export default function AndroidOrderPush() {
       if (!selectedOutletId || !localStorage.getItem('token')) return;
       await api('/push-devices', {
         method: 'POST',
-        body: JSON.stringify({ token, outletId: selectedOutletId, platform: 'ANDROID', deviceName: navigator.userAgent.slice(0, 120) })
+        body: JSON.stringify({ token, outletId: selectedOutletId, platform: 'ANDROID', deviceName: navigator.userAgent.slice(0, 120), isPosActive: true, ...settings })
       });
     };
+
+    const onSettingsChanged = (event: Event) => {
+      settings = (event as CustomEvent<OrderNotificationSettings>).detail;
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (token) void registerToken(token).catch(() => {});
+    };
+    window.addEventListener(ORDER_NOTIFICATION_SETTINGS_CHANGED, onSettingsChanged);
 
     void (async () => {
       const { PushNotifications } = await import('@capacitor/push-notifications');
@@ -54,7 +63,8 @@ export default function AndroidOrderPush() {
           id: Math.floor(Date.now() % 2147483000),
           title: notification.title || 'Order Web Baru',
           body: notification.body || 'Ada order baru dari Customer Web Order.',
-          channelId: 'customer-web-orders',
+          channelId: settings.soundEnabled ? 'customer-web-orders' : 'customer-web-orders-silent',
+          ...(settings.soundEnabled ? { sound: settings.soundName || 'default' } : {}),
           extra: notification.data || {}
         }] }).catch(() => {});
       });
@@ -70,6 +80,13 @@ export default function AndroidOrderPush() {
         visibility: 1,
         sound: 'default'
       });
+      await PushNotifications.createChannel({
+        id: 'customer-web-orders-silent',
+        name: 'Customer Web Orders (Silent)',
+        description: 'Notifikasi order baru tanpa suara',
+        importance: 5,
+        visibility: 1
+      });
       const existingToken = localStorage.getItem(TOKEN_KEY);
       if (existingToken) await registerToken(existingToken).catch(() => {});
       await PushNotifications.register();
@@ -82,6 +99,7 @@ export default function AndroidOrderPush() {
       void actionHandle?.remove();
       void receivedHandle?.remove();
       void localActionHandle?.remove();
+      window.removeEventListener(ORDER_NOTIFICATION_SETTINGS_CHANGED, onSettingsChanged);
     };
   }, [navigate, selectedOutletId, setSelectedOutletId]);
 

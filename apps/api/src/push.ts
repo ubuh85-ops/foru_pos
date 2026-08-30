@@ -73,7 +73,7 @@ export async function sendCustomerWebOrderPush(order: CustomerWebOrderPush) {
         ]
       }
     },
-    select: { token: true }
+    select: { token: true, soundEnabled: true, soundName: true }
   });
   if (!devices.length) return { skipped: true, reason: 'Tidak ada perangkat terdaftar' };
 
@@ -83,23 +83,34 @@ export async function sendCustomerWebOrderPush(order: CustomerWebOrderPush) {
   let failureCount = 0;
 
   for (let start = 0; start < devices.length; start += 500) {
-    const tokens = devices.slice(start, start + 500).map(device => device.token);
-    const response = await fcm.sendEachForMulticast({
-      tokens,
-      notification: { title: content.title, body: content.body },
-      data: content.data,
-      android: {
-        priority: 'high',
-        notification: { channelId: 'customer-web-orders', sound: 'default', tag: `web-order-${order.id}` }
-      }
-    });
-    successCount += response.successCount;
-    failureCount += response.failureCount;
-    response.responses.forEach((item, index) => {
-      const code = item.error?.code || '';
-      const token = tokens[index];
-      if (token && (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-registration-token')) invalidTokens.push(token);
-    });
+    const batch = devices.slice(start, start + 500);
+    const groups = new Map<string, typeof batch>();
+    for (const device of batch) {
+      const key = `${device.soundEnabled ? 'on' : 'off'}:${device.soundName || 'default'}`;
+      const group = groups.get(key) || [];
+      group.push(device);
+      groups.set(key, group);
+    }
+    for (const group of groups.values()) {
+      const tokens = group.map(device => device.token);
+      const sound = group[0]?.soundEnabled ? (group[0].soundName || 'default') : undefined;
+      const response = await fcm.sendEachForMulticast({
+        tokens,
+        notification: { title: content.title, body: content.body },
+        data: content.data,
+        android: {
+          priority: 'high',
+          notification: { channelId: sound ? 'customer-web-orders' : 'customer-web-orders-silent', ...(sound ? { sound } : {}), tag: `web-order-${order.id}` }
+        }
+      });
+      successCount += response.successCount;
+      failureCount += response.failureCount;
+      response.responses.forEach((item, index) => {
+        const code = item.error?.code || '';
+        const token = tokens[index];
+        if (token && (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-registration-token')) invalidTokens.push(token);
+      });
+    }
   }
 
   if (invalidTokens.length) {
