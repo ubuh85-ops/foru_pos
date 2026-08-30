@@ -1,5 +1,5 @@
 import { Bell, BellOff, Play, Save } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { api } from '../api';
 import { getOrderNotificationSettings, ORDER_NOTIFICATION_SETTINGS_CHANGED, setOrderNotificationSettings, type OrderNotificationSettings } from '../orderNotificationSettings';
@@ -13,7 +13,10 @@ export default function OrderNotificationSettings() {
   const [draft, setDraft] = useState<OrderNotificationSettings>(() => getOrderNotificationSettings());
   const [deviceSounds, setDeviceSounds] = useState<DeviceSound[]>([]);
   const [saving, setSaving] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [message, setMessage] = useState('');
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const oscillatorRef = useRef<OscillatorNode | null>(null);
 
   useEffect(() => {
     const onChange = (event: Event) => {
@@ -37,22 +40,24 @@ export default function OrderNotificationSettings() {
   async function save() {
     setSaving(true);
     setMessage('');
+    setOrderNotificationSettings(draft);
+    setSettings(draft);
     try {
-      setOrderNotificationSettings(draft);
-      await api('/push-devices/current/preferences', { method: 'PUT', body: JSON.stringify(draft) });
-      setSettings(draft);
-      setMessage('Pengaturan suara berhasil disimpan.');
+      const token = localStorage.getItem('foru:android_push_token');
+      await api('/push-devices/current/preferences', { method: 'PUT', body: JSON.stringify({ ...draft, ...(token ? { token } : {}) }) });
+      setMessage('Pengaturan suara tersimpan di perangkat.');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Pengaturan suara gagal disimpan.');
+      setMessage('Pengaturan suara tersimpan di perangkat. Sinkronisasi server akan dicoba lagi saat perangkat terhubung.');
     } finally {
       setSaving(false);
     }
   }
 
   async function preview() {
+    await stopPreview();
     const selected = deviceSounds.find(sound => sound.id === draft.soundName);
     if (selected) {
-      await DeviceNotificationSound.previewSound({ soundUri: selected.uri }).catch(() => {});
+      await DeviceNotificationSound.previewSound({ soundUri: selected.uri }).then(() => setPreviewing(true)).catch(() => {});
       return;
     }
     if (draft.soundName === 'off') return;
@@ -65,7 +70,20 @@ export default function OrderNotificationSettings() {
       oscillator.connect(gain).connect(context.destination);
       oscillator.start();
       oscillator.stop(context.currentTime + 0.35);
+      audioContextRef.current = context;
+      oscillatorRef.current = oscillator;
+      oscillator.onended = () => setPreviewing(false);
+      setPreviewing(true);
     }
+  }
+
+  async function stopPreview() {
+    oscillatorRef.current?.stop();
+    oscillatorRef.current = null;
+    await audioContextRef.current?.close().catch(() => {});
+    audioContextRef.current = null;
+    await DeviceNotificationSound.stopPreview().catch(() => {});
+    setPreviewing(false);
   }
 
   return <section className="card p-5" aria-labelledby="order-notification-settings-title">
@@ -90,7 +108,8 @@ export default function OrderNotificationSettings() {
       <option value="off">Mati</option>
     </select>
     <div className="mt-3 flex flex-wrap items-center gap-2">
-      <button type="button" onClick={() => void preview()} disabled={!draft.soundEnabled || draft.soundName === 'off'} className="btn-secondary inline-flex items-center gap-2"><Play size={16} /> Preview Suara</button>
+      <button type="button" onClick={() => void preview()} disabled={previewing || !draft.soundEnabled || draft.soundName === 'off'} className="btn-secondary inline-flex items-center gap-2"><Play size={16} /> Preview Suara</button>
+      <button type="button" onClick={() => void stopPreview()} disabled={!previewing} className="btn-secondary inline-flex items-center gap-2">Stop Preview</button>
       <button type="button" onClick={() => void save()} disabled={saving} className="btn-primary inline-flex items-center gap-2"><Save size={16} /> {saving ? 'Menyimpan...' : 'Simpan Pengaturan'}</button>
     </div>
     {message && <p className="mt-2 text-sm text-slate-500" role="status">{message}</p>}
