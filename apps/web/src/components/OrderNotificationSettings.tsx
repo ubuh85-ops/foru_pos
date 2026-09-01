@@ -5,7 +5,7 @@ import { api } from '../api';
 import { getOrderNotificationSettings, ORDER_NOTIFICATION_SETTINGS_CHANGED, setOrderNotificationSettings, type OrderNotificationSettings } from '../orderNotificationSettings';
 
 type DeviceSound = { id: string; name: string; uri: string };
-const DeviceNotificationSound = registerPlugin<{ listSounds: () => Promise<{ sounds: DeviceSound[] }>; createChannel: (options: { channelId: string; channelName?: string; soundUri?: string }) => Promise<void>; previewSound: (options: { soundUri: string }) => Promise<void>; stopPreview: () => Promise<void>; getSettings: () => Promise<{ hasSettings?: boolean; soundEnabled?: boolean; soundName?: string }>; saveSettings: (options: OrderNotificationSettings) => Promise<void> }>('DeviceNotificationSound');
+const DeviceNotificationSound = registerPlugin<{ listSounds: () => Promise<{ sounds: DeviceSound[] }>; createChannel: (options: { channelId: string; channelName?: string; soundUri?: string }) => Promise<void>; clearAppChannels: () => Promise<void>; previewSound: (options: { soundUri: string }) => Promise<void>; stopPreview: () => Promise<void>; getSettings: () => Promise<{ hasSettings?: boolean; soundEnabled?: boolean; soundName?: string }>; saveSettings: (options: OrderNotificationSettings) => Promise<void> }>('DeviceNotificationSound');
 const SOUND_MAP_KEY = 'foru:device-notification-sounds';
 
 export default function OrderNotificationSettings() {
@@ -108,7 +108,7 @@ export default function OrderNotificationSettings() {
     <select aria-label="Suara notifikasi order" value={draft.soundEnabled ? draft.soundName : 'off'} onChange={event => {
       const value = event.target.value;
       const selected = deviceSounds.find(sound => sound.id === value);
-      if (selected) void DeviceNotificationSound.createChannel({ channelId: selected.id, channelName: 'Customer Web Orders', soundUri: selected.uri }).catch(() => {});
+      if (selected) void DeviceNotificationSound.clearAppChannels().then(() => DeviceNotificationSound.createChannel({ channelId: selected.id, channelName: `Customer Web Orders - ${selected.name}`, soundUri: selected.uri })).catch(() => {});
       setDraft({ soundEnabled: value !== 'off', soundName: value === 'off' ? draft.soundName : value });
     }} className="input max-w-md">
       <option value="default">Suara perangkat (Default)</option>

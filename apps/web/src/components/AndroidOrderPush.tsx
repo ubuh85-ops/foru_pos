@@ -8,7 +8,7 @@ import { registerPlugin } from '@capacitor/core';
 
 const TOKEN_KEY = 'foru:android_push_token';
 const allowedRoute = /^\/orders(?:\/preorder-recap|\/[A-Za-z0-9_-]+)$/;
-const DeviceNotificationSound = registerPlugin<{ createChannel: (options: { channelId: string; channelName?: string; soundUri?: string }) => Promise<void>; getSettings: () => Promise<{ hasSettings?: boolean; soundEnabled?: boolean; soundName?: string }> }>('DeviceNotificationSound');
+const DeviceNotificationSound = registerPlugin<{ createChannel: (options: { channelId: string; channelName?: string; soundUri?: string }) => Promise<void>; clearAppChannels: () => Promise<void>; getSettings: () => Promise<{ hasSettings?: boolean; soundEnabled?: boolean; soundName?: string }> }>('DeviceNotificationSound');
 const SOUND_MAP_KEY = 'foru:device-notification-sounds';
 
 function selectedAndroidChannel(settings: OrderNotificationSettings) {
@@ -99,6 +99,7 @@ export default function AndroidOrderPush() {
         visibility: 1,
         sound: 'default'
       });
+      await DeviceNotificationSound.clearAppChannels().catch(() => {});
       // Recreate the app-owned default channel with the system notification sound.
       // Android keeps a channel's old sound forever unless the channel is recreated.
       await DeviceNotificationSound.createChannel({

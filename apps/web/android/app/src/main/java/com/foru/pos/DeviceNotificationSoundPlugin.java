@@ -78,6 +78,22 @@ public class DeviceNotificationSoundPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void clearAppChannels(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationManager notifications = (NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+            if (notifications != null) {
+                for (NotificationChannel channel : notifications.getNotificationChannels()) {
+                    CharSequence name = channel.getName();
+                    if (name != null && name.toString().startsWith("Customer Web Orders")) {
+                        notifications.deleteNotificationChannel(channel.getId());
+                    }
+                }
+            }
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
     public void getSettings(PluginCall call) {
         SharedPreferences preferences = getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         JSObject result = new JSObject();
