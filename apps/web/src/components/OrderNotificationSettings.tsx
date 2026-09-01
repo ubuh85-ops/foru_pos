@@ -5,7 +5,7 @@ import { api } from '../api';
 import { getOrderNotificationSettings, ORDER_NOTIFICATION_SETTINGS_CHANGED, setOrderNotificationSettings, type OrderNotificationSettings } from '../orderNotificationSettings';
 
 type DeviceSound = { id: string; name: string; uri: string };
-const DeviceNotificationSound = registerPlugin<{ listSounds: () => Promise<{ sounds: DeviceSound[] }>; createChannel: (options: { channelId: string; channelName?: string; soundUri?: string }) => Promise<void>; previewSound: (options: { soundUri: string }) => Promise<void>; stopPreview: () => Promise<void> }>('DeviceNotificationSound');
+const DeviceNotificationSound = registerPlugin<{ listSounds: () => Promise<{ sounds: DeviceSound[] }>; createChannel: (options: { channelId: string; channelName?: string; soundUri?: string }) => Promise<void>; previewSound: (options: { soundUri: string }) => Promise<void>; stopPreview: () => Promise<void>; getSettings: () => Promise<{ hasSettings?: boolean; soundEnabled?: boolean; soundName?: string }>; saveSettings: (options: OrderNotificationSettings) => Promise<void> }>('DeviceNotificationSound');
 const SOUND_MAP_KEY = 'foru:device-notification-sounds';
 
 export default function OrderNotificationSettings() {
@@ -30,6 +30,13 @@ export default function OrderNotificationSettings() {
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
+    void DeviceNotificationSound.getSettings().then(nativeSettings => {
+      if (!nativeSettings.hasSettings || typeof nativeSettings.soundEnabled !== 'boolean') return;
+      const restored = { soundEnabled: nativeSettings.soundEnabled, soundName: nativeSettings.soundName || 'default' };
+      setOrderNotificationSettings(restored);
+      setSettings(restored);
+      setDraft(restored);
+    }).catch(() => {});
     void DeviceNotificationSound.listSounds().then(result => {
       const map = Object.fromEntries((result.sounds || []).map(sound => [sound.id, sound]));
       localStorage.setItem(SOUND_MAP_KEY, JSON.stringify(map));
@@ -42,6 +49,9 @@ export default function OrderNotificationSettings() {
     setMessage('');
     setOrderNotificationSettings(draft);
     setSettings(draft);
+    if (Capacitor.isNativePlatform()) {
+      await DeviceNotificationSound.saveSettings(draft).catch(() => {});
+    }
     try {
       const token = localStorage.getItem('foru:android_push_token');
       await api('/push-devices/current/preferences', { method: 'PUT', body: JSON.stringify({ ...draft, ...(token ? { token } : {}) }) });

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { api } from '../api';
 import { useOutlet } from '../OutletContext';
 import { getOrderNotificationSettings, ORDER_NOTIFICATION_SETTINGS_CHANGED, type OrderNotificationSettings } from '../orderNotificationSettings';
@@ -130,7 +131,11 @@ export default function NewOrderNotifier() {
 
         if (!newOrders.length) return;
 
-        if (soundAllowedRef.current && soundSettingsRef.current.soundEnabled) {
+        // Android uses the native FCM/LocalNotifications channel so the
+        // device-selected sound is respected. Do not also play the browser
+        // Web Audio tone, otherwise the popup tone masks/duplicates it.
+        const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+        if (!isNativeAndroid && soundAllowedRef.current && soundSettingsRef.current.soundEnabled) {
           try { playNewOrderSound(soundSettingsRef.current.soundName); } catch { /* ignore audio device/browser issues */ }
         }
 

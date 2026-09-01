@@ -8,7 +8,7 @@ import { registerPlugin } from '@capacitor/core';
 
 const TOKEN_KEY = 'foru:android_push_token';
 const allowedRoute = /^\/orders(?:\/preorder-recap|\/[A-Za-z0-9_-]+)$/;
-const DeviceNotificationSound = registerPlugin<{ createChannel: (options: { channelId: string; channelName?: string; soundUri?: string }) => Promise<void> }>('DeviceNotificationSound');
+const DeviceNotificationSound = registerPlugin<{ createChannel: (options: { channelId: string; channelName?: string; soundUri?: string }) => Promise<void>; getSettings: () => Promise<{ hasSettings?: boolean; soundEnabled?: boolean; soundName?: string }> }>('DeviceNotificationSound');
 const SOUND_MAP_KEY = 'foru:device-notification-sounds';
 
 function selectedAndroidChannel(settings: OrderNotificationSettings) {
@@ -62,11 +62,20 @@ export default function AndroidOrderPush() {
 
     void (async () => {
       const { PushNotifications } = await import('@capacitor/push-notifications');
+      const { LocalNotifications } = await import('@capacitor/local-notifications');
+      try {
+        const nativeSettings = await DeviceNotificationSound.getSettings();
+        if (nativeSettings.hasSettings && typeof nativeSettings.soundEnabled === 'boolean') {
+          settings = { soundEnabled: nativeSettings.soundEnabled, soundName: nativeSettings.soundName || 'default' };
+        }
+      } catch { /* use local settings */ }
       if (!active) return;
       registrationHandle = await PushNotifications.addListener('registration', token => { void registerToken(token.value).catch(() => {}); });
       errorHandle = await PushNotifications.addListener('registrationError', error => console.warn('Push registration failed', error));
       actionHandle = await PushNotifications.addListener('pushNotificationActionPerformed', event => openNotification(event.notification.data || {}));
-      const { LocalNotifications } = await import('@capacitor/local-notifications');
+      let localPermission = await LocalNotifications.checkPermissions();
+      if (localPermission.display === 'prompt') localPermission = await LocalNotifications.requestPermissions();
+      if (localPermission.display !== 'granted') console.warn('Local notification permission not granted');
       receivedHandle = await PushNotifications.addListener('pushNotificationReceived', notification => {
         const channelId = selectedAndroidChannel(settings);
         void LocalNotifications.schedule({ notifications: [{
@@ -90,6 +99,12 @@ export default function AndroidOrderPush() {
         visibility: 1,
         sound: 'default'
       });
+      // Recreate the app-owned default channel with the system notification sound.
+      // Android keeps a channel's old sound forever unless the channel is recreated.
+      await DeviceNotificationSound.createChannel({
+        channelId: 'customer-web-orders',
+        channelName: 'Customer Web Orders',
+      }).catch(() => {});
       try {
         const soundMap = JSON.parse(localStorage.getItem(SOUND_MAP_KEY) || '{}') as Record<string, { uri?: string; name?: string }>;
         const selectedId = settings.soundName?.startsWith('device-') ? settings.soundName : '';
