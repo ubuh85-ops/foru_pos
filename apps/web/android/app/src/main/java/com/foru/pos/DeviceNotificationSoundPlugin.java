@@ -54,7 +54,7 @@ public class DeviceNotificationSoundPlugin extends Plugin {
         }
         String channelName = call.getString("channelName", "Customer Web Orders");
         String soundUri = call.getString("soundUri");
-        if ((soundUri == null || soundUri.isEmpty()) && "customer-web-orders".equals(channelId)) {
+        if ((soundUri == null || soundUri.isEmpty()) && "customer-web-orders-v2".equals(channelId)) {
             soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION).toString();
         }
         NotificationChannel channel = new NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_HIGH);
@@ -111,10 +111,12 @@ public class DeviceNotificationSoundPlugin extends Plugin {
             call.reject("soundEnabled wajib diisi");
             return;
         }
+        String soundUri = call.getString("soundUri", "");
         getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putBoolean("soundEnabled", soundEnabled)
             .putString("soundName", soundName == null ? "default" : soundName)
+            .putString("soundUri", soundUri == null ? "" : soundUri)
             .apply();
         call.resolve();
     }

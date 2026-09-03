@@ -12,9 +12,9 @@ const DeviceNotificationSound = registerPlugin<{ createChannel: (options: { chan
 const SOUND_MAP_KEY = 'foru:device-notification-sounds';
 
 function selectedAndroidChannel(settings: OrderNotificationSettings) {
-  if (!settings.soundEnabled) return 'customer-web-orders-silent';
+  if (!settings.soundEnabled) return 'customer-web-orders-silent-v2';
   if (settings.soundName?.startsWith('device-')) return settings.soundName;
-  return 'customer-web-orders';
+  return 'customer-web-orders-v2';
 }
 
 export async function deactivateAndroidOrderPush() {
@@ -92,7 +92,7 @@ export default function AndroidOrderPush() {
       if (permission.receive === 'prompt') permission = await PushNotifications.requestPermissions();
       if (permission.receive !== 'granted') return;
       await PushNotifications.createChannel({
-        id: 'customer-web-orders',
+        id: 'customer-web-orders-v2',
         name: 'Customer Web Orders',
         description: 'Notifikasi order baru dari Customer Web Order',
         importance: 5,
@@ -103,7 +103,7 @@ export default function AndroidOrderPush() {
       // Recreate the app-owned default channel with the system notification sound.
       // Android keeps a channel's old sound forever unless the channel is recreated.
       await DeviceNotificationSound.createChannel({
-        channelId: 'customer-web-orders',
+        channelId: 'customer-web-orders-v2',
         channelName: 'Customer Web Orders',
       }).catch(() => {});
       try {
@@ -115,7 +115,7 @@ export default function AndroidOrderPush() {
         }
       } catch { /* use default channel */ }
       await PushNotifications.createChannel({
-        id: 'customer-web-orders-silent',
+        id: 'customer-web-orders-silent-v2',
         name: 'Customer Web Orders (Silent)',
         description: 'Notifikasi order baru tanpa suara',
         importance: 5,

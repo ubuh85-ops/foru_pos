@@ -5,7 +5,7 @@ import { api } from '../api';
 import { getOrderNotificationSettings, ORDER_NOTIFICATION_SETTINGS_CHANGED, setOrderNotificationSettings, type OrderNotificationSettings } from '../orderNotificationSettings';
 
 type DeviceSound = { id: string; name: string; uri: string };
-const DeviceNotificationSound = registerPlugin<{ listSounds: () => Promise<{ sounds: DeviceSound[] }>; createChannel: (options: { channelId: string; channelName?: string; soundUri?: string }) => Promise<void>; clearAppChannels: () => Promise<void>; previewSound: (options: { soundUri: string }) => Promise<void>; stopPreview: () => Promise<void>; getSettings: () => Promise<{ hasSettings?: boolean; soundEnabled?: boolean; soundName?: string }>; saveSettings: (options: OrderNotificationSettings) => Promise<void> }>('DeviceNotificationSound');
+const DeviceNotificationSound = registerPlugin<{ listSounds: () => Promise<{ sounds: DeviceSound[] }>; createChannel: (options: { channelId: string; channelName?: string; soundUri?: string }) => Promise<void>; clearAppChannels: () => Promise<void>; previewSound: (options: { soundUri: string }) => Promise<void>; stopPreview: () => Promise<void>; getSettings: () => Promise<{ hasSettings?: boolean; soundEnabled?: boolean; soundName?: string }>; saveSettings: (options: OrderNotificationSettings & { soundUri?: string }) => Promise<void> }>('DeviceNotificationSound');
 const SOUND_MAP_KEY = 'foru:device-notification-sounds';
 
 export default function OrderNotificationSettings() {
@@ -50,7 +50,8 @@ export default function OrderNotificationSettings() {
     setOrderNotificationSettings(draft);
     setSettings(draft);
     if (Capacitor.isNativePlatform()) {
-      await DeviceNotificationSound.saveSettings(draft).catch(() => {});
+      const selectedSound = deviceSounds.find(sound => sound.id === draft.soundName);
+      await DeviceNotificationSound.saveSettings({ ...draft, soundUri: selectedSound?.uri || '' }).catch(() => {});
     }
     try {
       const token = localStorage.getItem('foru:android_push_token');

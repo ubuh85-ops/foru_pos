@@ -94,8 +94,13 @@ export async function sendCustomerWebOrderPush(order: CustomerWebOrderPush) {
     for (const group of groups.values()) {
       const tokens = group.map(device => device.token);
       const soundName = group[0]?.soundName || 'default';
-      const sound = group[0]?.soundEnabled && soundName === 'default' ? 'default' : undefined;
-      const channelId = group[0]?.soundEnabled && soundName.startsWith('device-') ? soundName : (sound ? 'customer-web-orders' : 'customer-web-orders-silent');
+      // FCM background delivery cannot play WebAudio. Use the Android channel
+      // sound for all enabled non-device presets; custom device sounds use the
+      // channel created natively from the device's persisted ringtone URI.
+      const sound = group[0]?.soundEnabled && !soundName.startsWith('device-') ? 'default' : undefined;
+      const channelId = group[0]?.soundEnabled
+        ? (soundName.startsWith('device-') ? soundName : 'customer-web-orders-v2')
+        : 'customer-web-orders-silent-v2';
       const response = await fcm.sendEachForMulticast({
         tokens,
         notification: { title: content.title, body: content.body },
