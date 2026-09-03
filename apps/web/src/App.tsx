@@ -306,6 +306,7 @@ export default function App() {
 
 function Shell({ user, logout }: { user: User; logout: () => void }) {
   const [open, setOpen] = useState(false);
+  const [webOrderCount, setWebOrderCount] = useState(0);
   const [sidebarHidden, setSidebarHidden] = useState(() => {
     const saved = localStorage.getItem('foru:sidebar_hidden');
     if (saved) return saved === '1';
@@ -334,6 +335,14 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
       return next;
     });
   }
+  useEffect(() => {
+    const onOrderCount = (event: Event) => {
+      const delta = Number((event as CustomEvent<{ delta?: number }>).detail?.delta || 0);
+      setWebOrderCount(current => Math.max(0, current + delta));
+    };
+    window.addEventListener('foru:web-order-count', onOrderCount);
+    return () => window.removeEventListener('foru:web-order-count', onOrderCount);
+  }, []);
   useEffect(() => {
     if (localStorage.getItem('foru:must_select_outlet') === '1' && loc.pathname !== '/select-outlet') {
       navigate('/select-outlet', { replace: true });
@@ -428,7 +437,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
                 className={({ isActive }) => `flex items-center gap-3 rounded-xl font-semibold ${sidebarHidden ? 'justify-center px-0 py-3' : 'justify-start px-3 py-2.5 text-left'} ${isActive ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-brand-50 hover:text-brand-700'}`}
               >
                 <Icon className="shrink-0 text-brand-600" size={20} />
-                <span className={`truncate ${sidebarHidden ? 'md:hidden' : 'md:inline'}`}>{label}</span>
+                <span className={`flex min-w-0 items-center gap-2 truncate ${sidebarHidden ? 'md:hidden' : 'md:inline-flex'}`}><span className="truncate">{label}</span>{path === '/orders' && webOrderCount > 0 && <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-brand-500 px-1 text-[10px] font-black text-white">{webOrderCount > 9 ? '9+' : webOrderCount}</span>}</span>
               </NavLink>)}
             </div>}
           </section>;

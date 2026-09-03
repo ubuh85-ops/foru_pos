@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import crypto from 'crypto';
+import { createServer } from 'node:http';
 import express from 'express';
 import cors, { type CorsOptions } from 'cors';
 import bcrypt from 'bcryptjs';
@@ -14,6 +15,7 @@ import { allow, ApiError, assertOutlet, asyncRoute, auth, dayRange, defaultBusin
 import { discountAmount, legacyVariantPrice, priceCart, validateCoupon } from './discount.js';
 import { validatePublicSchedule } from './preorder.js';
 import { sendCustomerWebOrderPush } from './push.js';
+import { Server as SocketIOServer } from 'socket.io';
 
 const defaultCorsOrigins = [
   'http://localhost',
@@ -51,7 +53,62 @@ const corsOptions: CorsOptions = {
 };
 
 const app = express();
+const httpServer = createServer(app);
+const realtime = new SocketIOServer(httpServer, {
+  cors: {
+    origin(origin, callback) {
+      if (!origin || allowedCorsOrigins.has(normalizeOrigin(origin))) return callback(null, true);
+      return callback(new Error('Origin tidak diizinkan'));
+    },
+    methods: ['GET', 'POST']
+  }
+});
 const storageRoot = path.resolve(process.env.STORAGE_DIR || 'storage');
+
+type RealtimeUser = { id: string; businessId: string; role: string; outletIds: string[] };
+
+realtime.use(async (socket, next) => {
+  try {
+    const token = typeof socket.handshake.auth?.token === 'string'
+      ? socket.handshake.auth.token
+      : socket.handshake.headers.authorization?.replace(/^Bearer /, '');
+    if (!token) return next(new Error('AUTH_REQUIRED'));
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-secret') as { id?: string; businessId?: string };
+    if (!decoded.id) return next(new Error('INVALID_SESSION'));
+    const user = await prisma.user.findUnique({ where: { id: decoded.id }, include: { outlets: { include: { outlet: true } } } });
+    if (!user || user.status !== 'ACTIVE') return next(new Error('INVALID_SESSION'));
+    const membership = await defaultBusinessForUser(user.id, decoded.businessId);
+    if (!membership || membership.business.status !== 'ACTIVE') return next(new Error('BUSINESS_REQUIRED'));
+    const outletIds = membership.role === 'OWNER'
+      ? (await prisma.outlet.findMany({ where: { businessId: membership.businessId, status: 'ACTIVE' }, select: { id: true } })).map(outlet => outlet.id)
+      : user.outlets
+        .filter(link => link.status === 'ACTIVE' && link.outlet.status === 'ACTIVE' && link.outlet.businessId === membership.businessId)
+        .map(link => link.outletId);
+    socket.data.user = { id: user.id, businessId: membership.businessId, role: membership.role, outletIds } satisfies RealtimeUser;
+    return next();
+  } catch {
+    return next(new Error('INVALID_SESSION'));
+  }
+});
+
+realtime.on('connection', socket => {
+  socket.on('outlet:join', async (payload: { outletId?: string }) => {
+    const user = socket.data.user as RealtimeUser | undefined;
+    const outletId = String(payload?.outletId || '');
+    if (!user || !outletId || !user.outletIds.includes(outletId)) {
+      socket.emit('outlet:error', { message: 'Outlet tidak diizinkan' });
+      return;
+    }
+    const outlet = await prisma.outlet.findFirst({ where: { id: outletId, businessId: user.businessId, status: 'ACTIVE' }, select: { id: true } });
+    if (!outlet) {
+      socket.emit('outlet:error', { message: 'Outlet tidak diizinkan' });
+      return;
+    }
+    for (const room of socket.rooms) if (room.startsWith('outlet:')) socket.leave(room);
+    socket.join(`outlet:${outlet.id}`);
+    socket.emit('outlet:joined', { outletId: outlet.id });
+  });
+});
 
 app.use(cors(corsOptions));
 app.use('/storage/products', express.static(path.join(storageRoot, 'products'), {
@@ -304,6 +361,16 @@ api.post('/public/order/:businessSlug/:outletSlug/orders',asyncRoute(async(req,r
   const publicOrderToken=crypto.randomBytes(24).toString('hex');
   const created=await prisma.$transaction(async tx=>tx.sale.create({data:{businessId:business.id,orderNumber,outletId:outlet.id,customerName:d.customerName,customerPhone:d.customerPhone.trim(),tableNumber:d.orderType==='DINE_IN'?d.tableNumber?.trim()||null:null,orderNote:d.orderNote?.trim()||null,orderType:d.orderType,orderSource:'CUSTOMER_WEB',customerOrderRequestId:d.customerOrderRequestId,publicOrderToken,isPreOrder:d.isPreOrder,scheduledAt,submittedAt:new Date(),subtotal:totals.gross,discountAmount:money(totals.productDiscount+totals.transactionDiscount+totals.couponDiscount),totalAmount:totals.grand,subtotalBeforeDiscount:totals.gross,productDiscountTotal:totals.productDiscount,transactionDiscountAmount:totals.transactionDiscount,couponCode:totals.couponResult?.coupon.couponCode,couponDiscountAmount:totals.couponDiscount,grandTotal:totals.grand,totalHpp:totals.totalHpp,grossProfit:0,status:'OPEN_ORDER',items:{create:totals.lines.map(saleItemCreate)}},include:{items:{include:{addons:true}},outlet:true}}));
   res.status(201).json({id:created.id,orderNumber:created.orderNumber,publicOrderToken:created.publicOrderToken,status:created.status,grandTotal:created.grandTotal,outlet:{name:created.outlet.name,code:created.outlet.code}});
+  realtime.to(`outlet:${created.outletId}`).emit('web-order:new', {
+    orderId: created.id,
+    orderNumber: created.orderNumber,
+    outletId: created.outletId,
+    customerName: created.customerName,
+    orderType: created.orderType,
+    totalItems: created.items.reduce((sum, item) => sum + item.qty, 0),
+    grandTotal: Number(created.grandTotal),
+    createdAt: created.createdAt
+  });
   void sendCustomerWebOrderPush(created).catch(error=>console.error('Customer web order push failed',error));
 }));
 
@@ -1594,5 +1661,5 @@ api.get('/reports/products',allow('OWNER'),asyncRoute(async(req,res)=>{const r=a
 api.get('/reports/outlets',allow('OWNER'),asyncRoute(async(req,res)=>{const r=await report(req);const map=new Map<string,any>();for(const s of r.sales){const x=map.get(s.outletId)||{outlet:s.outlet.name,grossSales:0,netSales:0,discount:0,grossProfit:0,transactions:0};x.grossSales+=Number(s.subtotalBeforeDiscount);x.netSales+=Number(s.grandTotal);x.discount+=Number(s.discountAmount);x.grossProfit+=Number(s.grossProfit);x.transactions++;map.set(s.outletId,x);}res.json([...map.values()]);}));
 
 app.use((err:any,_req:any,res:any,_next:any)=>{if(err instanceof z.ZodError)return res.status(400).json({message:err.issues[0]?.message||'Data tidak valid',issues:err.issues});if(err instanceof ApiError)return res.status(err.status).json({message:err.message});if(err instanceof Prisma.PrismaClientKnownRequestError&&err.code==='P2002')return res.status(409).json({message:'Data unik sudah digunakan'});console.error(err);res.status(500).json({message:'Terjadi kesalahan pada server'});});
-const port=Number(process.env.PORT||4000);app.listen(port,()=>console.log(`FORU POS API running on http://localhost:${port}`));
+const port=Number(process.env.PORT||4000);httpServer.listen(port,()=>console.log(`FORU POS API running on http://localhost:${port}`));
 
