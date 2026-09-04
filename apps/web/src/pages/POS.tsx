@@ -13,7 +13,7 @@ import { isValidWhatsAppNumber, openWhatsAppInvoice } from '../whatsappInvoice';
 type Option = { id: string; name: string; additionalPrice: number; hpp: number };
 type Group = { id: string; name: string; minSelect: number; maxSelect: number; required: boolean; options: Option[] };
 type Variant = { id: string; variantName: string; sellingPrice: number };
-type Product = { id: string; name: string; category: string; categoryRef?: { name: string }; basePrice: number; baseHpp: number; imageUrl?: string; isAvailable?: boolean; variants: Variant[]; variantGroups: { group: Group }[] };
+type Product = { id: string; name: string; category: string; categoryRef?: { name: string }; basePrice: number; masterBasePrice?: number; baseHpp: number; imageUrl?: string; isAvailable?: boolean; variants: Variant[]; variantGroups: { group: Group }[] };
 type Line = { key: string; productId: string; variantId?: string; selectedVariantOptionIds?: string[]; name: string; variant: string; price: number; qty: number; itemNote?: string; discount?: { type: 'NOMINAL' | 'PERCENTAGE'; value: number } };
 type CartQtySnapshot = Record<string, number>;
 type PosDialog =
@@ -34,6 +34,23 @@ const cartQtySnapshot = (lines: Line[]) => lines.reduce<CartQtySnapshot>((acc, l
   acc[key] = (acc[key] || 0) + line.qty;
   return acc;
 }, {});
+
+function effectiveLinePrice(line: Line, product: Product) {
+  const effectiveBasePrice = Number(product.basePrice || 0);
+  if (product.variantGroups?.length) {
+    const selectedIds = new Set(line.selectedVariantOptionIds || []);
+    const optionTotal = product.variantGroups
+      .flatMap(attached => attached.group?.options || [])
+      .filter(option => selectedIds.has(option.id))
+      .reduce((sum, option) => sum + Number(option.additionalPrice || 0), 0);
+    return effectiveBasePrice + optionTotal;
+  }
+
+  const variant = line.variantId ? product.variants.find(item => item.id === line.variantId) : product.variants[0];
+  if (!variant || variant.variantName === 'Base') return effectiveBasePrice;
+  const masterBasePrice = Number(product.masterBasePrice ?? effectiveBasePrice);
+  return effectiveBasePrice + (Number(variant.sellingPrice || 0) - masterBasePrice);
+}
 
 export default function POS() {
   const [params] = useSearchParams();
@@ -93,6 +110,13 @@ export default function POS() {
     try {
       const next = await api<Product[]>(`/pos/products?outlet_id=${outletId}&channel=${encodeURIComponent(orderType)}&_=${Date.now()}`);
       setProducts(next);
+      const productsById = new Map(next.map(product => [product.id, product]));
+      setCart(current => current.map(line => {
+        const product = productsById.get(line.productId);
+        if (!product) return line;
+        const price = effectiveLinePrice(line, product);
+        return price === line.price ? line : { ...line, price };
+      }));
       setConfig(current => current ? next.find(p => p.id === current.id) || current : current);
       setError('');
     } catch (e) {
