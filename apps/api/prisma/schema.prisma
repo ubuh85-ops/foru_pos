@@ -47,6 +47,9 @@ model Business {
   phone     String?
   email     String?
   address   String?
+  gofoodFeePercent     Decimal @default(0) @map("gofood_fee_percent") @db.Decimal(5, 2)
+  grabfoodFeePercent   Decimal @default(0) @map("grabfood_fee_percent") @db.Decimal(5, 2)
+  shopeefoodFeePercent Decimal @default(0) @map("shopeefood_fee_percent") @db.Decimal(5, 2)
   status    BusinessStatus @default(ACTIVE)
   createdAt DateTime       @default(now()) @map("created_at")
   updatedAt DateTime       @updatedAt @map("updated_at")

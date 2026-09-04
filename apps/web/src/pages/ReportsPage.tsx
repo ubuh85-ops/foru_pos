@@ -99,6 +99,7 @@ export default function ReportsPage() {
     : [
       ['Net Sales', salesSummary.netSales || 0, TrendingUp, true],
       ['Total COGS / HPP', salesSummary.totalCogs || 0, ReceiptText, true],
+      ['Fee Online', salesSummary.onlineFee || 0, Percent, true],
       ['Gross Profit', salesSummary.grossProfit || 0, BarChart3, true],
       ['Gross Margin', pct(salesSummary.grossMarginPercent), Percent, false],
       ['Total Item Sold', salesSummary.totalItemSold || 0, PackageSearch, false]
@@ -160,8 +161,8 @@ function SalesTables({ data }: { data: any }) {
 
 function CogsTables({ data }: { data: any }) {
   return <div className="grid gap-5 xl:grid-cols-2">
-    <ReportSection title="COGS by Category" rows={data?.byCategory || []} columns={['Category', 'Qty Sold', 'Net Sales', 'COGS', 'Gross Profit', 'Gross Margin %']} renderRow={(r: any) => [r.category, r.qtySold, money(r.netSales), money(r.cogs), money(r.grossProfit), pct(r.grossMarginPercent)]} />
-    <ReportSection title="COGS by Product" rows={data?.byProduct || []} columns={['Product', 'Category', 'Variant / Option', 'Qty Sold', 'Net Sales', 'Unit HPP', 'Total COGS', 'Gross Profit', 'Gross Margin %']} renderRow={(r: any) => [r.productName, r.category, r.variant, r.qtySold, money(r.netSales), money(r.unitHpp), money(r.cogs), money(r.grossProfit), pct(r.grossMarginPercent)]} />
+    <ReportSection title="COGS by Category" rows={data?.byCategory || []} columns={['Category', 'Qty Sold', 'Net Sales', 'COGS', 'Fee Online', 'Gross Profit', 'Gross Margin %']} renderRow={(r: any) => [r.category, r.qtySold, money(r.netSales), money(r.cogs), money(r.onlineFee), money(r.grossProfit), pct(r.grossMarginPercent)]} />
+    <ReportSection title="COGS by Product" rows={data?.byProduct || []} columns={['Product', 'Category', 'Variant / Option', 'Qty Sold', 'Net Sales', 'Unit HPP', 'Total COGS', 'Fee Online', 'Gross Profit', 'Gross Margin %']} renderRow={(r: any) => [r.productName, r.category, r.variant, r.qtySold, money(r.netSales), money(r.unitHpp), money(r.cogs), money(r.onlineFee), money(r.grossProfit), pct(r.grossMarginPercent)]} />
   </div>;
 }
 
