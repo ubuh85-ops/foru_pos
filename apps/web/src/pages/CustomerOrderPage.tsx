@@ -144,9 +144,11 @@ export default function CustomerOrderPage() {
   const chipRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   async function refreshAvailability() {
-    const rows = await publicFetch<PublicProduct[]>(
-      `/public/order/${businessSlug}/${outletSlug}/products`
-    );
+    const [info, rows] = await Promise.all([
+      publicFetch<any>(`/public/order/${businessSlug}/${outletSlug}`),
+      publicFetch<PublicProduct[]>(`/public/order/${businessSlug}/${outletSlug}/products`),
+    ]);
+    setMeta(info);
     setProducts(rows);
     const latest = new Map(rows.map((product) => [product.id, product]));
     setCart((current) =>
@@ -156,19 +158,12 @@ export default function CustomerOrderPage() {
           : line
       )
     );
-    return rows;
+    return { info, rows };
   }
 
   useEffect(() => {
-    Promise.all([
-      publicFetch<any>(`/public/order/${businessSlug}/${outletSlug}`),
-      publicFetch<PublicProduct[]>(
-        `/public/order/${businessSlug}/${outletSlug}/products`
-      ),
-    ])
-      .then(([info, rows]) => {
-        setMeta(info);
-        setProducts(rows);
+    refreshAvailability()
+      .then(({ info }) => {
         if (!info.outlet?.allowDineIn && info.outlet?.allowTakeAway)
           setOrderType("TAKE_AWAY");
         setError("");
@@ -186,6 +181,11 @@ export default function CustomerOrderPage() {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };
+  }, [businessSlug, outletSlug]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => refreshAvailability().catch(() => {}), 10000);
+    return () => window.clearInterval(timer);
   }, [businessSlug, outletSlug]);
 
   const total = useMemo(
@@ -210,9 +210,10 @@ export default function CustomerOrderPage() {
     [cart]
   );
   const itemCount = cart.reduce((n, line) => n + line.qty, 0);
+  const storeOpen = !!meta?.outlet?.enabled && meta?.outlet?.acceptingCustomerOrders !== false;
   const phoneValid = /^\+?[0-9][0-9\s-]{7,19}$/.test(customerPhone.trim());
   const formValid =
-    !!cart.length &&
+    storeOpen && !!cart.length &&
     cart.every((line) => line.product.isAvailable) &&
     customerName.trim().length >= 2 &&
     phoneValid &&
@@ -514,7 +515,7 @@ export default function CustomerOrderPage() {
     setModalError("");
   }
   function addProduct(product: PublicProduct) {
-    if (!product.isAvailable) return;
+    if (!storeOpen || !product.isAvailable) return;
     const customizable = !!(
       product.variants?.length ||
       product.addons?.length ||
@@ -528,6 +529,7 @@ export default function CustomerOrderPage() {
   }
   async function submit() {
     if (submitting) return;
+    if (!storeOpen) return setError("Toko sedang tutup sementara.");
     if (!customerName.trim()) return setError("Nama customer wajib diisi.");
     if (!phoneValid) return setError("Nomor WhatsApp tidak valid.");
     if (!cart.length) return setError("Keranjang masih kosong.");
@@ -595,6 +597,12 @@ export default function CustomerOrderPage() {
         {error && (
           <div className="mb-4 rounded-2xl bg-red-50 p-3 font-semibold text-red-700">
             {error}
+          </div>
+        )}
+        {meta && !storeOpen && (
+          <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-center text-amber-800">
+            <b className="block text-lg">Toko sedang tutup sementara</b>
+            <p className="mt-1 text-sm">Menu tetap dapat dilihat, tetapi pesanan baru belum dapat dibuat.</p>
           </div>
         )}
         <section className="sticky top-0 z-20 mb-4 rounded-3xl bg-white/95 p-4 shadow-sm backdrop-blur">
@@ -906,6 +914,7 @@ export default function CustomerOrderPage() {
                         sectionRefs.current[group.id] = node;
                       }}
                       addProduct={addProduct}
+                      storeOpen={storeOpen}
                     />
                   ))
                 : categoryPages.map((page) => (
@@ -916,6 +925,7 @@ export default function CustomerOrderPage() {
                             key={group.id}
                             group={group}
                             addProduct={addProduct}
+                            storeOpen={storeOpen}
                           />
                         ))}
                       </div>
@@ -958,7 +968,7 @@ export default function CustomerOrderPage() {
                 </div>
               </div>
               <button
-                disabled={!cart.length}
+                disabled={!storeOpen || !cart.length}
                 onClick={() => setCheckout(true)}
                 className="btn btn-primary w-full disabled:opacity-50"
               >
@@ -971,8 +981,9 @@ export default function CustomerOrderPage() {
       {!checkout && !!cart.length && (
         <div className="fixed inset-x-0 bottom-0 z-30 border-t bg-white p-3 shadow-2xl lg:hidden">
           <button
+            disabled={!storeOpen}
             onClick={() => setCheckout(true)}
-            className="btn btn-primary mx-auto flex w-full max-w-2xl items-center justify-between"
+            className="btn btn-primary mx-auto flex w-full max-w-2xl items-center justify-between disabled:opacity-40"
           >
             <span>
               <ShoppingBag className="mr-2 inline" size={18} />
@@ -1119,7 +1130,7 @@ export default function CustomerOrderPage() {
                   <Plus />
                 </button>
               </div>
-              <button onClick={addSelected} className="btn btn-primary flex-1">
+              <button disabled={!storeOpen} onClick={addSelected} className="btn btn-primary flex-1 disabled:opacity-40">
                 Tambah
               </button>
             </div>
@@ -1157,7 +1168,7 @@ export default function CustomerOrderPage() {
                 Kembali
               </button>
               <button
-                disabled={submitting}
+                disabled={submitting || !storeOpen}
                 onClick={submit}
                 className="btn btn-primary disabled:opacity-50"
               >
@@ -1174,6 +1185,7 @@ export default function CustomerOrderPage() {
 function CategorySection({
   group,
   addProduct,
+  storeOpen,
   setRef,
 }: {
   group: {
@@ -1183,6 +1195,7 @@ function CategorySection({
     products: PublicProduct[];
   };
   addProduct: (product: PublicProduct) => void;
+  storeOpen: boolean;
   setRef?: (node: HTMLElement | null) => void;
 }) {
   return (
@@ -1251,11 +1264,11 @@ function CategorySection({
                 </div>
                 <button
                   type="button"
-                  disabled={!product.isAvailable}
+                  disabled={!storeOpen || !product.isAvailable}
                   onClick={() => addProduct(product)}
                   className="mx-auto mt-2 flex min-h-11 w-full items-center justify-center rounded-full bg-brand-700 px-4 text-sm font-black text-white shadow-sm transition hover:bg-brand-800 active:scale-95 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:shadow-none"
                 >
-                  {product.isAvailable ? "Tambah" : "Habis"}
+                  {!storeOpen ? "Tutup" : product.isAvailable ? "Tambah" : "Habis"}
                 </button>
               </div>
             </article>

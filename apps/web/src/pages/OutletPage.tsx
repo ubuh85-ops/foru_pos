@@ -111,7 +111,6 @@ export default function OutletPage() {
         autoPrintCustomerItemList: f.get('autoPrintCustomerItemList') === 'on',
         customerOrderingEnabled: f.get('customerOrderingEnabled') === 'on',
         customerOrderingSlug: String(f.get('customerOrderingSlug') || '').trim() || null,
-        acceptingCustomerOrders: f.get('acceptingCustomerOrders') === 'on',
         customerOrderAllowDineIn: f.get('customerOrderAllowDineIn') === 'on',
         customerOrderAllowTakeAway: f.get('customerOrderAllowTakeAway') === 'on',
         customerOrderAllowDelivery: f.get('customerOrderAllowDelivery') === 'on',
@@ -212,7 +211,6 @@ export default function OutletPage() {
           <label className="mb-2 flex items-center gap-2 text-sm font-bold"><input name="customerOrderingEnabled" type="checkbox" defaultChecked={!!edit.customerOrderingEnabled} /> Enable Customer Ordering</label>
           <label className="label">Public Slug</label>
           <input className="input mb-3" name="customerOrderingSlug" defaultValue={edit.customerOrderingSlug || publicSlug(edit.code || edit.name || '')} placeholder="foru-huis" />
-          <label className="mb-2 flex items-center gap-2 text-sm font-bold"><input name="acceptingCustomerOrders" type="checkbox" defaultChecked={edit.acceptingCustomerOrders !== false} /> Terima pesanan online</label>
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="flex items-center gap-2 text-sm font-bold"><input name="customerOrderAllowDineIn" type="checkbox" defaultChecked={edit.customerOrderAllowDineIn !== false} /> Allow Dine In</label>
             <label className="flex items-center gap-2 text-sm font-bold"><input name="customerOrderAllowTakeAway" type="checkbox" defaultChecked={edit.customerOrderAllowTakeAway !== false} /> Allow Take Away</label>

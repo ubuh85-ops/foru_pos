@@ -9,6 +9,8 @@ export type Outlet = {
   autoPrintReceipt?: boolean;
   autoPrintKitchen?: boolean;
   autoPrintCustomerItemList?: boolean;
+  customerOrderingEnabled?: boolean;
+  acceptingCustomerOrders?: boolean;
 };
 
 type OutletContextValue = {

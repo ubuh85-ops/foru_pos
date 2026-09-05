@@ -325,12 +325,12 @@ api.get('/public/order/status/:token',asyncRoute(async(req,res)=>{
 }));
 api.get('/public/order/:businessSlug/:outletSlug',asyncRoute(async(req,res)=>{
   const {business,outlet}=await resolvePublicOrderOutlet(String(req.params.businessSlug),String(req.params.outletSlug));
-  const enabled=outlet.customerOrderingEnabled&&outlet.acceptingCustomerOrders;
+  const enabled=outlet.customerOrderingEnabled;
   res.json({business:{name:business.name,code:business.code,logoUrl:business.logoUrl},outlet:{name:outlet.name,code:outlet.code,slug:outlet.customerOrderingSlug||publicSlug(outlet.code),enabled,acceptingCustomerOrders:outlet.acceptingCustomerOrders,allowDineIn:outlet.customerOrderAllowDineIn,allowTakeAway:outlet.customerOrderAllowTakeAway,allowDelivery:outlet.customerOrderAllowDelivery,requestPhone:true,preOrderEnabled:outlet.preOrderEnabled,preOrderMinLeadMinutes:outlet.preOrderMinLeadMinutes,preOrderMaxDaysAhead:outlet.preOrderMaxDaysAhead,preOrderSlotMinutes:outlet.preOrderSlotMinutes,openTime:outlet.customerOrderOpenTime,closeTime:outlet.customerOrderCloseTime,operatingDays:outlet.customerOrderOperatingDays,timezone:outlet.timezone}});
 }));
 api.get('/public/order/:businessSlug/:outletSlug/products',asyncRoute(async(req,res)=>{
   const {business,outlet}=await resolvePublicOrderOutlet(String(req.params.businessSlug),String(req.params.outletSlug));
-  if(!outlet.customerOrderingEnabled||!outlet.acceptingCustomerOrders)throw new ApiError(403,'Pesanan online sedang ditutup');
+  if(!outlet.customerOrderingEnabled)throw new ApiError(403,'Pesanan online tidak aktif');
   const products=await prisma.product.findMany({where:{businessId:business.id,status:'ACTIVE',OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}],outlets:{some:{outletId:outlet.id,isActive:true,status:'ACTIVE'}}},include:{categoryRef:true,outlets:{where:{outletId:outlet.id,isActive:true}},variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId:outlet.id}}}}}}}}},orderBy:[{categoryRef:{sortOrder:'asc'}},{name:'asc'}]});
   res.json(products.map(p=>publicProductShape(p,outlet.id)));
 }));
@@ -637,6 +637,7 @@ api.post('/outlets',allow('OWNER'),asyncRoute(async(req,res)=>{
   res.status(201).json(await prisma.outlet.create({data:{...d,businessId:req.user!.businessId},include:outletInclude}));
 }));
 api.put('/outlets/:id',allow('OWNER'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertTenantOutlet(req,id);const d=z.object({code:z.string().min(2).optional(),name:z.string().min(2).optional(),address:z.string().nullable().optional(),phone:z.string().nullable().optional(),inventoryWarehouseId:z.string().nullable().optional(),blockSaleWhenIngredientOutOfStock:z.coerce.boolean().optional(),allowSaleWithoutRecipe:z.coerce.boolean().optional(),...outletCustomerOrderingSchema,...outletPrintSettingsSchema,status:z.enum(['ACTIVE','INACTIVE']).optional()}).parse(req.body);if(d.inventoryWarehouseId)await assertWarehouseAccess(req,d.inventoryWarehouseId);res.json(await prisma.outlet.update({where:{id},data:d,include:outletInclude}));}));
+api.patch('/outlets/:id/customer-orders',allow('OWNER','SUPERVISOR','CASHIER'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertTenantOutlet(req,id);const d=z.object({acceptingCustomerOrders:z.boolean()}).parse(req.body);const outlet=await prisma.outlet.findFirst({where:{id,businessId:req.user!.businessId,status:'ACTIVE'}});if(!outlet)throw new ApiError(403,'Outlet tidak diizinkan');if(!outlet.customerOrderingEnabled)throw new ApiError(400,'Web Order belum diaktifkan untuk outlet ini');res.json(await prisma.$transaction(async tx=>{const updated=await tx.outlet.update({where:{id},data:d,include:outletInclude});await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'OUTLET',entityId:id,action:d.acceptingCustomerOrders?'WEB_ORDER_OPENED':'WEB_ORDER_CLOSED',oldValue:{acceptingCustomerOrders:outlet.acceptingCustomerOrders},newValue:d,changedBy:req.user!.id}});return updated;}));}));
 api.put('/outlets/:id/inventory-warehouse',allow('OWNER'),asyncRoute(async(req,res)=>{
   const id=String(req.params.id);
   await assertTenantOutlet(req,id);
