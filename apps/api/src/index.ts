@@ -15,6 +15,7 @@ import { allow, ApiError, assertOutlet, asyncRoute, auth, dayRange, defaultBusin
 import { discountAmount, legacyVariantPrice, priceCart, validateCoupon } from './discount.js';
 import { validatePublicSchedule } from './preorder.js';
 import { sendCustomerWebOrderPush } from './push.js';
+import { orderAttribution, recordOrderAnalytics, reconcileOrderAnalytics, registerAdminAnalytics, registerPublicAnalytics } from './web-analytics.js';
 import { Server as SocketIOServer } from 'socket.io';
 
 const defaultCorsOrigins = [
@@ -296,6 +297,7 @@ function publicProductShape(p:any,outletId:string,channel='DINE_IN'){
 }
 const publicOrderItemInput=z.object({productId:z.string(),variantId:z.string().optional(),selectedVariantOptionIds:z.array(z.string()).default([]),qty:z.number().int().min(1).max(50),addonIds:z.array(z.string()).default([]),itemNote:z.string().trim().max(255).optional()});
 const publicOrderInput=z.object({
+  analytics:z.unknown().optional(),
   customerName:z.string().trim().min(2,'Nama customer wajib diisi').max(80),
   customerPhone:z.string().trim().regex(/^\+?[0-9][0-9\s-]{7,19}$/,'Nomor WhatsApp tidak valid'),
   orderType:z.enum(['DINE_IN','TAKE_AWAY','DELIVERY']),
@@ -359,7 +361,8 @@ api.post('/public/order/:businessSlug/:outletSlug/orders',asyncRoute(async(req,r
   const totals=await buildOrderTotals(fakeReq,{outletId:outlet.id,customerName:d.customerName,orderType:d.orderType,items:d.items} as any);
   const orderNumber=await nextNumber('ORD',outlet.id,'orderNumber');
   const publicOrderToken=crypto.randomBytes(24).toString('hex');
-  const created=await prisma.$transaction(async tx=>tx.sale.create({data:{businessId:business.id,orderNumber,outletId:outlet.id,customerName:d.customerName,customerPhone:d.customerPhone.trim(),tableNumber:d.orderType==='DINE_IN'?d.tableNumber?.trim()||null:null,orderNote:d.orderNote?.trim()||null,orderType:d.orderType,orderSource:'CUSTOMER_WEB',customerOrderRequestId:d.customerOrderRequestId,publicOrderToken,isPreOrder:d.isPreOrder,scheduledAt,submittedAt:new Date(),subtotal:totals.gross,discountAmount:money(totals.productDiscount+totals.transactionDiscount+totals.couponDiscount),totalAmount:totals.grand,subtotalBeforeDiscount:totals.gross,productDiscountTotal:totals.productDiscount,transactionDiscountAmount:totals.transactionDiscount,couponCode:totals.couponResult?.coupon.couponCode,couponDiscountAmount:totals.couponDiscount,grandTotal:totals.grand,totalHpp:totals.totalHpp,grossProfit:0,status:'OPEN_ORDER',items:{create:totals.lines.map(saleItemCreate)}},include:{items:{include:{addons:true}},outlet:true}}));
+  const created=await prisma.$transaction(async tx=>tx.sale.create({data:{businessId:business.id,orderNumber,outletId:outlet.id,customerName:d.customerName,customerPhone:d.customerPhone.trim(),tableNumber:d.orderType==='DINE_IN'?d.tableNumber?.trim()||null:null,orderNote:d.orderNote?.trim()||null,orderType:d.orderType,orderSource:'CUSTOMER_WEB',webAnalytics:orderAttribution(d.analytics),customerOrderRequestId:d.customerOrderRequestId,publicOrderToken,isPreOrder:d.isPreOrder,scheduledAt,submittedAt:new Date(),subtotal:totals.gross,discountAmount:money(totals.productDiscount+totals.transactionDiscount+totals.couponDiscount),totalAmount:totals.grand,subtotalBeforeDiscount:totals.gross,productDiscountTotal:totals.productDiscount,transactionDiscountAmount:totals.transactionDiscount,couponCode:totals.couponResult?.coupon.couponCode,couponDiscountAmount:totals.couponDiscount,grandTotal:totals.grand,totalHpp:totals.totalHpp,grossProfit:0,status:'OPEN_ORDER',items:{create:totals.lines.map(saleItemCreate)}},include:{items:{include:{addons:true}},outlet:true}}));
+  void recordOrderAnalytics(created).catch(() => console.error('Web order analytics queued for retry'));
   res.status(201).json({id:created.id,orderNumber:created.orderNumber,publicOrderToken:created.publicOrderToken,status:created.status,grandTotal:created.grandTotal,outlet:{name:created.outlet.name,code:created.outlet.code}});
   realtime.to(`outlet:${created.outletId}`).emit('web-order:new', {
     orderId: created.id,
@@ -374,7 +377,17 @@ api.post('/public/order/:businessSlug/:outletSlug/orders',asyncRoute(async(req,r
   void sendCustomerWebOrderPush(created).catch(error=>console.error('Customer web order push failed',error));
 }));
 
+registerPublicAnalytics(api, resolvePublicOrderOutlet);
 api.use(auth);
+registerAdminAnalytics(api);
+let analyticsReconciling = false;
+const analyticsTimer = setInterval(() => {
+  if (analyticsReconciling) return;
+  analyticsReconciling = true;
+  void reconcileOrderAnalytics().catch(() => console.error('Web analytics reconciliation failed; will retry'))
+    .finally(() => { analyticsReconciling = false; });
+}, 30_000);
+analyticsTimer.unref();
 const pushDeviceBody=z.object({
   token:z.string().trim().min(20).max(4096),
   outletId:z.string().trim().min(1),

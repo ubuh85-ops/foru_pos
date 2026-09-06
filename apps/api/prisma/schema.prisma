@@ -39,6 +39,7 @@ model User {
 }
 
 model Business {
+  webAnalyticsEvents WebAnalyticsEvent[]
   id        String         @id @default(cuid())
   code      String         @unique
   name      String
@@ -97,6 +98,7 @@ model BusinessMembership {
 }
 
 model Outlet {
+  webAnalyticsEvents WebAnalyticsEvent[]
   id                                String                @id @default(cuid())
   businessId                        String                @map("business_id")
   code                              String
@@ -192,6 +194,7 @@ model PushDevice {
 }
 
 model Product {
+  webAnalyticsEvents WebAnalyticsEvent[]
   id                 String                @id @default(cuid())
   businessId         String                @map("business_id")
   sku                String?
@@ -436,6 +439,8 @@ model CashSession {
 }
 
 model Sale {
+  webAnalytics Json? @map("web_analytics")
+  analyticsEvents WebAnalyticsEvent[]
   id                        String         @id @default(cuid())
   businessId                String         @map("business_id")
   orderNumber               String?        @unique @map("order_number")
@@ -494,6 +499,30 @@ model Sale {
   @@index([businessId, outletId, status, scheduledAt])
   @@index([outletId, createdAt])
   @@map("sales")
+}
+
+model WebAnalyticsEvent {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  outletId   String   @map("outlet_id")
+  visitorId  String   @map("visitor_id")
+  sessionId  String?  @map("session_id")
+  eventId    String?  @unique @map("event_id")
+  eventType  String   @map("event_type")
+  source     String   @default("direct")
+  productId  String?  @map("product_id")
+  orderId    String?  @unique @map("order_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  outlet     Outlet   @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  product    Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  order      Sale?    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, outletId, createdAt])
+  @@index([businessId, createdAt])
+  @@index([visitorId])
+  @@index([eventType, createdAt])
+  @@map("web_analytics_events")
 }
 
 model Printer {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Check,
   ChevronLeft,
@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { API, rupiah } from "../api";
+import { trackWebEvent, webAttribution } from "../webAnalytics";
 
 type PublicOption = { id: string; name: string; additionalPrice: number };
 type PublicGroup = {
@@ -106,6 +107,14 @@ function zonedDateTimeIso(
 
 export default function CustomerOrderPage() {
   const { businessSlug = "", outletSlug = "" } = useParams();
+  const location = useLocation();
+  const trackedPage = useRef<string | null>(null);
+  useEffect(() => {
+    const page = `${location.key}:${businessSlug}:${outletSlug}`;
+    if (!businessSlug || !outletSlug || trackedPage.current === page) return;
+    trackedPage.current = page;
+    trackWebEvent(businessSlug, outletSlug, 'PAGE_VIEW');
+  }, [businessSlug, outletSlug, location.key]);
   const navigate = useNavigate();
   const [meta, setMeta] = useState<any>(null);
   const [products, setProducts] = useState<PublicProduct[]>([]);
@@ -510,6 +519,9 @@ export default function CustomerOrderPage() {
             },
           ]
     );
+    if (!editingKey || qty > (cart.find(line => line.key === editingKey)?.qty ?? qty)) {
+      trackWebEvent(businessSlug, outletSlug, 'ADD_TO_CART', selected.id);
+    }
     setSelected(null);
     setEditingKey(null);
     setModalError("");
@@ -522,6 +534,7 @@ export default function CustomerOrderPage() {
       product.variantGroups?.length
     );
     if (customizable) return openProduct(product);
+    trackWebEvent(businessSlug, outletSlug, 'ADD_TO_CART', product.id);
     setCart((rows) => [
       ...rows,
       { key: uid(), product, qty: 1, optionIds: [], addonIds: [], note: "" },
@@ -543,6 +556,7 @@ export default function CustomerOrderPage() {
           method: "POST",
           body: JSON.stringify({
             customerName,
+            analytics: webAttribution(businessSlug, outletSlug),
             customerPhone,
             orderType,
             tableNumber,
@@ -714,15 +728,16 @@ export default function CustomerOrderPage() {
                         <b className="px-2">{line.qty}</b>
                         <button
                           disabled={!line.product.isAvailable}
-                          onClick={() =>
+                          onClick={() => {
+                            if (line.qty < 50) trackWebEvent(businessSlug, outletSlug, 'ADD_TO_CART', line.product.id);
                             setCart((rows) =>
                               rows.map((x) =>
                                 x.key === line.key
                                   ? { ...x, qty: Math.min(50, x.qty + 1) }
                                   : x
                               )
-                            )
-                          }
+                            );
+                          }}
                           className="p-2 disabled:opacity-30"
                         >
                           <Plus size={16} />
