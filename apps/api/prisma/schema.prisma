@@ -7,6 +7,13 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model SaleDocumentCounter {
+  key   String @id
+  value BigInt
+
+  @@map("sale_document_counters")
+}
+
 model User {
   id                      String               @id @default(cuid())
   name                    String
@@ -497,6 +504,8 @@ model Sale {
   @@index([businessId, outletId, createdAt])
   @@index([businessId, outletId, status, orderSource, createdAt])
   @@index([businessId, outletId, status, scheduledAt])
+  @@index([businessId, status, createdAt])
+  @@index([businessId, outletId, status, createdAt])
   @@index([outletId, createdAt])
   @@map("sales")
 }

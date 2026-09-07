@@ -19,6 +19,7 @@ import OutletPage from './pages/OutletPage';
 import DashboardPage from './pages/DashboardPage';
 import ReportsPage from './pages/ReportsPage';
 import WebAnalyticsPage from './pages/WebAnalyticsPage';
+import DailyReportPage from './pages/DailyReportPage';
 import ExpensesPage from './pages/ExpensesPage';
 import SalesHistoryPage from './pages/SalesHistoryPage';
 import { Coupons, CustomerItemListPrint, KitchenTicketPrint, PrinterSettings, ReceiptPrint, SaleDetail } from './pages/Pages';
@@ -72,6 +73,7 @@ const navGroups: NavGroup[] = [
     label: 'LAPORAN',
     items: [
       ['/reports', 'Penjualan', BarChart3],
+      ['/reports/daily', 'Report Harian', CalendarDays],
       ['/reports/web-analytics', 'Web Analytics', BarChart3],
       ['/inventory/history', 'Inventory', Boxes],
       ['/reports', 'COGS', Calculator],
@@ -157,6 +159,7 @@ function canSeeInventoryPath(user: User, path: string) {
 }
 
 function canSeePath(user: User, path: string) {
+  if (path === '/reports/daily') return user.role === 'OWNER';
   if (path === '/reports/web-analytics') return user.role === 'OWNER';
   if (!knownRoutes.has(path)) return false;
   if (path === '/dashboard') return hasUserPermission(user, 'dashboard.view');
@@ -436,7 +439,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
                 key={`${group.key}-${label}-${path}`}
                 to={path}
                 title={label}
-                end={path === '/inventory'}
+                end={path === '/inventory' || path === '/reports'}
                 onClick={() => setOpen(false)}
                 className={({ isActive }) => `flex items-center gap-3 rounded-xl font-semibold ${sidebarHidden ? 'justify-center px-0 py-3' : 'justify-start px-3 py-2.5 text-left'} ${isActive ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-brand-50 hover:text-brand-700'}`}
               >
@@ -473,6 +476,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
         <Route path="/outlets" element={user.role === 'OWNER' ? <OutletPage /> : <Navigate to="/pos" />} />
         <Route path="/reports" element={user.role === 'OWNER' ? <ReportsPage /> : <Navigate to="/pos" />} />
         <Route path="/reports/web-analytics" element={user.role === 'OWNER' ? <WebAnalyticsPage /> : <Navigate to="/pos" />} />
+        <Route path="/reports/daily" element={user.role === 'OWNER' ? <DailyReportPage /> : <Navigate to="/pos" />} />
         <Route path="/inventory/*" element={hasInventoryPermission(user, 'inventory.view') ? <InventoryPage user={user} /> : <Navigate to="/pos" />} />
         <Route path="/receipt/:saleId" element={<ReceiptPrint />} />
         <Route path="/kitchen-ticket/:saleId" element={<KitchenTicketPrint />} />
