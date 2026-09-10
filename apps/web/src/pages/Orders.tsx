@@ -58,7 +58,7 @@ const normalizeWhatsappPhone = (value?: string | null) => {
   if (digits.startsWith('8')) return `62${digits}`;
   return digits;
 };
-const qrisPaymentUrl = () => new URL('/images/qris-payment.png', window.location.origin).href;
+const QRIS_PAYMENT_URL = 'https://foru.web.id/images/qris-payment.png';
 const whatsappOrderMessage = (order: any) => {
   const number = order.orderNumber || order.transactionNumber || '-';
   const customer = order.customerName || 'Kak';
@@ -85,7 +85,7 @@ const whatsappOrderMessage = (order: any) => {
       ? 'Silakan menunggu konfirmasi dari kasir.'
       : 'Silakan lanjutkan pembayaran/konfirmasi ke kasir.',
     ...(order.status === 'PENDING_PAYMENT'
-      ? ['', 'Pembayaran QRIS:', qrisPaymentUrl(), 'Setelah membayar, mohon kirim bukti pembayaran melalui WhatsApp ini.']
+      ? ['', 'Pembayaran QRIS:', QRIS_PAYMENT_URL, 'Setelah membayar, mohon kirim bukti pembayaran melalui WhatsApp ini.']
       : []),
     'Terima kasih.'
   ];
