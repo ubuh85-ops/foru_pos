@@ -1264,13 +1264,21 @@ function CategorySection({
               <div className="min-w-0">
                 <div className="relative aspect-square overflow-hidden rounded-2xl bg-slate-100">
                   <img
-                    src={imageSrc(product.imageUrl)}
-                    alt={product.name}
-                    loading="lazy"
-                    className={`h-full w-full object-cover ${
-                      product.isAvailable ? "" : "opacity-60"
-                    }`}
+                    src="/images/foru.png"
+                    alt=""
+                    className="absolute inset-0 m-auto h-20 w-20 object-contain opacity-60"
                   />
+                  {product.imageUrl && (
+                    <img
+                      src={imageSrc(product.imageUrl)}
+                      alt=""
+                      loading="lazy"
+                      onError={(event) => { event.currentTarget.style.display = "none"; }}
+                      className={`absolute inset-0 h-full w-full object-cover ${
+                        product.isAvailable ? "" : "opacity-60"
+                      }`}
+                    />
+                  )}
                   {!product.isAvailable && (
                     <span className="absolute right-2 top-2 rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white">
                       HABIS

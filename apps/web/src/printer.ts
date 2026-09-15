@@ -315,27 +315,42 @@ export function clearBluetoothPrinterCache(outletId?: string) {
     .forEach(key => localStorage.removeItem(key));
 }
 
+export function selectBluetoothPrinter(printers: any[], type: PrintDocType) {
+  const wantsKitchen = type === 'kitchen-ticket';
+  const candidates = printers.filter(printer =>
+    wantsKitchen ? printer.isKitchenPrinter : printer.isCustomerReceipt
+  );
+
+  // Prefer a printer dedicated to this document type. A dual-purpose printer
+  // is used only when no dedicated printer is configured.
+  return candidates.find(printer =>
+    wantsKitchen ? !printer.isCustomerReceipt : !printer.isKitchenPrinter
+  ) || candidates[0] || null;
+}
+
 async function bluetoothPrintersForOutlet(outletId?: string) {
   const cached = cachedBluetoothPrinters(outletId);
-  if (cached) return cached;
-  const printers = await api<any[]>(outletId ? `/printers?outlet_id=${outletId}` : '/printers');
-  const activeBluetoothPrinters = printers.filter(p =>
-    p.status === 'ACTIVE' &&
-    p.connectionType === 'BLUETOOTH' &&
-    p.bluetoothAddress &&
-    (!outletId || p.outletId === outletId || p.outlet?.id === outletId)
-  );
-  rememberBluetoothPrinters(outletId, activeBluetoothPrinters);
-  return activeBluetoothPrinters;
+  try {
+    const printers = await api<any[]>(outletId ? `/printers?outlet_id=${outletId}` : '/printers');
+    const activeBluetoothPrinters = printers.filter(p =>
+      p.status === 'ACTIVE' &&
+      p.connectionType === 'BLUETOOTH' &&
+      p.bluetoothAddress &&
+      (!outletId || p.outletId === outletId || p.outlet?.id === outletId)
+    );
+    rememberBluetoothPrinters(outletId, activeBluetoothPrinters);
+    return activeBluetoothPrinters;
+  } catch (error) {
+    if (cached) return cached;
+    throw error;
+  }
 }
 
 export async function tryNativeBluetoothPrint(doc: any, type: PrintDocType) {
   if (!isNativeAndroid()) return false;
   const oid = outletIdOf(doc);
   const activeBluetoothPrinters = await bluetoothPrintersForOutlet(oid);
-  const printer = activeBluetoothPrinters.find(p =>
-    (type === 'kitchen-ticket' ? p.isKitchenPrinter : p.isCustomerReceipt)
-  ) || activeBluetoothPrinters[0] || lastBluetoothPrinter();
+  const printer = selectBluetoothPrinter(activeBluetoothPrinters, type);
   if (!printer) return false;
   const text = buildPrintText(doc, type, printer.paperSize || 'MM58');
   const chunks = type === 'shift-close-report' ? chunkText(text) : [text];

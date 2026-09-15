@@ -86,6 +86,7 @@ export default function POS() {
   const [openOrders, setOpenOrders] = useState<any[]>([]);
   const [openOrdersOpen, setOpenOrdersOpen] = useState(false);
   const [reviewOpenOrder, setReviewOpenOrder] = useState<any>(null);
+  const [acceptingOrderId, setAcceptingOrderId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<PosDialog | null>(null);
 
   function askConfirm(options: Omit<Extract<PosDialog, { kind: 'confirm' }>, 'kind' | 'resolve'>) {
@@ -190,10 +191,10 @@ export default function POS() {
     } catch {}
   }, [outlet, editOrderId]);
   useEffect(() => {
-    if (!outlet) return;
+    if (!outlet || editOrderId || editingOrder) return;
     localStorage.setItem('foru:pos_order_type', orderType);
     localStorage.setItem(`foru:pos_cart:${outlet}`, JSON.stringify({ cart, customerName, customerPhone, orderType, tableNumber, orderNote, updatedAt: new Date().toISOString() }));
-  }, [outlet, cart, customerName, customerPhone, orderType, tableNumber, orderNote]);
+  }, [outlet, editOrderId, editingOrder, cart, customerName, customerPhone, orderType, tableNumber, orderNote]);
   useEffect(() => {
     if (!editOrderId) return;
     api<any>(`/orders/${editOrderId}`).then(order => {
@@ -390,7 +391,30 @@ export default function POS() {
       toast.error((e as Error).message);
     }
   }
-  function resetCart() { setCart([]); setCoupon(''); setCouponDiscount(0); setTrxDisc(undefined); setCustomerName(''); setCustomerPhone(''); setTableNumber(''); setOrderNote(''); }
+  async function acceptOpenOrder(order: any) {
+    if (acceptingOrderId) return;
+    setAcceptingOrderId(order.id);
+    try {
+      const active = await refreshActiveShift();
+      const accepted = await api<any>(`/orders/${order.id}/accept`, { method: 'POST', body: JSON.stringify({ cashSessionId: active?.id }) });
+      toast.success('Pesanan diterima dan masuk ke Open Bill.');
+      setReviewOpenOrder(null);
+      await loadOpenOrders();
+      await runAutoPrint(accepted, 'pending-order');
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setAcceptingOrderId(null);
+    }
+  }
+  function resetCart() { setCart([]); setCoupon(''); setCouponDiscount(0); setTrxDisc(undefined); setCustomerName(''); setCustomerPhone(''); setTableNumber(''); setOrderNote(''); if (outlet) localStorage.removeItem(`foru:pos_cart:${outlet}`); }
+  function cancelOrderEdit() {
+    const orderId = editingOrder?.id || editOrderId;
+    setEditingOrder(null);
+    setEditingOrderSnapshot({});
+    resetCart();
+    navigate(orderId ? `/orders/${orderId}` : '/orders?status=PENDING_PAYMENT', { replace: true });
+  }
   async function saveOrder() {
     if (orderSubmitting) return;
     if (!customerName.trim() || customerName.trim().toLowerCase() === 'walk in') {
@@ -406,11 +430,13 @@ export default function POS() {
         const additionalDoc = additionalOrderDoc(editingOrder);
         const result = await api(`/orders/${editingOrder.id}`, { method: 'PUT', body: JSON.stringify(orderPayload(active)) });
         toast.success('Data berhasil disimpan.');
-        setEditingOrder(result);
-        setEditingOrderSnapshot(cartQtySnapshot(cart));
+        setEditingOrder(null);
+        setEditingOrderSnapshot({});
+        resetCart();
         if (additionalDoc) {
           const printable = { ...(result as any), items: additionalDoc.items, grandTotal: additionalDoc.grandTotal, printTitle: additionalDoc.printTitle };
           setReceipt(printable);
+          navigate('/pos', { replace: true });
           await runAutoPrint(printable, 'pending-order');
         } else {
           navigate(`/orders/${(result as any).id}`);
@@ -469,21 +495,20 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
             const soldOut=p.isAvailable===false;
             return <button key={p.id} onClick={() => quickAdd(p)} disabled={!shiftOpen || outOfStock || soldOut} className="group relative overflow-hidden rounded-3xl bg-white text-left shadow-sm ring-1 ring-black/5 transition hover:-translate-y-0.5 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60">
               <div className="relative grid aspect-[4/3] place-items-center overflow-hidden bg-gradient-to-br from-brand-50 via-amber-50 to-white text-4xl">
-              {p.imageUrl ? (
-  <img
-    src={productImageSrc(p.imageUrl)}
-    alt={p.name}
-    className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
-  />
-) : (
-  <div className="flex h-full w-full flex-col items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
-    <img
-      src="/images/foru.png"
-      alt="FORU"
-      className="h-16 w-16 object-contain opacity-60 transition duration-300 group-hover:scale-110"
-    />
-  </div>
-)}
+              <img
+                src={foruLogo}
+                alt=""
+                className="h-16 w-16 object-contain opacity-60 transition duration-300 group-hover:scale-110"
+              />
+              {p.imageUrl && (
+                <img
+                  src={productImageSrc(p.imageUrl)}
+                  alt=""
+                  className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                  loading="lazy"
+                  onError={(event) => { event.currentTarget.style.display = 'none'; }}
+                />
+              )}
               {soldOut&&<span className="absolute right-2 top-2 rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white">HABIS</span>}
               </div>
               <div className="p-3">
@@ -501,7 +526,10 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
             const price = Number(p.basePrice || p.variants[0]?.sellingPrice || 0);
             const soldOut=p.isAvailable===false;
             return <button key={p.id} onClick={() => quickAdd(p)} disabled={!shiftOpen||soldOut} className="flex min-w-0 items-center gap-3 rounded-2xl bg-white p-3 text-left shadow-sm ring-1 ring-black/5 disabled:cursor-not-allowed disabled:opacity-60">
-              <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-gradient-to-br from-brand-50 to-amber-50 text-2xl">{p.imageUrl ? <img src={productImageSrc(p.imageUrl)} alt={p.name} className="h-full w-full object-cover" loading="lazy" onError={(e) => { e.currentTarget.src = foruLogo;}} /> : ''}</div>
+              <div className="relative grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-gradient-to-br from-brand-50 to-amber-50 text-2xl">
+                <img src={foruLogo} alt="" className="h-10 w-10 object-contain opacity-60" />
+                {p.imageUrl && <img src={productImageSrc(p.imageUrl)} alt="" className="absolute inset-0 h-full w-full object-cover" loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />}
+              </div>
               <div className="min-w-0 flex-1"><h3 className=" line-clamp-3 truncate  text-sm">{p.name}</h3><p className="truncate text-xs text-slate-400">{p.variantGroups?.length ? 'Pilih opsi' : p.variants[0]?.variantName || 'Base'}</p></div>
               {soldOut?<b className="shrink-0 text-xs text-slate-500">HABIS</b>:<b className="money shrink-0 text-brand-700">{rupiah(price)}</b>}
             </button>;
@@ -637,7 +665,7 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
           <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={saveOrder} className="rounded-2xl border px-2 py-3 text-xs font-extrabold text-slate-600 disabled:opacity-40">{orderSubmitting ? 'Menyimpan...' : 'Open Bill'}</button>
           <button disabled={!cart.length} onClick={clearCart} className="rounded-2xl border px-2 py-3 text-xs font-extrabold text-red-600 disabled:opacity-40">Clear Cart</button>
         </div>
-        {editingOrder && <button onClick={() => navigate(`/orders/${editingOrder.id}`)} className="mt-2 w-full rounded-2xl border px-4 py-3 text-sm font-extrabold text-slate-500">Cancel Edit</button>}
+        {editingOrder && <button onClick={cancelOrderEdit} className="mt-2 w-full rounded-2xl border px-4 py-3 text-sm font-extrabold text-slate-500">Cancel Edit</button>}
       </div>
     </aside>
     {dialog?.kind === 'confirm' && <ConfirmDialog
@@ -673,16 +701,20 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
       onRefresh={loadOpenOrders}
       onReview={setReviewOpenOrder}
       onEdit={order => { setOpenOrdersOpen(false); navigate(`/pos?editOrderId=${order.id}`); }}
+      onAccept={acceptOpenOrder}
       onReject={rejectOpenOrder}
+      acceptingOrderId={acceptingOrderId}
     />}
     {reviewOpenOrder && <OpenOrderReviewModal
       order={reviewOpenOrder}
       onClose={() => setReviewOpenOrder(null)}
       onEdit={order => { setReviewOpenOrder(null); setOpenOrdersOpen(false); navigate(`/pos?editOrderId=${order.id}`); }}
+      onAccept={acceptOpenOrder}
       onReject={rejectOpenOrder}
+      accepting={acceptingOrderId === reviewOpenOrder.id}
     />}
     {config && <ConfigProduct product={config} close={() => setConfig(null)} add={addLine} />}
-    {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} initialCustomerPhone={customerPhone} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName, paidCustomerPhone) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); setCustomerPhone(paidCustomerPhone); const payload = { ...orderPayload(active), customerName: paidCustomerName, customerPhone: paidCustomerPhone.trim() || undefined }; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); if (editingOrder) setEditingOrder(null); toast.success('Data berhasil disimpan.'); await runAutoPrint(result, 'paid-sale'); } catch (e) { const msg = (e as Error).message; toast.error(msg); throw e; } }} />}
+    {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} initialCustomerPhone={customerPhone} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName, paidCustomerPhone) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); setCustomerPhone(paidCustomerPhone); const payload = { ...orderPayload(active), customerName: paidCustomerName, customerPhone: paidCustomerPhone.trim() || undefined }; const wasEditing = !!editingOrder; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); if (wasEditing) { setEditingOrder(null); setEditingOrderSnapshot({}); navigate('/pos', { replace: true }); } toast.success('Data berhasil disimpan.'); await runAutoPrint(result, 'paid-sale'); } catch (e) { const msg = (e as Error).message; toast.error(msg); throw e; } }} />}
     {receipt && <Receipt sale={receipt} close={() => setReceipt(null)} />}
   </div>;
 }
@@ -699,7 +731,7 @@ function ConfigProduct({ product, close, add }: { product: Product; close: () =>
 
 function Row({ label, n }: { label: string; n: number }) { return <div className="flex justify-between text-slate-500"><span>{label}</span><span className="money">{rupiah(n)}</span></div>; }
 
-function OpenOrdersModal({ orders, onClose, onRefresh, onReview, onEdit, onReject }: { orders: any[]; onClose: () => void; onRefresh: () => void; onReview: (order: any) => void; onEdit: (order: any) => void; onReject: (order: any) => void }) {
+function OpenOrdersModal({ orders, onClose, onRefresh, onReview, onEdit, onAccept, onReject, acceptingOrderId }: { orders: any[]; onClose: () => void; onRefresh: () => void; onReview: (order: any) => void; onEdit: (order: any) => void; onAccept: (order: any) => void; onReject: (order: any) => void; acceptingOrderId: string | null }) {
   return <div data-back-modal="true" className="fixed inset-0 z-[65] grid place-items-end bg-black/40 p-3 md:place-items-center">
     <div className="max-h-[86vh] w-full max-w-2xl overflow-hidden rounded-3xl bg-white shadow-2xl">
       <div className="flex items-center justify-between border-b p-4">
@@ -714,9 +746,10 @@ function OpenOrdersModal({ orders, onClose, onRefresh, onReview, onEdit, onRejec
             <b className="shrink-0 text-brand-700">{rupiah(order.grandTotal)}</b>
           </div>
           <p className="mt-2 line-clamp-2 text-sm text-slate-600">{(order.items || []).map((item: any) => `${item.qty}x ${item.productName}`).join(', ')}</p>
-          <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <button onClick={() => onReview(order)} className="rounded-xl border px-3 py-2 text-sm font-bold">Review</button>
-            <button onClick={() => onEdit(order)} className="rounded-xl bg-brand-600 px-3 py-2 text-sm font-bold text-white">Edit POS</button>
+            <button disabled={acceptingOrderId === order.id} onClick={() => onAccept(order)} className="rounded-xl bg-brand-600 px-3 py-2 text-sm font-bold text-white disabled:opacity-50">{acceptingOrderId === order.id ? 'Memproses...' : 'Terima'}</button>
+            <button onClick={() => onEdit(order)} className="rounded-xl border border-brand-200 px-3 py-2 text-sm font-bold text-brand-700">Edit POS</button>
             <button onClick={() => onReject(order)} className="rounded-xl border border-red-200 px-3 py-2 text-sm font-bold text-red-700">Tolak</button>
           </div>
         </div>)}
@@ -725,7 +758,7 @@ function OpenOrdersModal({ orders, onClose, onRefresh, onReview, onEdit, onRejec
   </div>;
 }
 
-function OpenOrderReviewModal({ order, onClose, onEdit, onReject }: { order: any; onClose: () => void; onEdit: (order: any) => void; onReject: (order: any) => void }) {
+function OpenOrderReviewModal({ order, onClose, onEdit, onAccept, onReject, accepting }: { order: any; onClose: () => void; onEdit: (order: any) => void; onAccept: (order: any) => void; onReject: (order: any) => void; accepting: boolean }) {
   return <div data-back-modal="true" className="fixed inset-0 z-[70] grid place-items-end bg-black/40 p-3 md:place-items-center">
     <div className="max-h-[86vh] w-full max-w-lg overflow-hidden rounded-3xl bg-white shadow-2xl">
       <div className="flex items-start justify-between border-b p-4">
@@ -740,10 +773,11 @@ function OpenOrderReviewModal({ order, onClose, onEdit, onReject }: { order: any
         </div>)}
         <div className="flex justify-between border-t pt-3 text-lg font-black"><span>Total</span><span className="text-brand-700">{rupiah(order.grandTotal)}</span></div>
       </div>
-      <div className="grid grid-cols-3 gap-2 border-t p-4">
+      <div className="grid grid-cols-2 gap-2 border-t p-4 sm:grid-cols-4">
         <button onClick={onClose} className="rounded-xl border px-3 py-3 font-bold">Tutup</button>
         <button onClick={() => onReject(order)} className="rounded-xl border border-red-200 px-3 py-3 font-bold text-red-700">Tolak</button>
-        <button onClick={() => onEdit(order)} className="rounded-xl bg-brand-600 px-3 py-3 font-bold text-white">Edit POS</button>
+        <button onClick={() => onEdit(order)} className="rounded-xl border border-brand-200 px-3 py-3 font-bold text-brand-700">Edit POS</button>
+        <button disabled={accepting} onClick={() => onAccept(order)} className="rounded-xl bg-brand-600 px-3 py-3 font-bold text-white disabled:opacity-50">{accepting ? 'Memproses...' : 'Terima Pesanan'}</button>
       </div>
     </div>
   </div>;

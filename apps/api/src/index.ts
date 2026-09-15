@@ -1591,6 +1591,22 @@ api.get('/orders/preorder-recap',asyncRoute(async(req,res)=>{
   res.json(orders.map(order=>({...order,grandTotal:Number(order.grandTotal),items:order.items.map(item=>({...item,category:{id:item.product.categoryRef?.id||item.product.categoryId,name:item.product.categoryRef?.name||item.product.category||'Tanpa Kategori',sortOrder:item.product.categoryRef?.sortOrder??9999},product:undefined}))})));
 }));
 api.get('/orders/open',asyncRoute(async(req,res)=>{const outletId=await requiredOutletId(req);res.json(await prisma.sale.findMany({where:tenantWhereAnd(req,{outletId,status:'OPEN_ORDER'}),include:{outlet:true,cashier:{select:{name:true}},items:{include:{addons:true}}},orderBy:[{scheduledAt:{sort:'asc',nulls:'last'}},{createdAt:'asc'}],take:100}));}));
+api.post('/orders/:id/accept',asyncRoute(async(req,res)=>{
+  const id=String(req.params.id);
+  const d=z.object({cashSessionId:z.string().optional()}).parse(req.body||{});
+  const sale=await prisma.sale.findFirst({where:tenantWhereAnd(req,{id}),include:{items:{include:{addons:true}}}});
+  if(!sale)throw new ApiError(404,'Order tidak ditemukan');
+  await assertTenantOutlet(req,sale.outletId);
+  if(sale.status!=='OPEN_ORDER')throw new ApiError(400,'Hanya open order yang bisa diterima');
+  const activeShift=await requireActiveShift(req,sale.outletId,d.cashSessionId);
+  const updated=await prisma.$transaction(async tx=>{
+    const claimed=await tx.sale.updateMany({where:{id,businessId:req.user!.businessId,status:'OPEN_ORDER'},data:{status:'PENDING_PAYMENT',acceptedAt:new Date(),acceptedByUserId:req.user!.id,cashierId:req.user!.id,cashSessionId:activeShift.id}});
+    if(claimed.count!==1)throw new ApiError(409,'Order sudah diproses oleh kasir lain');
+    await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'ORDER',entityId:id,action:'ORDER_ACCEPTED',oldValue:{status:'OPEN_ORDER'},newValue:{status:'PENDING_PAYMENT'},changedBy:req.user!.id}});
+    return tx.sale.findFirst({where:{id,businessId:req.user!.businessId},include:{items:{include:{addons:true}},outlet:true,cashier:{select:{name:true}}}});
+  });
+  res.json(updated);
+}));
 api.post('/orders/:id/reject',asyncRoute(async(req,res)=>{const reason=z.object({reason:z.string().trim().min(3).max(250)}).parse(req.body).reason;const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)}});if(!sale)throw new ApiError(404,'Order tidak ditemukan');await assertTenantOutlet(req,sale.outletId);if(sale.status!=='OPEN_ORDER')throw new ApiError(400,'Hanya open order yang bisa ditolak');res.json(await prisma.$transaction(async tx=>{const updated=await tx.sale.update({where:{id:sale.id},data:{status:'REJECTED',rejectedAt:new Date(),rejectedByUserId:req.user!.id,rejectionReason:reason}});await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'ORDER',entityId:sale.id,action:'ORDER_REJECTED',oldValue:{status:sale.status},newValue:{status:'REJECTED',reason},changedBy:req.user!.id}});return updated;}));}));
 api.get('/orders/:id',asyncRoute(async(req,res)=>{const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)},include:{outlet:true,cashier:{select:{name:true}},items:{include:{addons:true}},printerLogs:{include:{printer:true,user:{select:{name:true}},},orderBy:{printedAt:'desc'}}}});if(!sale)throw new ApiError(404,'Order tidak ditemukan');await assertTenantOutlet(req,sale.outletId);res.json(sale);}));
 async function updatePendingOrder(req:any,id:string,d:z.infer<typeof saleInput>){
@@ -1621,7 +1637,12 @@ api.post('/sales/:id/void',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)
 async function logPrintAttempt(saleId:string,userId:string,type:'CUSTOMER_RECEIPT'|'KITCHEN_TICKET'|'CUSTOMER_ITEM_LIST',forcedPrinterId?:string){
   const sale=await prisma.sale.findUnique({where:{id:saleId},include:{outlet:true}});
   if(!sale) throw new ApiError(404,'Transaksi tidak ditemukan');
-  const printer=forcedPrinterId?await prisma.printer.findFirst({where:{id:forcedPrinterId,outletId:sale.outletId,status:'ACTIVE'}}):await prisma.printer.findFirst({where:{outletId:sale.outletId,status:'ACTIVE',...(type==='KITCHEN_TICKET'?{isKitchenPrinter:true}:{isCustomerReceipt:true})},orderBy:{createdAt:'asc'}});
+  const printer=forcedPrinterId
+    ? await prisma.printer.findFirst({where:{id:forcedPrinterId,businessId:sale.businessId,outletId:sale.outletId,status:'ACTIVE'}})
+    : await prisma.printer.findFirst({
+        where:{businessId:sale.businessId,outletId:sale.outletId,status:'ACTIVE',...(type==='KITCHEN_TICKET'?{isKitchenPrinter:true}:{isCustomerReceipt:true})},
+        orderBy:type==='KITCHEN_TICKET'?[{isCustomerReceipt:'asc'},{createdAt:'asc'}]:[{isKitchenPrinter:'asc'},{createdAt:'asc'}]
+      });
   const status=printer?'SUCCESS':'FAILED';
   const errorMessage=printer?null:'Printer aktif belum disetting, gunakan browser print fallback';
   return prisma.printerLog.create({data:{businessId:sale.businessId,outletId:sale.outletId,saleId:sale.id,printerId:printer?.id,printType:type,status,errorMessage,printedBy:userId},include:{printer:true}});
