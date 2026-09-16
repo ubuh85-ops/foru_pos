@@ -7,6 +7,7 @@ import {
   Plus,
   Search,
   ShoppingBag,
+  TicketPercent,
   Trash2,
   X,
 } from "lucide-react";
@@ -129,6 +130,10 @@ export default function CustomerOrderPage() {
   const [modalError, setModalError] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
+  const [couponInput, setCouponInput] = useState("");
+  const [couponCode, setCouponCode] = useState("");
+  const [couponMessage, setCouponMessage] = useState("");
+  const [couponApplying, setCouponApplying] = useState(false);
   const [orderType, setOrderType] = useState<Fulfillment>("DINE_IN");
   const [tableNumber, setTableNumber] = useState("");
   const [orderNote, setOrderNote] = useState("");
@@ -219,6 +224,7 @@ export default function CustomerOrderPage() {
     [cart]
   );
   const itemCount = cart.reduce((n, line) => n + line.qty, 0);
+  const displayTotal = cart.length && preview.subtotal > 0 ? preview.total : total;
   const storeOpen = !!meta?.outlet?.enabled && meta?.outlet?.acceptingCustomerOrders !== false;
   const phoneValid = /^\+?[0-9][0-9\s-]{7,19}$/.test(customerPhone.trim());
   const formValid =
@@ -268,6 +274,30 @@ export default function CustomerOrderPage() {
     return rows;
   }, [scheduleDate, meta]);
 
+  function publicOrderItems() {
+    return cart.map((line) => ({
+      productId: line.product.id,
+      variantId: line.variantId,
+      selectedVariantOptionIds: line.optionIds,
+      addonIds: line.addonIds,
+      qty: line.qty,
+      itemNote: line.note,
+    }));
+  }
+
+  async function loadPreview(code = couponCode) {
+    return publicFetch<any>(
+      `/public/order/${businessSlug}/${outletSlug}/preview`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          items: publicOrderItems(),
+          couponCode: code || undefined,
+        }),
+      }
+    );
+  }
+
   useEffect(() => {
     if (!cart.length)
       return setPreview({
@@ -279,28 +309,19 @@ export default function CustomerOrderPage() {
       });
     const timer = window.setTimeout(
       () =>
-        publicFetch<any>(
-          `/public/order/${businessSlug}/${outletSlug}/preview`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              items: cart.map((line) => ({
-                productId: line.product.id,
-                variantId: line.variantId,
-                selectedVariantOptionIds: line.optionIds,
-                addonIds: line.addonIds,
-                qty: line.qty,
-                itemNote: line.note,
-              })),
-            }),
-          }
-        )
+        loadPreview()
           .then(setPreview)
-          .catch(() => setPreview((p) => ({ ...p, subtotal: total, total }))),
+          .catch((previewError) => {
+            if (couponCode) {
+              setCouponCode("");
+              setCouponMessage((previewError as Error).message);
+            }
+            setPreview((p) => ({ ...p, subtotal: total, total }));
+          }),
       150
     );
     return () => window.clearTimeout(timer);
-  }, [cart, total, businessSlug, outletSlug]);
+  }, [cart, total, businessSlug, outletSlug, couponCode]);
   const filteredProducts = useMemo(() => {
     const q = search.trim().toLowerCase();
     return products.filter((product) => {
@@ -540,6 +561,33 @@ export default function CustomerOrderPage() {
       { key: uid(), product, qty: 1, optionIds: [], addonIds: [], note: "" },
     ]);
   }
+  async function applyCoupon() {
+    const code = couponInput.trim().toUpperCase();
+    if (!code) return setCouponMessage("Masukkan kode kupon terlebih dahulu.");
+    if (!cart.length) return setCouponMessage("Keranjang masih kosong.");
+    setCouponApplying(true);
+    setCouponMessage("");
+    try {
+      const result = await loadPreview(code);
+      const appliedCode = String(result.coupon?.code || code).toUpperCase();
+      setCouponInput(appliedCode);
+      setCouponCode(appliedCode);
+      setPreview(result);
+      setCouponMessage(
+        `${result.coupon?.name || "Kupon"} berhasil diterapkan.`
+      );
+    } catch (couponError) {
+      setCouponCode("");
+      setCouponMessage((couponError as Error).message);
+    } finally {
+      setCouponApplying(false);
+    }
+  }
+  function removeCoupon() {
+    setCouponInput("");
+    setCouponCode("");
+    setCouponMessage("");
+  }
   async function submit() {
     if (submitting) return;
     if (!storeOpen) return setError("Toko sedang tutup sementara.");
@@ -561,6 +609,7 @@ export default function CustomerOrderPage() {
             orderType,
             tableNumber,
             orderNote,
+            couponCode: couponCode || undefined,
             isPreOrder,
             scheduledAt: isPreOrder
               ? zonedDateTimeIso(
@@ -570,14 +619,7 @@ export default function CustomerOrderPage() {
                 )
               : null,
             customerOrderRequestId: uid(),
-            items: cart.map((line) => ({
-              productId: line.product.id,
-              variantId: line.variantId,
-              selectedVariantOptionIds: line.optionIds,
-              addonIds: line.addonIds,
-              qty: line.qty,
-              itemNote: line.note,
-            })),
+            items: publicOrderItems(),
           }),
         }
       );
@@ -761,16 +803,81 @@ export default function CustomerOrderPage() {
                   label="Diskon"
                   value={
                     preview.productDiscount +
-                    preview.transactionDiscount +
-                    preview.couponDiscount
+                    preview.transactionDiscount
                   }
                 />
+                {(couponCode || preview.couponDiscount > 0) && (
+                  <SummaryRow
+                    label={`Kupon${couponCode ? ` (${couponCode})` : ""}`}
+                    value={preview.couponDiscount}
+                  />
+                )}
                 <SummaryRow
                   label="Total"
-                  value={preview.total || total}
+                  value={displayTotal}
                   strong
                 />
               </div>
+            </div>
+            <div className="rounded-3xl bg-white p-5 shadow-sm">
+              <div className="mb-3 flex items-center gap-2">
+                <TicketPercent className="text-brand-700" size={20} />
+                <h3 className="text-lg font-black">Kupon / Voucher</h3>
+              </div>
+              <form
+                className="flex gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void applyCoupon();
+                }}
+              >
+                <input
+                  className="input min-w-0 uppercase"
+                  value={couponInput}
+                  onChange={(event) => {
+                    const next = event.target.value.toUpperCase();
+                    setCouponInput(next);
+                    if (couponCode && next !== couponCode) {
+                      setCouponCode("");
+                      setCouponMessage("");
+                    }
+                  }}
+                  placeholder="Masukkan kode kupon"
+                  maxLength={50}
+                  autoCapitalize="characters"
+                />
+                <button
+                  type="submit"
+                  disabled={couponApplying || !couponInput.trim() || !cart.length}
+                  className="btn btn-primary shrink-0 disabled:opacity-50"
+                >
+                  {couponApplying ? "Cek..." : "Terapkan"}
+                </button>
+              </form>
+              {couponMessage && (
+                <div
+                  className={`mt-3 flex items-start justify-between gap-3 rounded-2xl px-3 py-2 text-sm font-semibold ${
+                    couponCode
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-red-50 text-red-600"
+                  }`}
+                >
+                  <span className="flex items-start gap-2">
+                    {couponCode && <Check className="mt-0.5 shrink-0" size={16} />}
+                    {couponMessage}
+                  </span>
+                  {couponCode && (
+                    <button
+                      type="button"
+                      onClick={removeCoupon}
+                      aria-label="Hapus kupon"
+                      className="shrink-0 rounded-lg p-1 hover:bg-white/70"
+                    >
+                      <X size={16} />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             <div className="rounded-3xl bg-white p-5 shadow-sm">
               <h3 className="mb-3 text-lg font-black">Data Pemesan</h3>
@@ -896,7 +1003,7 @@ export default function CustomerOrderPage() {
                 <div className="flex-1">
                   <p className="text-xs text-slate-500">Total</p>
                   <b className="text-xl text-brand-700">
-                    {rupiah(preview.total || total)}
+                    {rupiah(displayTotal)}
                   </b>
                 </div>
                 <button
@@ -1004,7 +1111,7 @@ export default function CustomerOrderPage() {
               <ShoppingBag className="mr-2 inline" size={18} />
               Lihat Pesanan · {itemCount} item
             </span>
-            <span>{rupiah(preview.total || total)}</span>
+            <span>{rupiah(displayTotal)}</span>
           </button>
         </div>
       )}
@@ -1158,7 +1265,7 @@ export default function CustomerOrderPage() {
             <h2 className="text-xl font-black">Kirim pesanan?</h2>
             <p className="mt-3">{itemCount} item</p>
             <b className="text-2xl text-brand-700">
-              {rupiah(preview.total || total)}
+              {rupiah(displayTotal)}
             </b>
             <div className="my-4 rounded-2xl bg-slate-50 p-3 text-sm">
               <p>

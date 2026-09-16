@@ -305,6 +305,7 @@ const publicOrderInput=z.object({
   orderType:z.enum(['DINE_IN','TAKE_AWAY','DELIVERY']),
   tableNumber:z.string().trim().max(30).optional().or(z.literal('')),
   orderNote:z.string().trim().max(500).optional().or(z.literal('')),
+  couponCode:z.string().trim().max(50).optional(),
   isPreOrder:z.boolean().default(false),
   scheduledAt:z.string().datetime({offset:true}).nullable().optional(),
   customerOrderRequestId:z.string().trim().min(8).max(120),
@@ -339,11 +340,11 @@ api.get('/public/order/:businessSlug/:outletSlug/products',asyncRoute(async(req,
   res.json(products.map(p=>publicProductShape(p,outlet.id)));
 }));
 api.post('/public/order/:businessSlug/:outletSlug/preview',asyncRoute(async(req,res)=>{
-  const items=z.object({items:z.array(publicOrderItemInput).min(1).max(30)}).parse(req.body).items;
+  const d=z.object({items:z.array(publicOrderItemInput).min(1).max(30),couponCode:z.string().trim().max(50).optional()}).parse(req.body);
   const {business,outlet}=await resolvePublicOrderOutlet(String(req.params.businessSlug),String(req.params.outletSlug));
   if(!outlet.customerOrderingEnabled||!outlet.acceptingCustomerOrders)throw new ApiError(403,'Pesanan online sedang ditutup');
-  const totals=await buildOrderTotals({user:{businessId:business.id,id:'CUSTOMER_WEB'}},{outletId:outlet.id,items} as any);
-  res.json({subtotal:totals.gross,productDiscount:totals.productDiscount,transactionDiscount:totals.transactionDiscount,couponDiscount:totals.couponDiscount,total:totals.grand});
+  const totals=await buildOrderTotals({user:{businessId:business.id,id:'CUSTOMER_WEB'}},{outletId:outlet.id,items:d.items,couponCode:d.couponCode} as any);
+  res.json({subtotal:totals.gross,productDiscount:totals.productDiscount,transactionDiscount:totals.transactionDiscount,couponDiscount:totals.couponDiscount,total:totals.grand,coupon:totals.couponResult?{code:totals.couponResult.coupon.couponCode,name:totals.couponResult.coupon.couponName}:null});
 }));
 api.post('/public/order/:businessSlug/:outletSlug/orders',asyncRoute(async(req,res)=>{
   const d=publicOrderInput.parse(req.body);
@@ -360,7 +361,7 @@ api.post('/public/order/:businessSlug/:outletSlug/orders',asyncRoute(async(req,r
     return res.status(200).json({id:existing.id,orderNumber:existing.orderNumber,publicOrderToken:existing.publicOrderToken,status:existing.status,grandTotal:existing.grandTotal,outlet:{name:existing.outlet.name,code:existing.outlet.code}});
   }
   const fakeReq={user:{businessId:business.id,id:'CUSTOMER_WEB'}};
-  const totals=await buildOrderTotals(fakeReq,{outletId:outlet.id,customerName:d.customerName,orderType:d.orderType,items:d.items} as any);
+  const totals=await buildOrderTotals(fakeReq,{outletId:outlet.id,customerName:d.customerName,orderType:d.orderType,items:d.items,couponCode:d.couponCode} as any);
   const orderNumber=await nextNumber('ORD',outlet.id,'orderNumber');
   const publicOrderToken=crypto.randomBytes(24).toString('hex');
   const created=await prisma.$transaction(async tx=>tx.sale.create({data:{businessId:business.id,orderNumber,outletId:outlet.id,customerName:d.customerName,customerPhone:d.customerPhone.trim(),tableNumber:d.orderType==='DINE_IN'?d.tableNumber?.trim()||null:null,orderNote:d.orderNote?.trim()||null,orderType:d.orderType,orderSource:'CUSTOMER_WEB',webAnalytics:orderAttribution(d.analytics),customerOrderRequestId:d.customerOrderRequestId,publicOrderToken,isPreOrder:d.isPreOrder,scheduledAt,submittedAt:new Date(),subtotal:totals.gross,discountAmount:money(totals.productDiscount+totals.transactionDiscount+totals.couponDiscount),totalAmount:totals.grand,subtotalBeforeDiscount:totals.gross,productDiscountTotal:totals.productDiscount,transactionDiscountAmount:totals.transactionDiscount,couponCode:totals.couponResult?.coupon.couponCode,couponDiscountAmount:totals.couponDiscount,grandTotal:totals.grand,totalHpp:totals.totalHpp,grossProfit:0,status:'OPEN_ORDER',items:{create:totals.lines.map(saleItemCreate)}},include:{items:{include:{addons:true}},outlet:true}}));
