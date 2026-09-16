@@ -49,6 +49,7 @@ const navGroups: NavGroup[] = [
     items: [
       ['/products', 'Produk', Package],
       ['/categories', 'Kategori', Tags],
+      ['/coupons', 'Kupon & Promo', Tags],
       ['/variant-groups', 'Variant Group', Layers],
       ['/inventory/items', 'Bahan Baku', Boxes],
       ['/inventory/warehouses', 'Warehouse', Warehouse],
