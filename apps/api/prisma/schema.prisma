@@ -356,6 +356,11 @@ model ProductOutlet {
   isActive      Boolean  @default(true) @map("is_active")
   isAvailable   Boolean  @default(true) @map("is_available")
   isRecommended Boolean  @default(false) @map("is_recommended")
+  stockMode      ProductStockMode @default(UNLIMITED) @map("stock_mode")
+  stockQty       Int      @default(0) @map("stock_qty")
+  lowStockThreshold Int   @default(5) @map("low_stock_threshold")
+  stockUpdatedAt DateTime? @map("stock_updated_at")
+  stockUpdatedBy String?  @map("stock_updated_by")
   outletPrice   Decimal? @map("outlet_price") @db.Decimal(14, 2)
   outletHpp     Decimal? @map("outlet_hpp") @db.Decimal(14, 2)
   status        Status   @default(ACTIVE)
@@ -367,6 +372,26 @@ model ProductOutlet {
   @@unique([productId, outletId])
   @@index([outletId, isRecommended])
   @@map("product_outlets")
+}
+
+model ProductStockMovement {
+  id          String                   @id @default(cuid())
+  businessId  String                   @map("business_id")
+  outletId    String                   @map("outlet_id")
+  productId   String                   @map("product_id")
+  saleId      String?                  @map("sale_id")
+  movementType ProductStockMovementType @map("movement_type")
+  qty         Int
+  beforeQty   Int                      @map("before_qty")
+  afterQty    Int                      @map("after_qty")
+  reason      String?
+  createdBy   String                   @map("created_by")
+  createdAt   DateTime                 @default(now()) @map("created_at")
+
+  @@index([businessId, outletId, createdAt])
+  @@index([productId, outletId, createdAt])
+  @@index([saleId, movementType])
+  @@map("product_stock_movements")
 }
 
 model ProductChannelPrice {
@@ -1073,6 +1098,18 @@ enum BusinessStatus {
 enum Status {
   ACTIVE
   INACTIVE
+}
+
+enum ProductStockMode {
+  UNLIMITED
+  MANUAL
+  RECIPE
+}
+
+enum ProductStockMovementType {
+  MANUAL_SET
+  SALE_DEDUCTION
+  SALE_VOID_RETURN
 }
 
 enum DiscountType {

@@ -27,9 +27,11 @@ export function legacyVariantPrice(masterBasePrice:number,effectiveBasePrice:num
 export async function priceCart(items:CartLine[],outletId:string,channel?:string|null,businessId?:string):Promise<PricedLine[]>{
   if(!items.length) throw new ApiError(400,'Cart masih kosong');
   const productIds=[...new Set(items.map(item=>item.productId))];
-  const availability=await prisma.product.findMany({where:{AND:[businessId?{businessId}:{},{id:{in:productIds}}]},select:{id:true,name:true,status:true,outlets:{where:{outletId},select:{isAvailable:true,isActive:true,status:true}}}});
+  const availability=await prisma.product.findMany({where:{AND:[businessId?{businessId}:{},{id:{in:productIds}}]},select:{id:true,name:true,status:true,outlets:{where:{outletId},select:{isAvailable:true,isActive:true,status:true,stockMode:true,stockQty:true}}}});
   const byId=new Map(availability.map(product=>[product.id,product]));
-  const unavailable=productIds.map(id=>byId.get(id)).filter(product=>!product||product.status!=='ACTIVE'||!product.outlets[0]?.isAvailable||!product.outlets[0]?.isActive||product.outlets[0]?.status!=='ACTIVE').map(product=>product?.name||'Produk tidak dikenal');
+  const requestedQty=new Map<string,number>();
+  for(const item of items)requestedQty.set(item.productId,(requestedQty.get(item.productId)||0)+item.qty);
+  const unavailable=productIds.map(id=>byId.get(id)).filter(product=>!product||product.status!=='ACTIVE'||!product.outlets[0]?.isAvailable||!product.outlets[0]?.isActive||product.outlets[0]?.status!=='ACTIVE'||(product.outlets[0]?.stockMode==='MANUAL'&&product.outlets[0].stockQty<(requestedQty.get(product.id)||0))).map(product=>product?.name||'Produk tidak dikenal');
   if(unavailable.length)throw new ApiError(409,`Beberapa menu sudah tidak tersedia: ${unavailable.join(', ')}. Silakan perbarui pesanan.`);
   const onlineChannel=normalizedChannel(channel);
   return Promise.all(items.map(async line=>{

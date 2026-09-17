@@ -20,6 +20,7 @@ import { registerChecklists } from './checklists.js';
 import { registerDailyReports } from './daily-reports.js';
 import { nextSaleNumber } from './sale-numbers.js';
 import { customerSaleWhere, customerTenantWhere, isValidCustomerPhone, normalizeCustomerPhone, upsertWebOrderCustomer } from './customers.js';
+import { productStockSnapshot } from './product-stock.js';
 import { Server as SocketIOServer } from 'socket.io';
 
 const defaultCorsOrigins = [
@@ -265,7 +266,11 @@ async function resolvePublicOrderOutlet(businessSlug:string,outletSlug:string){
   if(!outlet)throw new ApiError(404,'Outlet tidak ditemukan');
   return {business,outlet};
 }
-function publicProductShape(p:any,outletId:string,channel='DINE_IN'){
+async function effectiveProductStock(productId:string,po:any,outlet:any){
+  const recipeAvailability=String(po?.stockMode||'UNLIMITED')==='RECIPE'?await productAvailabilityForOutlet(productId,outlet):undefined;
+  return productStockSnapshot(po,recipeAvailability);
+}
+function publicProductShape(p:any,outletId:string,channel='DINE_IN',stock=productStockSnapshot(p.outlets?.[0])){
   const po=p.outlets?.[0];
   const dineInPrice=po?.outletPrice??p.basePrice;
   const cp=p.channelPrices?.[0];
@@ -278,7 +283,7 @@ function publicProductShape(p:any,outletId:string,channel='DINE_IN'){
     categoryRef:p.categoryRef?{id:p.categoryRef.id,name:p.categoryRef.name,sortOrder:p.categoryRef.sortOrder}:null,
     description:p.description,
     imageUrl:p.imageUrl,
-    isAvailable:!!po&&po.isAvailable&&po.isActive&&po.status==='ACTIVE',
+    ...stock,
     isRecommended:!!po?.isRecommended,
     basePrice:Number(activePrice),
     priceChannel:channel,
@@ -339,12 +344,13 @@ api.get('/public/order/:businessSlug/:outletSlug/products',asyncRoute(async(req,
   const {business,outlet}=await resolvePublicOrderOutlet(String(req.params.businessSlug),String(req.params.outletSlug));
   if(!outlet.customerOrderingEnabled)throw new ApiError(403,'Pesanan online tidak aktif');
   const products=await prisma.product.findMany({where:{businessId:business.id,status:'ACTIVE',OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}],outlets:{some:{outletId:outlet.id,isActive:true,status:'ACTIVE'}}},include:{categoryRef:true,outlets:{where:{outletId:outlet.id,isActive:true}},variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId:outlet.id}}}}}}}}},orderBy:[{categoryRef:{sortOrder:'asc'}},{name:'asc'}]});
-  res.json(products.map(p=>publicProductShape(p,outlet.id)));
+  res.json(await Promise.all(products.map(async p=>publicProductShape(p,outlet.id,'DINE_IN',await effectiveProductStock(p.id,p.outlets[0],outlet)))));
 }));
 api.post('/public/order/:businessSlug/:outletSlug/preview',asyncRoute(async(req,res)=>{
   const d=z.object({items:z.array(publicOrderItemInput).min(1).max(30),couponCode:z.string().trim().max(50).optional()}).parse(req.body);
   const {business,outlet}=await resolvePublicOrderOutlet(String(req.params.businessSlug),String(req.params.outletSlug));
   if(!outlet.customerOrderingEnabled||!outlet.acceptingCustomerOrders)throw new ApiError(403,'Pesanan online sedang ditutup');
+  await assertRecipeAvailabilityForItems(outlet,d.items);
   const totals=await buildOrderTotals({user:{businessId:business.id,id:'CUSTOMER_WEB'}},{outletId:outlet.id,items:d.items,couponCode:d.couponCode} as any);
   res.json({subtotal:totals.gross,productDiscount:totals.productDiscount,transactionDiscount:totals.transactionDiscount,couponDiscount:totals.couponDiscount,total:totals.grand,coupon:totals.couponResult?{code:totals.couponResult.coupon.couponCode,name:totals.couponResult.coupon.couponName}:null});
 }));
@@ -363,6 +369,7 @@ api.post('/public/order/:businessSlug/:outletSlug/orders',asyncRoute(async(req,r
     return res.status(200).json({id:existing.id,orderNumber:existing.orderNumber,publicOrderToken:existing.publicOrderToken,status:existing.status,grandTotal:existing.grandTotal,outlet:{name:existing.outlet.name,code:existing.outlet.code}});
   }
   const fakeReq={user:{businessId:business.id,id:'CUSTOMER_WEB'}};
+  await assertRecipeAvailabilityForItems(outlet,d.items);
   const totals=await buildOrderTotals(fakeReq,{outletId:outlet.id,customerName:d.customerName,orderType:d.orderType,items:d.items,couponCode:d.couponCode} as any);
   const orderNumber=await nextNumber('ORD',outlet.id,'orderNumber');
   const publicOrderToken=crypto.randomBytes(24).toString('hex');
@@ -838,6 +845,16 @@ async function productAvailabilityForOutlet(productId:string,outlet:any){
   const status=items.some(i=>i.status==='UNIT_CONVERSION_MISSING')?'UNIT_CONVERSION_MISSING':items.some(i=>i.status==='OUT_OF_STOCK')?'OUT_OF_STOCK':(canProduce??0)<=5?'LOW_STOCK':'AVAILABLE';
   return {outlet,warehouse,canProduce,status,items};
 }
+async function assertRecipeAvailabilityForItems(outlet:any,items:Array<{productId:string;qty:number}>){
+  const requested=new Map<string,number>();
+  for(const item of items)requested.set(item.productId,(requested.get(item.productId)||0)+Number(item.qty));
+  const rows=await prisma.productOutlet.findMany({where:{outletId:outlet.id,productId:{in:[...requested.keys()]},stockMode:'RECIPE'},include:{product:{select:{name:true}}}});
+  for(const row of rows){
+    const availability=await productAvailabilityForOutlet(row.productId,outlet);
+    const qty=requested.get(row.productId)||0;
+    if(availability.canProduce===null||availability.canProduce<qty||!['AVAILABLE','LOW_STOCK'].includes(availability.status))throw new ApiError(409,`Stok ${row.product.name} tidak mencukupi. Silakan perbarui pesanan.`);
+  }
+}
 async function categoryName(req:any,categoryId?:string,category?:string){if(categoryId){const c=await prisma.category.findFirst({where:tenantWhereAnd(req,{id:categoryId})});if(!c)throw new ApiError(400,'Kategori tidak ditemukan');return c.name;} if(category)return category; throw new ApiError(400,'Kategori wajib diisi');}
 api.get('/products',asyncRoute(async(req,res)=>{
   const outletId=String(req.query.outletId||'');
@@ -1005,13 +1022,15 @@ api.post('/products/import',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res
   await prisma.auditLog.create({data:{businessId:req.user!.businessId,entityType:'PRODUCT_IMPORT',entityId:`import-${Date.now()}`,action:'PRODUCT_IMPORT',oldValue:Prisma.JsonNull,newValue:{filename:d.filename,imported,updated,failed,total:validated.products.length},changedBy:req.user!.id}});
   res.json({summary:{imported,updated,failed,total:validated.products.length},results});
 }));
-api.get('/pos/products',asyncRoute(async(req,res)=>{ const outletId=String(req.query.outlet_id||''); await assertTenantOutlet(req,outletId); const channel=String(req.query.channel||req.query.orderType||'DINE_IN').toUpperCase(); const onlineChannel=onlineChannels.includes(channel as any)?channel as typeof onlineChannels[number]:undefined; const products=await prisma.product.findMany({where:tenantWhereAnd(req,{status:'ACTIVE',OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}],outlets:{some:{outletId,isActive:true,status:'ACTIVE'}}}),include:{categoryRef:true,outlets:{where:{outletId,isActive:true}},channelPrices:onlineChannel?{where:{outletId,channel:onlineChannel,status:'ACTIVE'}}:false,variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId}}}}}}}}},orderBy:[{categoryRef:{sortOrder:'asc'}},{name:'asc'}]});res.json(products.map(p=>{const po=p.outlets[0];const dineInPrice=po?.outletPrice??p.basePrice;const cp=(p as any).channelPrices?.[0];const activePrice=cp?.price??dineInPrice;return {...p,isAvailable:!!po&&po.isAvailable&&po.isActive&&po.status==='ACTIVE',basePrice:activePrice,baseHpp:po?.outletHpp??p.baseHpp,masterBasePrice:p.basePrice,masterBaseHpp:p.baseHpp,dineInPrice,channelPrice:cp?.price??null,priceChannel:onlineChannel||'DINE_IN',priceSource:cp?'CHANNEL':(po?.outletPrice!=null?'OUTLET':'BASE'),variantGroups:p.variantGroups.map(vg=>({...vg,group:{...vg.group,options:vg.group.options.filter(o=>!o.outlets[0]||o.outlets[0].status==='ACTIVE').map(o=>({...o,additionalPrice:o.outlets[0]?.additionalPrice??o.additionalPrice,hpp:o.outlets[0]?.hpp??o.hpp,masterAdditionalPrice:o.additionalPrice,masterHpp:o.hpp}))}}))};})); }));
+api.get('/pos/products',asyncRoute(async(req,res)=>{ const outletId=String(req.query.outlet_id||''); await assertTenantOutlet(req,outletId); const outlet=await prisma.outlet.findFirst({where:tenantWhereAnd(req,{id:outletId}),include:{defaultInventoryWarehouse:true}});if(!outlet)throw new ApiError(404,'Outlet tidak ditemukan');const channel=String(req.query.channel||req.query.orderType||'DINE_IN').toUpperCase(); const onlineChannel=onlineChannels.includes(channel as any)?channel as typeof onlineChannels[number]:undefined; const products=await prisma.product.findMany({where:tenantWhereAnd(req,{status:'ACTIVE',OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}],outlets:{some:{outletId,isActive:true,status:'ACTIVE'}}}),include:{categoryRef:true,outlets:{where:{outletId,isActive:true}},channelPrices:onlineChannel?{where:{outletId,channel:onlineChannel,status:'ACTIVE'}}:false,variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId}}}}}}}}},orderBy:[{categoryRef:{sortOrder:'asc'}},{name:'asc'}]});res.json(await Promise.all(products.map(async p=>{const po=p.outlets[0];const stock=await effectiveProductStock(p.id,po,outlet);const dineInPrice=po?.outletPrice??p.basePrice;const cp=(p as any).channelPrices?.[0];const activePrice=cp?.price??dineInPrice;return {...p,...stock,basePrice:activePrice,baseHpp:po?.outletHpp??p.baseHpp,masterBasePrice:p.basePrice,masterBaseHpp:p.baseHpp,dineInPrice,channelPrice:cp?.price??null,priceChannel:onlineChannel||'DINE_IN',priceSource:cp?'CHANNEL':(po?.outletPrice!=null?'OUTLET':'BASE'),variantGroups:p.variantGroups.map(vg=>({...vg,group:{...vg.group,options:vg.group.options.filter(o=>!o.outlets[0]||o.outlets[0].status==='ACTIVE').map(o=>({...o,additionalPrice:o.outlets[0]?.additionalPrice??o.additionalPrice,hpp:o.outlets[0]?.hpp??o.hpp,masterAdditionalPrice:o.additionalPrice,masterHpp:o.hpp}))}}))};}))); }));
 
 api.get('/menu-availability',allow('OWNER','SUPERVISOR','CASHIER'),asyncRoute(async(req,res)=>{
   const outletId=String(req.query.outletId||'');
   await assertTenantOutlet(req,outletId);
+  const outlet=await prisma.outlet.findFirst({where:tenantWhereAnd(req,{id:outletId}),include:{defaultInventoryWarehouse:true}});
+  if(!outlet)throw new ApiError(404,'Outlet tidak ditemukan');
   const rows=await prisma.productOutlet.findMany({where:{outletId,isActive:true,status:'ACTIVE',product:{businessId:req.user!.businessId,status:'ACTIVE'}},include:{product:{include:{categoryRef:true}}},orderBy:{product:{name:'asc'}}});
-  res.json(rows.map(row=>({productId:row.productId,name:row.product.name,sku:row.product.sku,category:row.product.categoryRef?.name||row.product.category||'Tanpa Kategori',imageUrl:row.product.imageUrl,isAvailable:row.isAvailable})));
+  res.json(await Promise.all(rows.map(async row=>({productId:row.productId,name:row.product.name,sku:row.product.sku,category:row.product.categoryRef?.name||row.product.category||'Tanpa Kategori',imageUrl:row.product.imageUrl,enabled:row.isAvailable,...await effectiveProductStock(row.productId,row,outlet)}))));
 }));
 api.patch('/menu-availability',allow('OWNER','SUPERVISOR','CASHIER'),asyncRoute(async(req,res)=>{
   const d=z.object({outletId:z.string(),productId:z.string(),isAvailable:z.boolean()}).parse(req.body);
@@ -1025,6 +1044,34 @@ api.patch('/menu-availability',allow('OWNER','SUPERVISOR','CASHIER'),asyncRoute(
     return row;
   });
   res.json({productId:updated.productId,outletId:updated.outletId,isAvailable:updated.isAvailable});
+}));
+const productStockSettingsBody=z.object({outletId:z.string(),productId:z.string(),stockMode:z.enum(['UNLIMITED','MANUAL','RECIPE']),lowStockThreshold:z.coerce.number().int().nonnegative().max(1000000).default(5)});
+api.patch('/menu-availability/stock-settings',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
+  const d=productStockSettingsBody.parse(req.body);
+  await assertTenantOutlet(req,d.outletId);await assertTenantProduct(req,d.productId);
+  const existing=await prisma.productOutlet.findFirst({where:{outletId:d.outletId,productId:d.productId,status:'ACTIVE',outlet:{businessId:req.user!.businessId},product:{businessId:req.user!.businessId}}});
+  if(!existing)throw new ApiError(404,'Produk tidak terdaftar aktif di outlet ini');
+  const updated=await prisma.$transaction(async tx=>{
+    const row=await tx.productOutlet.update({where:{productId_outletId:{productId:d.productId,outletId:d.outletId}},data:{stockMode:d.stockMode,lowStockThreshold:d.lowStockThreshold,stockUpdatedAt:new Date(),stockUpdatedBy:req.user!.id}});
+    await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'PRODUCT_OUTLET',entityId:`${d.productId}:${d.outletId}`,action:'PRODUCT_STOCK_SETTINGS_UPDATED',oldValue:{stockMode:existing.stockMode,lowStockThreshold:existing.lowStockThreshold},newValue:{stockMode:d.stockMode,lowStockThreshold:d.lowStockThreshold},changedBy:req.user!.id}});
+    return row;
+  });
+  res.json(updated);
+}));
+const productStockUpdateBody=z.object({outletId:z.string(),productId:z.string(),stockQty:z.coerce.number().int().nonnegative().max(1000000),reason:z.string().trim().min(3).max(250)});
+api.patch('/menu-availability/stock',allow('OWNER','SUPERVISOR','CASHIER'),asyncRoute(async(req,res)=>{
+  const d=productStockUpdateBody.parse(req.body);
+  await assertTenantOutlet(req,d.outletId);await assertTenantProduct(req,d.productId);
+  const existing=await prisma.productOutlet.findFirst({where:{outletId:d.outletId,productId:d.productId,status:'ACTIVE',outlet:{businessId:req.user!.businessId},product:{businessId:req.user!.businessId}}});
+  if(!existing)throw new ApiError(404,'Produk tidak terdaftar aktif di outlet ini');
+  if(existing.stockMode!=='MANUAL')throw new ApiError(400,'Update jumlah hanya tersedia untuk mode stok manual');
+  const updated=await prisma.$transaction(async tx=>{
+    const row=await tx.productOutlet.update({where:{productId_outletId:{productId:d.productId,outletId:d.outletId}},data:{stockQty:d.stockQty,stockUpdatedAt:new Date(),stockUpdatedBy:req.user!.id}});
+    await tx.productStockMovement.create({data:{businessId:req.user!.businessId,outletId:d.outletId,productId:d.productId,movementType:'MANUAL_SET',qty:d.stockQty-existing.stockQty,beforeQty:existing.stockQty,afterQty:d.stockQty,reason:d.reason,createdBy:req.user!.id}});
+    await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'PRODUCT_STOCK',entityId:`${d.productId}:${d.outletId}`,action:'PRODUCT_STOCK_SET',oldValue:{stockQty:existing.stockQty},newValue:{stockQty:d.stockQty,reason:d.reason},changedBy:req.user!.id}});
+    return row;
+  });
+  res.json({...updated,...productStockSnapshot(updated)});
 }));
 api.post('/products',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const d=productInput.parse(req.body);
@@ -1478,13 +1525,39 @@ async function buildOrderTotals(req:any,d:z.infer<typeof saleInput>){
   const couponDiscount=Math.min(afterTransaction,couponResult?.discountAmount||0),grand=money(afterTransaction-couponDiscount),totalHpp=money(lines.reduce((s,l)=>s+l.hpp*l.qty,0));
   return {lines,gross,productDiscount,transactionDiscount,couponResult,couponDiscount,grand,totalHpp};
 }
+async function deductManualProductStock(tx:any,sale:any,userId:string,stockRows:any[]){
+  const byProduct=new Map(stockRows.map(row=>[row.productId,row]));
+  const quantities=new Map<string,{qty:number;name:string}>();
+  for(const item of sale.items||[]){
+    const current=quantities.get(item.productId)||{qty:0,name:item.productName};
+    current.qty+=Number(item.qty);quantities.set(item.productId,current);
+  }
+  for(const [productId,item] of quantities){
+    const stock=byProduct.get(productId);
+    if(!stock||stock.stockMode!=='MANUAL')continue;
+    const updated=await tx.$queryRaw<Array<{stock_qty:number}>>`
+      UPDATE "product_outlets"
+      SET "stock_qty" = "stock_qty" - ${item.qty}, "stock_updated_at" = NOW(), "stock_updated_by" = ${userId}, "updated_at" = NOW()
+      WHERE "product_id" = ${productId} AND "outlet_id" = ${sale.outletId} AND "stock_mode" = 'MANUAL' AND "stock_qty" >= ${item.qty}
+      RETURNING "stock_qty"
+    `;
+    if(!updated.length)throw new ApiError(409,`Stok ${item.name} tidak mencukupi. Silakan perbarui pesanan.`);
+    const afterQty=Number(updated[0].stock_qty),beforeQty=afterQty+item.qty;
+    await tx.productStockMovement.create({data:{businessId:sale.businessId,outletId:sale.outletId,productId,saleId:sale.id,movementType:'SALE_DEDUCTION',qty:-item.qty,beforeQty,afterQty,reason:`Penjualan ${sale.transactionNumber||sale.orderNumber}`,createdBy:userId}});
+  }
+}
 async function deductInventoryForPaidSale(tx:any,sale:any,userId:string){
   const outlet=await tx.outlet.findUnique({where:{id:sale.outletId},include:{defaultInventoryWarehouse:true}});
   if(!outlet)throw new ApiError(404,'Outlet tidak ditemukan');
   const productIds=[...new Set((sale.items||[]).map((item:any)=>item.productId))];
   if(!productIds.length)return;
+  const productStocks=await tx.productOutlet.findMany({where:{outletId:sale.outletId,productId:{in:productIds}}});
+  await deductManualProductStock(tx,sale,userId,productStocks);
+  const stockByProduct=new Map(productStocks.map((row:any)=>[row.productId,row]));
+  const recipeProductIds=productIds.filter(productId=>(stockByProduct.get(productId) as any)?.stockMode!=='MANUAL');
+  if(!recipeProductIds.length)return;
   const warehouse=outlet.defaultInventoryWarehouse;
-  const recipes=await tx.productRecipe.findMany({where:{productId:{in:productIds},isActive:true},include:{item:{include:{unit:true}},usageUnit:true}});
+  const recipes=await tx.productRecipe.findMany({where:{productId:{in:recipeProductIds},isActive:true},include:{item:{include:{unit:true}},usageUnit:true}});
   const recipesByProduct=new Map<string,any[]>();
   for(const recipe of recipes)recipesByProduct.set(recipe.productId,[...(recipesByProduct.get(recipe.productId)||[]),recipe]);
   if(!warehouse&&recipes.length&&outlet.blockSaleWhenIngredientOutOfStock)throw new ApiError(400,'Warehouse inventory outlet belum diset.');
@@ -1492,6 +1565,7 @@ async function deductInventoryForPaidSale(tx:any,sale:any,userId:string){
   for(const item of sale.items||[]){
     const productRecipes=recipesByProduct.get(item.productId)||[];
     if(!productRecipes.length){
+      if((stockByProduct.get(item.productId) as any)?.stockMode==='RECIPE')throw new ApiError(400,`Recipe produk ${item.productName} belum diset.`);
       if(!outlet.allowSaleWithoutRecipe)throw new ApiError(400,`Recipe produk ${item.productName} belum diset.`);
       continue;
     }
@@ -1509,6 +1583,15 @@ async function deductInventoryForPaidSale(tx:any,sale:any,userId:string){
   }
 }
 async function returnInventoryForVoidedSale(tx:any,sale:any,userId:string){
+  const productMovements=await tx.productStockMovement.findMany({where:{saleId:sale.id,movementType:'SALE_DEDUCTION'}});
+  for(const movement of productMovements){
+    const qty=Math.abs(Number(movement.qty));
+    const row=await tx.productOutlet.findUnique({where:{productId_outletId:{productId:movement.productId,outletId:movement.outletId}}});
+    if(!row)continue;
+    const beforeQty=Number(row.stockQty),afterQty=beforeQty+qty;
+    await tx.productOutlet.update({where:{id:row.id},data:{stockQty:{increment:qty},stockUpdatedAt:new Date(),stockUpdatedBy:userId}});
+    await tx.productStockMovement.create({data:{businessId:sale.businessId,outletId:movement.outletId,productId:movement.productId,saleId:sale.id,movementType:'SALE_VOID_RETURN',qty,beforeQty,afterQty,reason:`Void ${sale.transactionNumber||sale.orderNumber}`,createdBy:userId}});
+  }
   const movements=await tx.inventoryMovement.findMany({where:{referenceId:sale.id,movementType:'SALE_DEDUCTION'}});
   for(const movement of movements){
     if(!movement.warehouseId)continue;
@@ -1676,7 +1759,7 @@ api.post('/orders/:id/cancel',asyncRoute(async(req,res)=>{const reason=z.object(
 api.get('/sales',asyncRoute(async(req,res)=>{const where:any=tenantWhereAnd(req,{status:{in:['PAID','VOID']},outletId:await requiredOutletId(req)});if(req.query.date)where.createdAt=dayRange(String(req.query.date));if(req.query.payment_method)where.paymentMethod=req.query.payment_method;res.json(await prisma.sale.findMany({where,include:{outlet:true,cashier:{select:{name:true}}},orderBy:{createdAt:'desc'},take:200}));}));
 api.get('/sales/:id',asyncRoute(async(req,res)=>{const sale=await prisma.sale.findFirst({where:tenantWhereAnd(req,{id:String(req.params.id)}),include:{outlet:true,cashier:{select:{name:true}},items:{include:{addons:true}},printerLogs:{include:{printer:true,user:{select:{name:true}},},orderBy:{printedAt:'desc'}}}});if(!sale)throw new ApiError(404,'Transaksi tidak ditemukan');if(req.user!.role!=='OWNER')await assertTenantOutlet(req,sale.outletId);res.json(sale);}));
 api.put('/sales/:id/customer',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const customerName=z.object({customerName:z.string().trim().optional()}).parse(req.body).customerName?.trim()||'Walk In';const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)}});if(!sale)throw new ApiError(404,'Transaksi tidak ditemukan');await assertTenantOutlet(req,sale.outletId);res.json(await prisma.$transaction(async tx=>{const updated=await tx.sale.update({where:{id:sale.id},data:{customerName}});await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'SALE',entityId:sale.id,action:'UPDATE_CUSTOMER_NAME',oldValue:{customerName:sale.customerName},newValue:{customerName},changedBy:req.user!.id}});return updated;}));}));
-api.post('/sales/:id/void',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const reason=z.object({reason:z.string().min(5)}).parse(req.body).reason;const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)},include:{couponUsage:true}});if(!sale)throw new ApiError(404,'Transaksi tidak ditemukan');await assertTenantOutlet(req,sale.outletId);if(sale.status!=='PAID')throw new ApiError(400,'Hanya transaksi paid yang bisa void');res.json(await prisma.$transaction(async tx=>{if(sale.couponUsage){await tx.coupon.update({where:{id:sale.couponUsage.couponId},data:{usedCount:{decrement:1}}});await tx.couponUsage.delete({where:{saleId:sale.id}});}await returnInventoryForVoidedSale(tx,sale,req.user!.id);return tx.sale.update({where:{id:sale.id},data:{status:'VOID',voidReason:reason,voidedAt:new Date()}});}));}));
+api.post('/sales/:id/void',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const reason=z.object({reason:z.string().min(5)}).parse(req.body).reason;const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)},include:{couponUsage:true}});if(!sale)throw new ApiError(404,'Transaksi tidak ditemukan');await assertTenantOutlet(req,sale.outletId);if(sale.status!=='PAID')throw new ApiError(400,'Hanya transaksi paid yang bisa void');res.json(await prisma.$transaction(async tx=>{const claimed=await tx.sale.updateMany({where:{id:sale.id,businessId:req.user!.businessId,status:'PAID'},data:{status:'VOID',voidReason:reason,voidedAt:new Date()}});if(!claimed.count)throw new ApiError(409,'Transaksi sudah diproses oleh user lain');if(sale.couponUsage){await tx.coupon.update({where:{id:sale.couponUsage.couponId},data:{usedCount:{decrement:1}}});await tx.couponUsage.delete({where:{saleId:sale.id}});}await returnInventoryForVoidedSale(tx,sale,req.user!.id);return tx.sale.findUniqueOrThrow({where:{id:sale.id}});}));}));
 
 async function logPrintAttempt(saleId:string,userId:string,type:'CUSTOMER_RECEIPT'|'KITCHEN_TICKET'|'CUSTOMER_ITEM_LIST',forcedPrinterId?:string){
   const sale=await prisma.sale.findUnique({where:{id:saleId},include:{outlet:true}});

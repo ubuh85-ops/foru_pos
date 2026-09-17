@@ -13,8 +13,8 @@ import { isValidWhatsAppNumber, openWhatsAppInvoice } from '../whatsappInvoice';
 type Option = { id: string; name: string; additionalPrice: number; hpp: number };
 type Group = { id: string; name: string; minSelect: number; maxSelect: number; required: boolean; options: Option[] };
 type Variant = { id: string; variantName: string; sellingPrice: number };
-type Product = { id: string; name: string; category: string; categoryRef?: { name: string }; basePrice: number; masterBasePrice?: number; baseHpp: number; imageUrl?: string; isAvailable?: boolean; variants: Variant[]; variantGroups: { group: Group }[] };
-type Line = { key: string; productId: string; variantId?: string; selectedVariantOptionIds?: string[]; name: string; variant: string; price: number; qty: number; itemNote?: string; discount?: { type: 'NOMINAL' | 'PERCENTAGE'; value: number } };
+type Product = { id: string; name: string; category: string; categoryRef?: { name: string }; basePrice: number; masterBasePrice?: number; baseHpp: number; imageUrl?: string; isAvailable?: boolean; stockMode?: 'UNLIMITED'|'MANUAL'|'RECIPE'; stockQty?: number|null; lowStockThreshold?: number; stockStatus?: string; variants: Variant[]; variantGroups: { group: Group }[] };
+type Line = { key: string; productId: string; variantId?: string; selectedVariantOptionIds?: string[]; name: string; variant: string; price: number; qty: number; stockMode?: 'UNLIMITED'|'MANUAL'|'RECIPE'; stockQty?: number|null; itemNote?: string; discount?: { type: 'NOMINAL' | 'PERCENTAGE'; value: number } };
 type CartQtySnapshot = Record<string, number>;
 type PosDialog =
   | { kind: 'confirm'; tone?: ForuDialogTone; title: string; description?: string; detail?: string; cancelText?: string; confirmText?: string; resolve: (value: boolean) => void }
@@ -308,8 +308,8 @@ export default function POS() {
 
   function changeMenuView(view: 'grid' | 'list') { setMenuView(view); localStorage.setItem('foru:pos_menu_view', view); }
   function changePageSize(size: number) { setPageSize(size); setPage(1); localStorage.setItem('foru:pos_page_size', String(size)); }
-  function addLine(line: Line) { if (!shiftOpen) { toast.error('Shift belum dibuka. Silakan buka kasir terlebih dahulu.'); return; } setCart(c => { const i = c.findIndex(x => x.key === line.key && !x.discount && !x.itemNote); return i < 0 ? [...c, line] : c.map((x, j) => j === i ? { ...x, qty: x.qty + 1 } : x); }); setCouponDiscount(0); }
-  function quickAdd(p: Product) { if (!shiftOpen) return; if (p.isAvailable===false){toast.error(`${p.name} sedang habis.`);return;} if (p.variantGroups?.length) return setConfig(p); const v = p.variants[0]; const price = v && v.variantName !== 'Base' ? Number(v.sellingPrice) : Number(p.basePrice || v?.sellingPrice || 0); addLine({ key: v ? `${p.id}:${v.id}` : `${p.id}:base`, productId: p.id, variantId: v?.id, name: p.name, variant: v?.variantName || 'Base', price, qty: 1 }); }
+  function addLine(line: Line) { if (!shiftOpen) { toast.error('Shift belum dibuka. Silakan buka kasir terlebih dahulu.'); return; } setCart(c => { const currentQty=c.filter(x=>x.productId===line.productId).reduce((sum,x)=>sum+x.qty,0);if(line.stockMode==='MANUAL'&&currentQty>=Number(line.stockQty||0)){toast.error(`Stok ${line.name} tidak mencukupi.`);return c;}const i = c.findIndex(x => x.key === line.key && !x.discount && !x.itemNote); return i < 0 ? [...c, line] : c.map((x, j) => j === i ? { ...x, qty: x.qty + 1 } : x); }); setCouponDiscount(0); }
+  function quickAdd(p: Product) { if (!shiftOpen) return; if (p.isAvailable===false){toast.error(`${p.name} sedang habis.`);return;} if (p.variantGroups?.length) return setConfig(p); const v = p.variants[0]; const price = v && v.variantName !== 'Base' ? Number(v.sellingPrice) : Number(p.basePrice || v?.sellingPrice || 0); addLine({ key: v ? `${p.id}:${v.id}` : `${p.id}:base`, productId: p.id, variantId: v?.id, name: p.name, variant: v?.variantName || 'Base', price, qty: 1,stockMode:p.stockMode,stockQty:p.stockQty }); }
   async function qty(i: number, n: number) {
     if (n < 1) {
       const item = cart[i];
@@ -325,6 +325,9 @@ export default function POS() {
       setCouponDiscount(0);
       return;
     }
+    const item=cart[i];
+    const otherQty=cart.reduce((sum,line,index)=>sum+(index!==i&&line.productId===item.productId?line.qty:0),0);
+    if(item.stockMode==='MANUAL'&&otherQty+n>Number(item.stockQty||0)){toast.error(`Stok ${item.name} tidak mencukupi.`);return;}
     setCart(c => c.map((x, j) => j === i ? { ...x, qty: n } : x));
     setCouponDiscount(0);
   }
@@ -491,9 +494,9 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
         {menuView === 'grid' ? <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
           {pagedProducts.map(p => {
             const price = Number(p.basePrice || p.variants[0]?.sellingPrice || 0);
-            const outOfStock = Number((p as any).stock || (p as any).stockQty || 1) <= 0;
             const soldOut=p.isAvailable===false;
-            return <button key={p.id} onClick={() => quickAdd(p)} disabled={!shiftOpen || outOfStock || soldOut} className="group relative overflow-hidden rounded-3xl bg-white text-left shadow-sm ring-1 ring-black/5 transition hover:-translate-y-0.5 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60">
+            const lowStock=p.stockStatus==='LOW_STOCK';
+            return <button key={p.id} onClick={() => quickAdd(p)} disabled={!shiftOpen || soldOut} className="group relative overflow-hidden rounded-3xl bg-white text-left shadow-sm ring-1 ring-black/5 transition hover:-translate-y-0.5 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60">
               <div className="relative grid aspect-[4/3] place-items-center overflow-hidden bg-gradient-to-br from-brand-50 via-amber-50 to-white text-4xl">
               <img
                 src={foruLogo}
@@ -510,6 +513,7 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
                 />
               )}
               {soldOut&&<span className="absolute right-2 top-2 rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white">HABIS</span>}
+              {!soldOut&&lowStock&&<span className="absolute right-2 top-2 rounded-full bg-amber-500 px-3 py-1 text-xs font-black text-white">MAU HABIS{p.stockQty==null?'':` · ${p.stockQty}`}</span>}
               </div>
               <div className="p-3">
                 <p className="truncate text-[11px] font-bold text-slate-400">{catName(p)}</p>
@@ -525,13 +529,14 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
           {pagedProducts.map(p => {
             const price = Number(p.basePrice || p.variants[0]?.sellingPrice || 0);
             const soldOut=p.isAvailable===false;
+            const lowStock=p.stockStatus==='LOW_STOCK';
             return <button key={p.id} onClick={() => quickAdd(p)} disabled={!shiftOpen||soldOut} className="flex min-w-0 items-center gap-3 rounded-2xl bg-white p-3 text-left shadow-sm ring-1 ring-black/5 disabled:cursor-not-allowed disabled:opacity-60">
               <div className="relative grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-gradient-to-br from-brand-50 to-amber-50 text-2xl">
                 <img src={foruLogo} alt="" className="h-10 w-10 object-contain opacity-60" />
                 {p.imageUrl && <img src={productImageSrc(p.imageUrl)} alt="" className="absolute inset-0 h-full w-full object-cover" loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />}
               </div>
               <div className="min-w-0 flex-1"><h3 className=" line-clamp-3 truncate  text-sm">{p.name}</h3><p className="truncate text-xs text-slate-400">{p.variantGroups?.length ? 'Pilih opsi' : p.variants[0]?.variantName || 'Base'}</p></div>
-              {soldOut?<b className="shrink-0 text-xs text-slate-500">HABIS</b>:<b className="money shrink-0 text-brand-700">{rupiah(price)}</b>}
+              {soldOut?<b className="shrink-0 text-xs text-slate-500">HABIS</b>:<div className="shrink-0 text-right">{lowStock&&<span className="block text-[10px] font-black text-amber-600">MAU HABIS{p.stockQty==null?'':` · ${p.stockQty}`}</span>}<b className="money text-brand-700">{rupiah(price)}</b></div>}
             </button>;
           })}
         </div>}
@@ -714,7 +719,7 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
       accepting={acceptingOrderId === reviewOpenOrder.id}
     />}
     {config && <ConfigProduct product={config} close={() => setConfig(null)} add={addLine} />}
-    {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} initialCustomerPhone={customerPhone} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName, paidCustomerPhone) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); setCustomerPhone(paidCustomerPhone); const payload = { ...orderPayload(active), customerName: paidCustomerName, customerPhone: paidCustomerPhone.trim() || undefined }; const wasEditing = !!editingOrder; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); if (wasEditing) { setEditingOrder(null); setEditingOrderSnapshot({}); navigate('/pos', { replace: true }); } toast.success('Data berhasil disimpan.'); await runAutoPrint(result, 'paid-sale'); } catch (e) { const msg = (e as Error).message; toast.error(msg); throw e; } }} />}
+    {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} initialCustomerPhone={customerPhone} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName, paidCustomerPhone) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); setCustomerPhone(paidCustomerPhone); const payload = { ...orderPayload(active), customerName: paidCustomerName, customerPhone: paidCustomerPhone.trim() || undefined }; const wasEditing = !!editingOrder; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); await loadProductsForOutlet(); if (wasEditing) { setEditingOrder(null); setEditingOrderSnapshot({}); navigate('/pos', { replace: true }); } toast.success('Data berhasil disimpan.'); await runAutoPrint(result, 'paid-sale'); } catch (e) { const msg = (e as Error).message; toast.error(msg); throw e; } }} />}
     {receipt && <Receipt sale={receipt} close={() => setReceipt(null)} />}
   </div>;
 }
@@ -726,7 +731,7 @@ function ConfigProduct({ product, close, add }: { product: Product; close: () =>
   const selectedOptions = groups.flatMap(g => g.options.filter(o => sel.includes(o.id)));
   const total = Number(product.basePrice) + selectedOptions.reduce((s, o) => s + Number(o.additionalPrice), 0);
   const errors = groups.flatMap(g => { const n = g.options.filter(o => sel.includes(o.id)).length, min = g.required ? Math.max(g.minSelect, 1) : g.minSelect; return n < min ? [`${g.name}: Minimal pilih ${min} opsi.`] : n > g.maxSelect ? [`${g.name}: Maksimal pilih ${g.maxSelect} opsi.`] : []; });
-  return <div data-back-modal="true" className="fixed inset-0 z-[60] grid place-items-end bg-black/40 sm:place-items-center"><div className="max-h-[92vh] w-full max-w-lg overflow-auto rounded-t-3xl bg-white p-6 sm:rounded-3xl"><div className="mb-5 flex justify-between"><div><h3 className="section-title">{product.name}</h3><p className="text-sm text-slate-400">{rupiah(product.basePrice)}</p></div><button data-back-close="true" onClick={close}><X /></button></div><div className="space-y-5">{groups.map(g => <section key={g.id}><div className="mb-2 flex justify-between"><b>{g.name}</b><span className="text-xs text-slate-400">{g.required ? 'Wajib ' : ''}min {g.required ? Math.max(g.minSelect, 1) : g.minSelect} · max {g.maxSelect}</span></div><div className="space-y-2">{g.options.map(o => <label key={o.id} className={`flex items-center justify-between rounded-xl border p-3 text-sm ${sel.includes(o.id) ? 'border-brand-500 bg-brand-50' : ''}`}><span className="flex items-center gap-2"><input type={g.maxSelect === 1 ? 'radio' : 'checkbox'} name={g.id} checked={sel.includes(o.id)} onChange={() => toggle(g, o)} />{o.name}</span><b>{Number(o.additionalPrice) ? `+${rupiah(o.additionalPrice)}` : 'Gratis'}</b></label>)}</div></section>)}</div>{errors.length > 0 && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{errors[0]}</p>}<div className="mt-5 flex items-center justify-between border-t pt-4"><span>Total item</span><b className="text-2xl text-brand-700">{rupiah(total)}</b></div><button disabled={!!errors.length} onClick={() => { const ids = [...sel].sort(); add({ key: `${product.id}:${ids.join('|')}`, productId: product.id, selectedVariantOptionIds: ids, name: product.name, variant: selectedOptions.map(o => o.name).join(', ') || 'Base', price: total, qty: 1 }); close(); }} className="btn-primary mt-5 w-full">Add To Cart</button></div></div>;
+  return <div data-back-modal="true" className="fixed inset-0 z-[60] grid place-items-end bg-black/40 sm:place-items-center"><div className="max-h-[92vh] w-full max-w-lg overflow-auto rounded-t-3xl bg-white p-6 sm:rounded-3xl"><div className="mb-5 flex justify-between"><div><h3 className="section-title">{product.name}</h3><p className="text-sm text-slate-400">{rupiah(product.basePrice)}</p></div><button data-back-close="true" onClick={close}><X /></button></div><div className="space-y-5">{groups.map(g => <section key={g.id}><div className="mb-2 flex justify-between"><b>{g.name}</b><span className="text-xs text-slate-400">{g.required ? 'Wajib ' : ''}min {g.required ? Math.max(g.minSelect, 1) : g.minSelect} · max {g.maxSelect}</span></div><div className="space-y-2">{g.options.map(o => <label key={o.id} className={`flex items-center justify-between rounded-xl border p-3 text-sm ${sel.includes(o.id) ? 'border-brand-500 bg-brand-50' : ''}`}><span className="flex items-center gap-2"><input type={g.maxSelect === 1 ? 'radio' : 'checkbox'} name={g.id} checked={sel.includes(o.id)} onChange={() => toggle(g, o)} />{o.name}</span><b>{Number(o.additionalPrice) ? `+${rupiah(o.additionalPrice)}` : 'Gratis'}</b></label>)}</div></section>)}</div>{errors.length > 0 && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{errors[0]}</p>}<div className="mt-5 flex items-center justify-between border-t pt-4"><span>Total item</span><b className="text-2xl text-brand-700">{rupiah(total)}</b></div><button disabled={!!errors.length} onClick={() => { const ids = [...sel].sort(); add({ key: `${product.id}:${ids.join('|')}`, productId: product.id, selectedVariantOptionIds: ids, name: product.name, variant: selectedOptions.map(o => o.name).join(', ') || 'Base', price: total, qty: 1,stockMode:product.stockMode,stockQty:product.stockQty }); close(); }} className="btn-primary mt-5 w-full">Add To Cart</button></div></div>;
 }
 
 function Row({ label, n }: { label: string; n: number }) { return <div className="flex justify-between text-slate-500"><span>{label}</span><span className="money">{rupiah(n)}</span></div>; }

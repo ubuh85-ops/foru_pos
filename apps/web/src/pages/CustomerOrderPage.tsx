@@ -35,6 +35,10 @@ type PublicProduct = {
   description?: string | null;
   imageUrl?: string | null;
   isAvailable: boolean;
+  stockMode?: "UNLIMITED" | "MANUAL" | "RECIPE";
+  stockQty?: number | null;
+  lowStockThreshold?: number;
+  stockStatus?: string;
   isRecommended: boolean;
   basePrice: number;
   variants?: { id: string; variantName: string; sellingPrice: number }[];
@@ -771,11 +775,12 @@ export default function CustomerOrderPage() {
                         <button
                           disabled={!line.product.isAvailable}
                           onClick={() => {
-                            if (line.qty < 50) trackWebEvent(businessSlug, outletSlug, 'ADD_TO_CART', line.product.id);
+                            const maxQty=line.product.stockMode==='MANUAL'?Math.min(50,line.product.stockQty??0):50;
+                            if (line.qty < maxQty) trackWebEvent(businessSlug, outletSlug, 'ADD_TO_CART', line.product.id);
                             setCart((rows) =>
                               rows.map((x) =>
                                 x.key === line.key
-                                  ? { ...x, qty: Math.min(50, x.qty + 1) }
+                                  ? { ...x, qty: Math.min(maxQty, x.qty + 1) }
                                   : x
                               )
                             );
@@ -1389,6 +1394,11 @@ function CategorySection({
                   {!product.isAvailable && (
                     <span className="absolute right-2 top-2 rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white">
                       HABIS
+                    </span>
+                  )}
+                  {product.isAvailable && product.stockStatus === "LOW_STOCK" && (
+                    <span className="absolute right-2 top-2 rounded-full bg-amber-500 px-3 py-1 text-xs font-black text-white">
+                      MAU HABIS{product.stockQty == null ? "" : ` · ${product.stockQty}`}
                     </span>
                   )}
                 </div>
