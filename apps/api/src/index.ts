@@ -18,6 +18,7 @@ import { sendCustomerWebOrderPush } from './push.js';
 import { orderAttribution, recordOrderAnalytics, reconcileOrderAnalytics, registerAdminAnalytics, registerPublicAnalytics } from './web-analytics.js';
 import { registerDailyReports } from './daily-reports.js';
 import { nextSaleNumber } from './sale-numbers.js';
+import { customerSaleWhere, customerTenantWhere, isValidCustomerPhone, normalizeCustomerPhone, upsertWebOrderCustomer } from './customers.js';
 import { Server as SocketIOServer } from 'socket.io';
 
 const defaultCorsOrigins = [
@@ -301,7 +302,7 @@ const publicOrderItemInput=z.object({productId:z.string(),variantId:z.string().o
 const publicOrderInput=z.object({
   analytics:z.unknown().optional(),
   customerName:z.string().trim().min(2,'Nama customer wajib diisi').max(80),
-  customerPhone:z.string().trim().regex(/^\+?[0-9][0-9\s-]{7,19}$/,'Nomor WhatsApp tidak valid'),
+  customerPhone:z.string().trim().regex(/^\+?[0-9][0-9\s-]{7,19}$/,'Nomor WhatsApp tidak valid').refine(isValidCustomerPhone,'Nomor WhatsApp tidak valid'),
   orderType:z.enum(['DINE_IN','TAKE_AWAY','DELIVERY']),
   tableNumber:z.string().trim().max(30).optional().or(z.literal('')),
   orderNote:z.string().trim().max(500).optional().or(z.literal('')),
@@ -364,7 +365,11 @@ api.post('/public/order/:businessSlug/:outletSlug/orders',asyncRoute(async(req,r
   const totals=await buildOrderTotals(fakeReq,{outletId:outlet.id,customerName:d.customerName,orderType:d.orderType,items:d.items,couponCode:d.couponCode} as any);
   const orderNumber=await nextNumber('ORD',outlet.id,'orderNumber');
   const publicOrderToken=crypto.randomBytes(24).toString('hex');
-  const created=await prisma.$transaction(async tx=>tx.sale.create({data:{businessId:business.id,orderNumber,outletId:outlet.id,customerName:d.customerName,customerPhone:d.customerPhone.trim(),tableNumber:d.orderType==='DINE_IN'?d.tableNumber?.trim()||null:null,orderNote:d.orderNote?.trim()||null,orderType:d.orderType,orderSource:'CUSTOMER_WEB',webAnalytics:orderAttribution(d.analytics),customerOrderRequestId:d.customerOrderRequestId,publicOrderToken,isPreOrder:d.isPreOrder,scheduledAt,submittedAt:new Date(),subtotal:totals.gross,discountAmount:money(totals.productDiscount+totals.transactionDiscount+totals.couponDiscount),totalAmount:totals.grand,subtotalBeforeDiscount:totals.gross,productDiscountTotal:totals.productDiscount,transactionDiscountAmount:totals.transactionDiscount,couponCode:totals.couponResult?.coupon.couponCode,couponDiscountAmount:totals.couponDiscount,grandTotal:totals.grand,totalHpp:totals.totalHpp,grossProfit:0,status:'OPEN_ORDER',items:{create:totals.lines.map(saleItemCreate)}},include:{items:{include:{addons:true}},outlet:true}}));
+  const created=await prisma.$transaction(async tx=>{
+    const submittedAt=new Date();
+    const customer=await upsertWebOrderCustomer(tx,{businessId:business.id,customerName:d.customerName,customerPhone:d.customerPhone,orderedAt:submittedAt});
+    return tx.sale.create({data:{businessId:business.id,orderNumber,outletId:outlet.id,customerId:customer.id,customerName:d.customerName,customerPhone:normalizeCustomerPhone(d.customerPhone),tableNumber:d.orderType==='DINE_IN'?d.tableNumber?.trim()||null:null,orderNote:d.orderNote?.trim()||null,orderType:d.orderType,orderSource:'CUSTOMER_WEB',webAnalytics:orderAttribution(d.analytics),customerOrderRequestId:d.customerOrderRequestId,publicOrderToken,isPreOrder:d.isPreOrder,scheduledAt,submittedAt,subtotal:totals.gross,discountAmount:money(totals.productDiscount+totals.transactionDiscount+totals.couponDiscount),totalAmount:totals.grand,subtotalBeforeDiscount:totals.gross,productDiscountTotal:totals.productDiscount,transactionDiscountAmount:totals.transactionDiscount,couponCode:totals.couponResult?.coupon.couponCode,couponDiscountAmount:totals.couponDiscount,grandTotal:totals.grand,totalHpp:totals.totalHpp,grossProfit:0,status:'OPEN_ORDER',items:{create:totals.lines.map(saleItemCreate)}},include:{items:{include:{addons:true}},outlet:true}});
+  });
   void recordOrderAnalytics(created).catch(() => console.error('Web order analytics queued for retry'));
   res.status(201).json({id:created.id,orderNumber:created.orderNumber,publicOrderToken:created.publicOrderToken,status:created.status,grandTotal:created.grandTotal,outlet:{name:created.outlet.name,code:created.outlet.code}});
   realtime.to(`outlet:${created.outletId}`).emit('web-order:new', {
@@ -1410,6 +1415,43 @@ async function completeStockTransfer(id:string,userId:string,req?:any){return pr
 api.post('/inventory/transfers/:id/complete',invTransfer,asyncRoute(async(req,res)=>res.json(await completeStockTransfer(String(req.params.id),req.user!.id,req))));
 api.post('/inventory/transfers/:id/cancel',invTransfer,asyncRoute(async(req,res)=>{const existing=await prisma.stockTransfer.findUnique({where:{id:String(req.params.id)}});if(!existing)throw new ApiError(404,'Transfer tidak ditemukan');await assertWarehouseAccess(req,existing.fromWarehouseId);await assertWarehouseAccess(req,existing.toWarehouseId);res.json(await prisma.stockTransfer.update({where:{id:String(req.params.id)},data:{status:'CANCELLED'},include:{fromWarehouse:true,toWarehouse:true,items:{include:{item:true}}}}));}));
 api.get('/inventory/reports/transfers',invReport,asyncRoute(async(req,res)=>{const clauses:any[]=[tenantScope(req)];if(req.user!.role!=='OWNER')clauses.push({OR:req.user!.assignedWarehouseId?[{fromWarehouseId:req.user!.assignedWarehouseId},{toWarehouseId:req.user!.assignedWarehouseId}]:[{fromWarehouse:{outletId:{in:req.user!.outletIds}}},{toWarehouse:{outletId:{in:req.user!.outletIds}}}]});if(req.query.from&&req.query.to)clauses.push({createdAt:inventoryDateRange(req.query)});res.json(await prisma.stockTransfer.findMany({where:{AND:clauses},include:{fromWarehouse:true,toWarehouse:true,items:{include:{item:true}}},orderBy:{createdAt:'desc'},take:300}));}));
+
+const customerListQuery=z.object({q:z.string().trim().max(80).optional(),outletId:z.string().optional(),page:z.coerce.number().int().min(1).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(20)});
+async function customerOutletIds(req:any,requestedOutletId?:string){
+  if(requestedOutletId){await assertTenantOutlet(req,requestedOutletId);return [requestedOutletId];}
+  return req.user!.role==='OWNER'?undefined:req.user!.outletIds;
+}
+api.get('/customers',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
+  const d=customerListQuery.parse(req.query);
+  const outletIds=await customerOutletIds(req,d.outletId);
+  const saleScope=customerSaleWhere(req.user!.businessId,undefined,outletIds);
+  const rawDigits=d.q?.replace(/\D/g,'');
+  const digits=rawDigits?.startsWith('0')?`62${rawDigits.slice(1)}`:rawDigits?.startsWith('8')?`62${rawDigits}`:rawDigits;
+  const where:Prisma.CustomerWhereInput={...customerTenantWhere(req.user!.businessId,outletIds),...(d.q?{OR:[{name:{contains:d.q,mode:'insensitive'}},...(digits?[{phoneNormalized:{contains:digits}}]:[])]}:{})};
+  const [total,customers]=await Promise.all([
+    prisma.customer.count({where}),
+    prisma.customer.findMany({where,orderBy:outletIds?[{name:'asc'}]:[{lastOrderAt:'desc'},{name:'asc'}],skip:(d.page-1)*d.pageSize,take:d.pageSize,select:{id:true,name:true,phoneNormalized:true,phoneDisplay:true,source:true,status:true,lastOrderAt:true,sales:{where:saleScope,orderBy:{createdAt:'desc'},take:1,select:{createdAt:true,outlet:{select:{id:true,name:true}}}},_count:{select:{sales:{where:{...saleScope,status:{notIn:['REJECTED','CANCELLED','VOID']}}}}}}})
+  ]);
+  const ids=customers.map(customer=>customer.id);
+  const paid=ids.length?await prisma.sale.groupBy({by:['customerId'],where:{...saleScope,customerId:{in:ids},status:{in:['PAID','COMPLETED']}},_sum:{grandTotal:true},_count:{_all:true}}):[];
+  const paidByCustomer=new Map(paid.map(row=>[row.customerId,{totalSpent:Number(row._sum.grandTotal||0),paidOrders:row._count._all}]));
+  res.json({items:customers.map(customer=>{const summary=paidByCustomer.get(customer.id);return {id:customer.id,name:customer.name,phoneNormalized:customer.phoneNormalized,phoneDisplay:customer.phoneDisplay,source:customer.source,status:customer.status,lastOrderAt:customer.sales[0]?.createdAt||customer.lastOrderAt,lastOutlet:customer.sales[0]?.outlet||null,totalOrders:customer._count.sales,paidOrders:summary?.paidOrders||0,totalSpent:summary?.totalSpent||0};}),total,page:d.page,pageSize:d.pageSize,totalPages:Math.max(1,Math.ceil(total/d.pageSize))});
+}));
+api.get('/customers/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
+  const id=String(req.params.id);
+  const customer=await prisma.customer.findFirst({where:{id,businessId:req.user!.businessId},select:{id:true,name:true,phoneNormalized:true,phoneDisplay:true,source:true,status:true,marketingConsent:true,firstOrderAt:true,lastOrderAt:true,createdAt:true,updatedAt:true}});
+  if(!customer)throw new ApiError(404,'Pelanggan tidak ditemukan');
+  const outletIds=await customerOutletIds(req,req.query.outletId?String(req.query.outletId):undefined);
+  const saleScope=customerSaleWhere(req.user!.businessId,id,outletIds);
+  const [totalOrders,period,paid,orders]=await Promise.all([
+    prisma.sale.count({where:{...saleScope,status:{notIn:['REJECTED','CANCELLED','VOID']}}}),
+    prisma.sale.aggregate({where:saleScope,_min:{createdAt:true},_max:{createdAt:true}}),
+    prisma.sale.aggregate({where:{...saleScope,status:{in:['PAID','COMPLETED']}},_count:{_all:true},_sum:{grandTotal:true}}),
+    prisma.sale.findMany({where:saleScope,orderBy:{createdAt:'desc'},take:100,select:{id:true,orderNumber:true,transactionNumber:true,orderSource:true,orderType:true,status:true,grandTotal:true,createdAt:true,scheduledAt:true,outlet:{select:{id:true,name:true,code:true}},items:{select:{id:true,productName:true,variantName:true,qty:true,subtotalAfterDiscount:true}}}})
+  ]);
+  if(req.user!.role!=='OWNER'&&!orders.length)throw new ApiError(404,'Pelanggan tidak ditemukan');
+  res.json({id:customer.id,name:customer.name,phoneNormalized:customer.phoneNormalized,phoneDisplay:customer.phoneDisplay,source:customer.source,status:customer.status,marketingConsent:customer.marketingConsent,createdAt:customer.createdAt,updatedAt:customer.updatedAt,summary:{totalOrders,paidOrders:paid._count._all,totalSpent:Number(paid._sum.grandTotal||0),firstOrderAt:period._min.createdAt,lastOrderAt:period._max.createdAt},orders});
+}));
 
 const couponBody=z.object({couponCode:z.string().min(3).transform(v=>v.toUpperCase()),couponName:z.string().min(2),discountType:z.enum(['NOMINAL','PERCENTAGE']),discountValue:z.coerce.number().positive(),maxDiscountAmount:z.coerce.number().positive().nullable().optional(),minimumTransactionAmount:z.coerce.number().nonnegative().default(0),startDate:z.coerce.date(),endDate:z.coerce.date(),usageLimit:z.coerce.number().int().positive().nullable().optional(),usagePerCustomer:z.coerce.number().int().positive().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE'),outletIds:z.array(z.string()).default([]),productIds:z.array(z.string()).default([]),categories:z.array(z.string()).default([])}).refine(d=>d.endDate>d.startDate,{message:'Tanggal selesai harus setelah tanggal mulai'}).refine(d=>d.discountType!=='PERCENTAGE'||d.discountValue<=100,{message:'Persentase maksimal 100'});
 api.get('/coupons',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>res.json(await prisma.coupon.findMany({where:tenantWhere(req),include:{outlets:{include:{outlet:true}},products:{include:{product:true}},categories:true},orderBy:{createdAt:'desc'}}))));

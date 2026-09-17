@@ -33,6 +33,7 @@ import CustomerOrderStatusPage from './pages/CustomerOrderStatusPage';
 import PreOrderRecapPage from './pages/PreOrderRecapPage';
 import MenuAvailabilityPage from './pages/MenuAvailabilityPage';
 import CategoriesPage from './pages/CategoriesPage';
+import CustomersPage, { CustomerDetailPage } from './pages/CustomersPage';
 import { initSyncService, recordLocalAudit } from './sync';
 import { checkInventoryStockAlerts } from './inventoryAlerts';
 import ShiftBanner from './components/ShiftBanner';
@@ -51,6 +52,7 @@ const navGroups: NavGroup[] = [
       ['/products', 'Produk', Package],
       ['/categories', 'Kategori', Tags],
       ['/coupons', 'Kupon & Promo', Tags],
+      ['/customers', 'Pelanggan', Users],
       ['/variant-groups', 'Variant Group', Layers],
       ['/inventory/items', 'Bahan Baku', Boxes],
       ['/inventory/warehouses', 'Warehouse', Warehouse],
@@ -114,6 +116,7 @@ const knownRoutes = new Set([
   '/sales',
   '/dashboard',
   '/coupons',
+  '/customers',
   '/categories',
   '/variant-groups',
   '/printers',
@@ -161,6 +164,7 @@ function canSeeInventoryPath(user: User, path: string) {
 }
 
 function canSeePath(user: User, path: string) {
+  if (path === '/customers') return user.role === 'OWNER' || user.role === 'SUPERVISOR';
   if (path === '/reports/daily') return user.role === 'OWNER';
   if (path === '/reports/web-analytics') return user.role === 'OWNER';
   if (!knownRoutes.has(path)) return false;
@@ -215,6 +219,7 @@ const rootPages = new Set([
   '/sales',
   '/dashboard',
   '/coupons',
+  '/customers',
   '/categories',
   '/variant-groups',
   '/printers',
@@ -376,6 +381,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
       if (!rootPages.has(loc.pathname)) {
         const fallback = loc.pathname.startsWith('/orders/') ? '/orders'
           : loc.pathname.startsWith('/sales/') ? '/sales'
+            : loc.pathname.startsWith('/customers/') ? '/customers'
             : loc.pathname.startsWith('/inventory/') ? '/inventory'
               : '/pos';
         navigate(fallback);
@@ -469,6 +475,8 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
         <Route path="/sales/:id" element={<SaleDetail />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/coupons" element={user.role === 'OWNER' ? <Coupons /> : <Navigate to="/pos" />} />
+        <Route path="/customers" element={user.role === 'OWNER' || user.role === 'SUPERVISOR' ? <CustomersPage /> : <Navigate to="/pos" />} />
+        <Route path="/customers/:id" element={user.role === 'OWNER' || user.role === 'SUPERVISOR' ? <CustomerDetailPage /> : <Navigate to="/pos" />} />
         <Route path="/categories" element={user.role === 'OWNER' ? <CategoriesPage /> : <Navigate to="/pos" />} />
         <Route path="/variant-groups" element={user.role === 'OWNER' ? <VariantGroupsPage /> : <Navigate to="/pos" />} />
         <Route path="/printers" element={user.role === 'OWNER' ? <PrinterSettings /> : <Navigate to="/pos" />} />

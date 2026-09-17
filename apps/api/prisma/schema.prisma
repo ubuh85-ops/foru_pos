@@ -46,21 +46,21 @@ model User {
 }
 
 model Business {
-  webAnalyticsEvents WebAnalyticsEvent[]
-  id        String         @id @default(cuid())
-  code      String         @unique
-  name      String
-  legalName String?        @map("legal_name")
-  logoUrl   String?        @map("logo_url")
-  phone     String?
-  email     String?
-  address   String?
-  gofoodFeePercent     Decimal @default(0) @map("gofood_fee_percent") @db.Decimal(5, 2)
-  grabfoodFeePercent   Decimal @default(0) @map("grabfood_fee_percent") @db.Decimal(5, 2)
-  shopeefoodFeePercent Decimal @default(0) @map("shopeefood_fee_percent") @db.Decimal(5, 2)
-  status    BusinessStatus @default(ACTIVE)
-  createdAt DateTime       @default(now()) @map("created_at")
-  updatedAt DateTime       @updatedAt @map("updated_at")
+  webAnalyticsEvents   WebAnalyticsEvent[]
+  id                   String              @id @default(cuid())
+  code                 String              @unique
+  name                 String
+  legalName            String?             @map("legal_name")
+  logoUrl              String?             @map("logo_url")
+  phone                String?
+  email                String?
+  address              String?
+  gofoodFeePercent     Decimal             @default(0) @map("gofood_fee_percent") @db.Decimal(5, 2)
+  grabfoodFeePercent   Decimal             @default(0) @map("grabfood_fee_percent") @db.Decimal(5, 2)
+  shopeefoodFeePercent Decimal             @default(0) @map("shopeefood_fee_percent") @db.Decimal(5, 2)
+  status               BusinessStatus      @default(ACTIVE)
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt @map("updated_at")
 
   memberships         BusinessMembership[]
   outlets             Outlet[]
@@ -82,6 +82,7 @@ model Business {
   stockTransfers      StockTransfer[]
   coupons             Coupon[]
   pushDevices         PushDevice[]
+  customers           Customer[]
 
   @@map("businesses")
 }
@@ -105,7 +106,7 @@ model BusinessMembership {
 }
 
 model Outlet {
-  webAnalyticsEvents WebAnalyticsEvent[]
+  webAnalyticsEvents                WebAnalyticsEvent[]
   id                                String                @id @default(cuid())
   businessId                        String                @map("business_id")
   code                              String
@@ -175,21 +176,21 @@ model UserOutlet {
 }
 
 model PushDevice {
-  id         String   @id @default(cuid())
-  token      String   @unique
-  platform   String   @default("ANDROID")
-  deviceName String?  @map("device_name")
-  userId     String   @map("user_id")
-  businessId String   @map("business_id")
-  outletId   String   @map("outlet_id")
-  isActive   Boolean  @default(true) @map("is_active")
-  isPosActive Boolean  @default(false) @map("is_pos_active")
+  id            String    @id @default(cuid())
+  token         String    @unique
+  platform      String    @default("ANDROID")
+  deviceName    String?   @map("device_name")
+  userId        String    @map("user_id")
+  businessId    String    @map("business_id")
+  outletId      String    @map("outlet_id")
+  isActive      Boolean   @default(true) @map("is_active")
+  isPosActive   Boolean   @default(false) @map("is_pos_active")
   posLastSeenAt DateTime? @map("pos_last_seen_at")
-  soundEnabled Boolean  @default(true) @map("sound_enabled")
-  soundName String? @map("sound_name")
-  lastSeenAt DateTime @default(now()) @map("last_seen_at")
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  soundEnabled  Boolean   @default(true) @map("sound_enabled")
+  soundName     String?   @map("sound_name")
+  lastSeenAt    DateTime  @default(now()) @map("last_seen_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
 
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -342,19 +343,19 @@ model ProductAddon {
 }
 
 model ProductOutlet {
-  id          String   @id @default(cuid())
-  productId   String   @map("product_id")
-  outletId    String   @map("outlet_id")
-  isActive    Boolean  @default(true) @map("is_active")
-  isAvailable Boolean  @default(true) @map("is_available")
-  isRecommended Boolean @default(false) @map("is_recommended")
-  outletPrice Decimal? @map("outlet_price") @db.Decimal(14, 2)
-  outletHpp   Decimal? @map("outlet_hpp") @db.Decimal(14, 2)
-  status      Status   @default(ACTIVE)
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  outlet      Outlet   @relation(fields: [outletId], references: [id], onDelete: Cascade)
-  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id            String   @id @default(cuid())
+  productId     String   @map("product_id")
+  outletId      String   @map("outlet_id")
+  isActive      Boolean  @default(true) @map("is_active")
+  isAvailable   Boolean  @default(true) @map("is_available")
+  isRecommended Boolean  @default(false) @map("is_recommended")
+  outletPrice   Decimal? @map("outlet_price") @db.Decimal(14, 2)
+  outletHpp     Decimal? @map("outlet_hpp") @db.Decimal(14, 2)
+  status        Status   @default(ACTIVE)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  outlet        Outlet   @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@unique([productId, outletId])
   @@index([outletId, isRecommended])
@@ -446,60 +447,62 @@ model CashSession {
 }
 
 model Sale {
-  webAnalytics Json? @map("web_analytics")
-  analyticsEvents WebAnalyticsEvent[]
-  id                        String         @id @default(cuid())
-  businessId                String         @map("business_id")
-  orderNumber               String?        @unique @map("order_number")
-  transactionNumber         String?        @unique @map("transaction_number")
-  outletId                  String         @map("outlet_id")
-  cashierId                 String?        @map("cashier_id")
-  cashSessionId             String?        @map("cash_session_id")
-  customerName              String         @default("Walk In") @map("customer_name")
-  customerPhone             String?        @map("customer_phone")
-  tableNumber               String?        @map("table_number")
-  orderNote                 String?        @map("order_note")
-  orderType                 String         @default("DINE_IN") @map("order_type")
-  orderSource               String         @default("POS") @map("order_source")
-  customerOrderRequestId    String?        @unique @map("customer_order_request_id")
-  publicOrderToken          String?        @unique @map("public_order_token")
-  isPreOrder                Boolean        @default(false) @map("is_pre_order")
-  scheduledAt               DateTime?      @map("scheduled_at")
-  subtotal                  Decimal        @db.Decimal(14, 2)
-  discountAmount            Decimal        @default(0) @map("discount_amount") @db.Decimal(14, 2)
-  totalAmount               Decimal        @map("total_amount") @db.Decimal(14, 2)
-  subtotalBeforeDiscount    Decimal        @map("subtotal_before_discount") @db.Decimal(14, 2)
-  productDiscountTotal      Decimal        @default(0) @map("product_discount_total") @db.Decimal(14, 2)
-  transactionDiscountAmount Decimal        @default(0) @map("transaction_discount_amount") @db.Decimal(14, 2)
-  couponCode                String?        @map("coupon_code")
-  couponDiscountAmount      Decimal        @default(0) @map("coupon_discount_amount") @db.Decimal(14, 2)
-  grandTotal                Decimal        @map("grand_total") @db.Decimal(14, 2)
-  totalHpp                  Decimal        @map("total_hpp") @db.Decimal(14, 2)
-  grossProfit               Decimal        @map("gross_profit") @db.Decimal(14, 2)
-  paymentMethod             PaymentMethod? @map("payment_method")
-  cashReceived              Decimal?       @map("cash_received") @db.Decimal(14, 2)
-  changeAmount              Decimal?       @map("change_amount") @db.Decimal(14, 2)
-  status                    SaleStatus     @default(PAID)
-  voidReason                String?        @map("void_reason")
-  savedAt                   DateTime       @default(now()) @map("saved_at")
-  submittedAt               DateTime?      @map("submitted_at")
-  acceptedAt                DateTime?      @map("accepted_at")
-  acceptedByUserId          String?        @map("accepted_by_user_id")
-  rejectedAt                DateTime?      @map("rejected_at")
-  rejectedByUserId          String?        @map("rejected_by_user_id")
-  rejectionReason           String?        @map("rejection_reason")
-  paidAt                    DateTime?      @map("paid_at")
-  cancelledAt               DateTime?      @map("cancelled_at")
-  voidedAt                  DateTime?      @map("voided_at")
-  cancelReason              String?        @map("cancel_reason")
-  createdAt                 DateTime       @default(now()) @map("created_at")
+  webAnalytics              Json?               @map("web_analytics")
+  analyticsEvents           WebAnalyticsEvent[]
+  id                        String              @id @default(cuid())
+  businessId                String              @map("business_id")
+  orderNumber               String?             @unique @map("order_number")
+  transactionNumber         String?             @unique @map("transaction_number")
+  outletId                  String              @map("outlet_id")
+  cashierId                 String?             @map("cashier_id")
+  cashSessionId             String?             @map("cash_session_id")
+  customerId                String?             @map("customer_id")
+  customerName              String              @default("Walk In") @map("customer_name")
+  customerPhone             String?             @map("customer_phone")
+  tableNumber               String?             @map("table_number")
+  orderNote                 String?             @map("order_note")
+  orderType                 String              @default("DINE_IN") @map("order_type")
+  orderSource               String              @default("POS") @map("order_source")
+  customerOrderRequestId    String?             @unique @map("customer_order_request_id")
+  publicOrderToken          String?             @unique @map("public_order_token")
+  isPreOrder                Boolean             @default(false) @map("is_pre_order")
+  scheduledAt               DateTime?           @map("scheduled_at")
+  subtotal                  Decimal             @db.Decimal(14, 2)
+  discountAmount            Decimal             @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  totalAmount               Decimal             @map("total_amount") @db.Decimal(14, 2)
+  subtotalBeforeDiscount    Decimal             @map("subtotal_before_discount") @db.Decimal(14, 2)
+  productDiscountTotal      Decimal             @default(0) @map("product_discount_total") @db.Decimal(14, 2)
+  transactionDiscountAmount Decimal             @default(0) @map("transaction_discount_amount") @db.Decimal(14, 2)
+  couponCode                String?             @map("coupon_code")
+  couponDiscountAmount      Decimal             @default(0) @map("coupon_discount_amount") @db.Decimal(14, 2)
+  grandTotal                Decimal             @map("grand_total") @db.Decimal(14, 2)
+  totalHpp                  Decimal             @map("total_hpp") @db.Decimal(14, 2)
+  grossProfit               Decimal             @map("gross_profit") @db.Decimal(14, 2)
+  paymentMethod             PaymentMethod?      @map("payment_method")
+  cashReceived              Decimal?            @map("cash_received") @db.Decimal(14, 2)
+  changeAmount              Decimal?            @map("change_amount") @db.Decimal(14, 2)
+  status                    SaleStatus          @default(PAID)
+  voidReason                String?             @map("void_reason")
+  savedAt                   DateTime            @default(now()) @map("saved_at")
+  submittedAt               DateTime?           @map("submitted_at")
+  acceptedAt                DateTime?           @map("accepted_at")
+  acceptedByUserId          String?             @map("accepted_by_user_id")
+  rejectedAt                DateTime?           @map("rejected_at")
+  rejectedByUserId          String?             @map("rejected_by_user_id")
+  rejectionReason           String?             @map("rejection_reason")
+  paidAt                    DateTime?           @map("paid_at")
+  cancelledAt               DateTime?           @map("cancelled_at")
+  voidedAt                  DateTime?           @map("voided_at")
+  cancelReason              String?             @map("cancel_reason")
+  createdAt                 DateTime            @default(now()) @map("created_at")
   couponUsage               CouponUsage?
   items                     SaleItem[]
   printerLogs               PrinterLog[]
-  cashSession               CashSession?   @relation(fields: [cashSessionId], references: [id])
-  cashier                   User?          @relation(fields: [cashierId], references: [id])
-  outlet                    Outlet         @relation(fields: [outletId], references: [id])
-  business                  Business       @relation(fields: [businessId], references: [id])
+  cashSession               CashSession?        @relation(fields: [cashSessionId], references: [id])
+  cashier                   User?               @relation(fields: [cashierId], references: [id])
+  outlet                    Outlet              @relation(fields: [outletId], references: [id])
+  business                  Business            @relation(fields: [businessId], references: [id])
+  customer                  Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
   @@index([businessId, outletId, createdAt])
   @@index([businessId, outletId, status, orderSource, createdAt])
@@ -507,7 +510,30 @@ model Sale {
   @@index([businessId, status, createdAt])
   @@index([businessId, outletId, status, createdAt])
   @@index([outletId, createdAt])
+  @@index([customerId, createdAt])
   @@map("sales")
+}
+
+model Customer {
+  id               String   @id @default(cuid())
+  businessId       String   @map("business_id")
+  name             String
+  phoneNormalized  String   @map("phone_normalized")
+  phoneDisplay     String?  @map("phone_display")
+  source           String   @default("CUSTOMER_WEB")
+  marketingConsent Boolean  @default(false) @map("marketing_consent")
+  firstOrderAt     DateTime @default(now()) @map("first_order_at")
+  lastOrderAt      DateTime @default(now()) @map("last_order_at")
+  status           Status   @default(ACTIVE)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  business         Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  sales            Sale[]
+
+  @@unique([businessId, phoneNormalized])
+  @@index([businessId, name])
+  @@index([businessId, lastOrderAt])
+  @@map("customers")
 }
 
 model WebAnalyticsEvent {
