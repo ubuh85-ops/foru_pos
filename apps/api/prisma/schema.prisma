@@ -15,6 +15,8 @@ model SaleDocumentCounter {
 }
 
 model User {
+  completedChecklistItems DailyChecklistItem[]
+  reviewedChecklists DailyChecklist[]
   id                      String               @id @default(cuid())
   name                    String
   username                String               @unique
@@ -46,6 +48,8 @@ model User {
 }
 
 model Business {
+  checklistTemplates ChecklistTemplateItem[]
+  dailyChecklists DailyChecklist[]
   webAnalyticsEvents   WebAnalyticsEvent[]
   id                   String              @id @default(cuid())
   code                 String              @unique
@@ -106,6 +110,9 @@ model BusinessMembership {
 }
 
 model Outlet {
+  checklistInitialized Boolean @default(false)
+  checklistTemplates ChecklistTemplateItem[]
+  dailyChecklists DailyChecklist[]
   webAnalyticsEvents                WebAnalyticsEvent[]
   id                                String                @id @default(cuid())
   businessId                        String                @map("business_id")
@@ -1180,4 +1187,67 @@ enum InventoryStockAlertState {
 enum InventoryAlertLogStatus {
   SENT
   FAILED
+}
+
+enum ChecklistSection {
+  OPENING
+  OPERATIONAL
+  CLOSING
+}
+enum ChecklistItemStatus {
+  PENDING
+  DONE
+}
+enum ChecklistReviewStatus {
+  NOT_REVIEWED
+  REVIEWED
+}
+model ChecklistTemplateItem {
+  id String @id @default(cuid())
+  businessId String
+  outletId String
+  section ChecklistSection
+  title String
+  sortOrder Int @default(0)
+  active Boolean @default(true)
+  business Business @relation(fields: [businessId], references: [id])
+  outlet Outlet @relation(fields: [outletId], references: [id])
+  items DailyChecklistItem[]
+  @@index([businessId, outletId, active])
+  @@map("checklist_template_items")
+}
+model DailyChecklist {
+  id String @id @default(cuid())
+  businessId String
+  outletId String
+  date DateTime @db.Date
+  reviewStatus ChecklistReviewStatus @default(NOT_REVIEWED)
+  reviewedBy String?
+  reviewedAt DateTime?
+  reviewNote String?
+  pendingAtReview Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  business Business @relation(fields: [businessId], references: [id])
+  outlet Outlet @relation(fields: [outletId], references: [id])
+  reviewer User? @relation(fields: [reviewedBy], references: [id])
+  items DailyChecklistItem[]
+  @@unique([businessId, outletId, date])
+  @@map("daily_checklists")
+}
+model DailyChecklistItem {
+  id String @id @default(cuid())
+  dailyChecklistId String
+  templateItemId String
+  title String
+  section ChecklistSection
+  sortOrder Int
+  status ChecklistItemStatus @default(PENDING)
+  completedBy String?
+  completedAt DateTime?
+  dailyChecklist DailyChecklist @relation(fields: [dailyChecklistId], references: [id], onDelete: Cascade)
+  templateItem ChecklistTemplateItem @relation(fields: [templateItemId], references: [id])
+  completer User? @relation(fields: [completedBy], references: [id])
+  @@unique([dailyChecklistId, templateItemId])
+  @@map("daily_checklist_items")
 }

@@ -19,6 +19,7 @@ import OutletPage from './pages/OutletPage';
 import DashboardPage from './pages/DashboardPage';
 import ReportsPage from './pages/ReportsPage';
 import WebAnalyticsPage from './pages/WebAnalyticsPage';
+import ChecklistPage from './pages/ChecklistPage';
 import DailyReportPage from './pages/DailyReportPage';
 import ExpensesPage from './pages/ExpensesPage';
 import SalesHistoryPage from './pages/SalesHistoryPage';
@@ -68,6 +69,7 @@ const navGroups: NavGroup[] = [
       ['/orders', 'Order', ClipboardList],
       ['/orders/preorder-recap', 'Rekap Pre-Order', CalendarDays],
       ['/shift', 'Shift', Clock3],
+      ['/checklists', 'Checklist Harian', ClipboardList],
       ['/inventory', 'Inventory', PackageSearch],
       ['/expenses', 'Pengeluaran', Wallet]
     ]
@@ -91,6 +93,7 @@ const navGroups: NavGroup[] = [
       ['/printers', 'Printer', Printer],
       ['/users', 'User & Akses', Users],
       ['/device', 'Device', Smartphone],
+      ['/settings/checklist', 'Checklist', ClipboardList],
       ['/settings', 'Settings', Settings]
     ]
   }
@@ -107,6 +110,8 @@ function businessIdOf(user: Partial<User> | null | undefined) {
 }
 
 const knownRoutes = new Set([
+  '/checklists',
+  '/settings/checklist',
   '/pos',
   '/menu-availability',
   '/orders',
@@ -164,6 +169,7 @@ function canSeeInventoryPath(user: User, path: string) {
 }
 
 function canSeePath(user: User, path: string) {
+  if (path === '/settings/checklist') return user.role === 'OWNER';
   if (path === '/customers') return user.role === 'OWNER' || user.role === 'SUPERVISOR';
   if (path === '/reports/daily') return user.role === 'OWNER';
   if (path === '/reports/web-analytics') return user.role === 'OWNER';
@@ -480,6 +486,8 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
         <Route path="/categories" element={user.role === 'OWNER' ? <CategoriesPage /> : <Navigate to="/pos" />} />
         <Route path="/variant-groups" element={user.role === 'OWNER' ? <VariantGroupsPage /> : <Navigate to="/pos" />} />
         <Route path="/printers" element={user.role === 'OWNER' ? <PrinterSettings /> : <Navigate to="/pos" />} />
+        <Route path="/checklists" element={<ChecklistPage />} />
+        <Route path="/settings/checklist" element={user.role === 'OWNER' ? <ChecklistPage settings /> : <Navigate to="/checklists" />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/users" element={user.role === 'OWNER' ? <UserManagementPage /> : <Navigate to="/pos" />} />
         <Route path="/products" element={<ProductPage />} />
