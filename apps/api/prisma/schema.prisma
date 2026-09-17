@@ -1275,7 +1275,7 @@ model DailyChecklist {
 model DailyChecklistItem {
   id String @id @default(cuid())
   dailyChecklistId String
-  templateItemId String
+  templateItemId String?
   title String
   section ChecklistSection
   sortOrder Int
@@ -1283,7 +1283,7 @@ model DailyChecklistItem {
   completedBy String?
   completedAt DateTime?
   dailyChecklist DailyChecklist @relation(fields: [dailyChecklistId], references: [id], onDelete: Cascade)
-  templateItem ChecklistTemplateItem @relation(fields: [templateItemId], references: [id])
+  templateItem ChecklistTemplateItem? @relation(fields: [templateItemId], references: [id], onDelete: SetNull)
   completer User? @relation(fields: [completedBy], references: [id])
   @@unique([dailyChecklistId, templateItemId])
   @@map("daily_checklist_items")

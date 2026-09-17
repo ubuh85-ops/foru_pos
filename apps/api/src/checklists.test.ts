@@ -9,8 +9,8 @@ vi.mock('./lib.js', async original => ({
   prisma: {
     outlet: { findFirst: vi.fn(), findMany: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn() },
     dailyChecklist: { findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn(), count: vi.fn() },
-    dailyChecklistItem: { update: vi.fn() },
-    checklistTemplateItem: { createMany: vi.fn(), findMany: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
+    dailyChecklistItem: { update: vi.fn(), createMany: vi.fn(), deleteMany: vi.fn() },
+    checklistTemplateItem: { findFirst: vi.fn(), delete: vi.fn(), createMany: vi.fn(), findMany: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
     $queryRaw: vi.fn(),
     $transaction: vi.fn(),
   },
@@ -31,6 +31,7 @@ afterAll(async () => { await new Promise<void>(resolve => server.close(() => res
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(prisma.$transaction).mockImplementation((async (work: unknown) => typeof work === 'function' ? work(prisma) : Promise.all(work as Promise<unknown>[])) as never);
+  vi.mocked(prisma.checklistTemplateItem.findMany).mockResolvedValue([]);
   vi.mocked(prisma.outlet.findFirst).mockResolvedValue(outlet as never);
   vi.mocked(prisma.outlet.findUniqueOrThrow).mockResolvedValue(outlet as never);
   vi.mocked(prisma.outlet.findMany).mockResolvedValue([outlet] as never);
@@ -118,4 +119,47 @@ it('validates actual dates, outlet timezone day boundaries and progress', () => 
   expect(defaults.OPENING).toHaveLength(10); expect(defaults.OPERATIONAL).toHaveLength(7); expect(defaults.CLOSING).toHaveLength(15);
   expect(progress([{ section: 'OPENING', status: 'DONE' }, { section: 'OPENING', status: 'PENDING' }])[0]).toEqual({ section: 'OPENING', done: 1, total: 2, percent: 50 });
   expect(progress([]).every(section => section.percent === 0)).toBe(true);
+});
+
+describe('Template additions and deletion', () => {
+  const template = { id: 'new-template', title: 'New work', section: 'OPENING', sortOrder: 5, active: true };
+  it('backfills missing active items on opening today and invalidates the review', async () => {
+    vi.mocked(prisma.checklistTemplateItem.findMany).mockResolvedValue([template] as never);
+    expect((await request('/checklists/outlet-a/daily')).status).toBe(200);
+    expect(prisma.dailyChecklistItem.createMany).toHaveBeenCalledWith({ data: [{ dailyChecklistId: 'daily-a', templateItemId: 'new-template', title: 'New work', section: 'OPENING', sortOrder: 5 }], skipDuplicates: true });
+    expect(prisma.dailyChecklist.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ reviewStatus: 'NOT_REVIEWED' }) }));
+  });
+  it('adds a new template to an already generated day in the same transaction', async () => {
+    vi.mocked(prisma.checklistTemplateItem.create).mockResolvedValue(template as never);
+    vi.mocked(prisma.checklistTemplateItem.findMany).mockResolvedValue([template] as never);
+    const { id, ...body } = template;
+    expect((await request('/checklists/outlet-a/templates', 'POST', body, 'OWNER')).status).toBe(201);
+    expect(prisma.dailyChecklistItem.createMany).toHaveBeenCalledOnce();
+  });
+  it('does not duplicate completed items or change historical snapshots', async () => {
+    vi.mocked(prisma.checklistTemplateItem.findMany).mockResolvedValue([template] as never);
+    vi.mocked(prisma.dailyChecklist.findUnique).mockResolvedValue({ ...daily(), items: [{ ...daily().items[0], templateItemId: template.id, status: 'DONE' }] } as never);
+    await request('/checklists/outlet-a/daily');
+    expect(prisma.dailyChecklistItem.createMany).not.toHaveBeenCalled();
+    vi.mocked(prisma.dailyChecklist.findUnique).mockResolvedValue({ ...daily(), date: new Date('2020-01-01') } as never);
+    await request('/checklists/outlet-a/daily?date=2020-01-01');
+    expect(prisma.dailyChecklistItem.createMany).not.toHaveBeenCalled();
+    expect(prisma.dailyChecklist.update).not.toHaveBeenCalled();
+  });
+  it('deletes the template and only its current-day item, retaining historical snapshots', async () => {
+    vi.mocked(prisma.checklistTemplateItem.findFirst).mockResolvedValue(template as never);
+    vi.mocked(prisma.dailyChecklistItem.deleteMany).mockResolvedValue({ count: 1 });
+    expect((await request('/checklists/outlet-a/templates/new-template', 'DELETE', undefined, 'OWNER')).status).toBe(200);
+    expect(prisma.checklistTemplateItem.findFirst).toHaveBeenCalledWith({ where: { id: 'new-template', businessId: 'business-a', outletId: 'outlet-a' } });
+    expect(prisma.dailyChecklistItem.deleteMany).toHaveBeenCalledWith({ where: { dailyChecklistId: 'daily-a', templateItemId: 'new-template' } });
+    expect(prisma.checklistTemplateItem.delete).toHaveBeenCalledWith({ where: { id: 'new-template' } });
+    expect(prisma.dailyChecklist.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ reviewStatus: 'NOT_REVIEWED' }) }));
+  });
+  it('denies deletion by non-owners or for other outlets and unknown templates', async () => {
+    expect((await request('/checklists/outlet-a/templates/new-template', 'DELETE')).status).toBe(403);
+    expect((await request('/checklists/outlet-b/templates/new-template', 'DELETE', undefined, 'OWNER')).status).toBe(403);
+    vi.mocked(prisma.checklistTemplateItem.findFirst).mockResolvedValue(null);
+    expect((await request('/checklists/outlet-a/templates/new-template', 'DELETE', undefined, 'OWNER')).status).toBe(404);
+    expect(prisma.checklistTemplateItem.delete).not.toHaveBeenCalled();
+  });
 });

@@ -48,6 +48,17 @@ async function initialize(tx: Prisma.TransactionClient, businessId: string, outl
   await tx.checklistTemplateItem.createMany({ data: sections.flatMap(section => defaults[section].map((title, sortOrder) => ({ businessId, outletId, title, section, sortOrder }))) });
   await tx.outlet.update({ where: { id: outletId }, data: { checklistInitialized: true } });
 }
+const resetReview = { reviewStatus: 'NOT_REVIEWED' as const, reviewedBy: null, reviewedAt: null, reviewNote: null, pendingAtReview: null };
+async function syncToday(tx: Prisma.TransactionClient, outlet: { id: string; businessId: string; timezone: string }, existing?: Daily) {
+  const daily = existing ?? await tx.dailyChecklist.findUnique({ where: { businessId_outletId_date: { businessId: outlet.businessId, outletId: outlet.id, date: new Date(today(outlet.timezone)) } }, include });
+  if (!daily) return null;
+  const templates = await tx.checklistTemplateItem.findMany({ where: { businessId: outlet.businessId, outletId: outlet.id, active: true } });
+  const known = new Set(daily.items.map(item => item.templateItemId));
+  const missing = templates.filter(item => !known.has(item.id));
+  if (!missing.length) return daily;
+  await tx.dailyChecklistItem.createMany({ data: missing.map(({ id, title, section, sortOrder }) => ({ dailyChecklistId: daily.id, templateItemId: id, title, section, sortOrder })), skipDuplicates: true });
+  return tx.dailyChecklist.update({ where: { id: daily.id }, data: { ...resetReview, updatedAt: new Date() }, include });
+}
 export function registerChecklists(router: Router) {
   router.get('/checklists', asyncRoute(async (req, res) => {
     const input = z.object({ date: dateInput.optional() }).strict().parse(req.query);
@@ -73,7 +84,7 @@ export function registerChecklists(router: Router) {
     const daily = await locked(outlet.id, async tx => {
       const where = { businessId_outletId_date: { businessId: outlet.businessId, outletId: outlet.id, date: new Date(date) } };
       const existing = await tx.dailyChecklist.findUnique({ where, include });
-      if (existing) return existing;
+      if (existing) return date === current ? syncToday(tx, outlet, existing) : existing;
       if (date !== current) return null;
       await initialize(tx, outlet.businessId, outlet.id);
       const templates = await tx.checklistTemplateItem.findMany({ where: { businessId: outlet.businessId, outletId: outlet.id, active: true } });
@@ -120,7 +131,9 @@ export function registerChecklists(router: Router) {
     const outlet = await outletFor(req), input = templateInput.parse(req.body);
     const row = await locked(outlet.id, async tx => {
       await initialize(tx, outlet.businessId, outlet.id);
-      return tx.checklistTemplateItem.create({ data: { ...input, businessId: outlet.businessId, outletId: outlet.id } });
+      const created = await tx.checklistTemplateItem.create({ data: { ...input, businessId: outlet.businessId, outletId: outlet.id } });
+      await syncToday(tx, outlet);
+      return created;
     });
     res.status(201).json(row);
   }));
@@ -129,6 +142,22 @@ export function registerChecklists(router: Router) {
     await locked(outlet.id, async tx => {
       const result = await tx.checklistTemplateItem.updateMany({ where: { id, businessId: outlet.businessId, outletId: outlet.id }, data: input });
       if (!result.count) throw new ApiError(404, 'Item tidak ditemukan');
+      await syncToday(tx, outlet);
+    });
+    res.json({ ok: true });
+  }));
+  router.delete('/checklists/:outletId/templates/:itemId', allow('OWNER'), asyncRoute(async (req, res) => {
+    const outlet = await outletFor(req), id = idInput.parse(req.params.itemId);
+    await locked(outlet.id, async tx => {
+      const template = await tx.checklistTemplateItem.findFirst({ where: { id, businessId: outlet.businessId, outletId: outlet.id } });
+      if (!template) throw new ApiError(404, 'Item tidak ditemukan');
+      const daily = await tx.dailyChecklist.findUnique({ where: { businessId_outletId_date: { businessId: outlet.businessId, outletId: outlet.id, date: new Date(today(outlet.timezone)) } } });
+      if (daily) {
+        const removed = await tx.dailyChecklistItem.deleteMany({ where: { dailyChecklistId: daily.id, templateItemId: id } });
+        if (removed.count) await tx.dailyChecklist.update({ where: { id: daily.id }, data: { ...resetReview, updatedAt: new Date() } });
+      }
+      // Historical snapshots survive: the optional template FK is set to null.
+      await tx.checklistTemplateItem.delete({ where: { id } });
     });
     res.json({ ok: true });
   }));

@@ -8,6 +8,8 @@ Menu: Operasional → Checklist Harian; Pengaturan → Checklist.
 - Template default: 10 Opening, 7 Operational, 15 Closing; dibuat sekali per outlet saat pertama kali checklist atau pengaturannya dibuka.
 - Checklist harian dibuat saat detail hari ini dibuka, menggunakan tanggal zona waktu outlet. Monitoring tidak membuat catatan palsu untuk outlet yang belum membuka checklist.
 - Title, section dan urutan adalah snapshot. Edit/nonaktifkan template hanya memengaruhi checklist yang belum dibuat. Pilih outlet pada pengaturan untuk mengatur template outlet tersebut.
+- Item aktif baru langsung ditambahkan ke checklist hari ini yang sudah dibuat. Saat halaman hari ini dibuka, item aktif yang sebelumnya belum tersalin juga dimasukkan tanpa duplikasi. Penambahan item membatalkan review hari ini.
+- Hapus template menghapus item pengaturan beserta item/status centang hari ini dan membatalkan review jika item tersebut ada. Snapshot history tetap tersimpan dengan templateItemId null. Nonaktifkan tetap tersedia untuk menghentikan item pada hari berikutnya.
 - History hanya baca dan tidak membuat checklist untuk tanggal lampau. History menggunakan pagination 30 hari tercatat per halaman.
 - Semua perubahan checkbox disimpan langsung; kegagalan ditampilkan dan checkbox tidak mengaku tersimpan. Nama dan timestamp berasal dari server.
 - Review belum lengkap membutuhkan konfirmasi; jumlah pending saat review disimpan. Perubahan item setelah review menghapus status/catatan review sebelumnya dan membutuhkan review ulang.
@@ -16,7 +18,9 @@ Menu: Operasional → Checklist Harian; Pengaturan → Checklist.
 
 ## Deployment
 
-Migration baru: `apps/api/prisma/migrations/20260917000000_daily_outlet_checklist/migration.sql`.
+Migration penambahan/hapus item: `apps/api/prisma/migrations/20260917010000_checklist_template_delete/migration.sql`.
+
+Migration awal: `apps/api/prisma/migrations/20260917000000_daily_outlet_checklist/migration.sql`.
 
 Jalankan pada target deployment sebelum backend baru diaktifkan:
 
