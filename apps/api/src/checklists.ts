@@ -33,6 +33,7 @@ async function outletFor(req: Request) {
   assertOutlet(req, id);
   const outlet = await prisma.outlet.findFirst({ where: { id, ...tenantScope(req) } });
   if (!outlet) throw new ApiError(404, 'Outlet tidak ditemukan');
+  if (outlet.status !== 'ACTIVE') throw new ApiError(403, 'Checklist hanya tersedia untuk outlet aktif');
   return outlet;
 }
 // Serialize generation, template changes, ticks and reviews for the same outlet.
@@ -60,13 +61,26 @@ async function syncToday(tx: Prisma.TransactionClient, outlet: { id: string; bus
   return tx.dailyChecklist.update({ where: { id: daily.id }, data: { ...resetReview, updatedAt: new Date() }, include });
 }
 export function registerChecklists(router: Router) {
+  router.get('/checklists/:outletId/settings', allow('OWNER'), asyncRoute(async (req, res) => {
+    const outlet = await outletFor(req);
+    res.json({ reviewRequired: outlet.checklistReviewRequired });
+  }));
+  router.put('/checklists/:outletId/settings', allow('OWNER'), asyncRoute(async (req, res) => {
+    const outlet = await outletFor(req);
+    const input = z.object({ reviewRequired: z.boolean() }).strict().parse(req.body);
+    await locked(outlet.id, async tx => {
+      await tx.outlet.update({ where: { id: outlet.id }, data: { checklistReviewRequired: input.reviewRequired } });
+      await tx.dailyChecklist.updateMany({ where: { businessId: outlet.businessId, outletId: outlet.id, date: new Date(today(outlet.timezone)) }, data: { reviewRequired: input.reviewRequired } });
+    });
+    res.json(input);
+  }));
   router.get('/checklists', asyncRoute(async (req, res) => {
     const input = z.object({ date: dateInput.optional() }).strict().parse(req.query);
-    const outlets = await prisma.outlet.findMany({ where: { ...tenantScope(req), id: { in: req.user!.outletIds } }, orderBy: { name: 'asc' } });
+    const outlets = await prisma.outlet.findMany({ where: { ...tenantScope(req), status: 'ACTIVE', id: { in: req.user!.outletIds } }, orderBy: { name: 'asc' } });
     const rows = await Promise.all(outlets.map(async outlet => {
       const date = input.date || today(outlet.timezone);
       const daily = await prisma.dailyChecklist.findUnique({ where: { businessId_outletId_date: { businessId: outlet.businessId, outletId: outlet.id, date: new Date(date) } }, include });
-      return { outletId: outlet.id, name: outlet.name, date, daily: daily ? present(daily) : null };
+      return { outletId: outlet.id, name: outlet.name, date, reviewRequired: outlet.checklistReviewRequired, daily: daily ? present(daily) : null };
     }));
     res.json({ canReview: req.user!.role === 'OWNER' || req.user!.role === 'SUPERVISOR', canConfigure: req.user!.role === 'OWNER', rows });
   }));
@@ -88,7 +102,7 @@ export function registerChecklists(router: Router) {
       if (date !== current) return null;
       await initialize(tx, outlet.businessId, outlet.id);
       const templates = await tx.checklistTemplateItem.findMany({ where: { businessId: outlet.businessId, outletId: outlet.id, active: true } });
-      return tx.dailyChecklist.create({ data: { businessId: outlet.businessId, outletId: outlet.id, date: new Date(date), items: { create: templates.map(({ id, title, section, sortOrder }) => ({ templateItemId: id, title, section, sortOrder })) } }, include });
+      return tx.dailyChecklist.create({ data: { businessId: outlet.businessId, outletId: outlet.id, date: new Date(date), reviewRequired: outlet.checklistReviewRequired, items: { create: templates.map(({ id, title, section, sortOrder }) => ({ templateItemId: id, title, section, sortOrder })) } }, include });
     });
     res.json({ daily: daily ? present(daily) : null, today: current });
   }));
@@ -113,6 +127,7 @@ export function registerChecklists(router: Router) {
       const row = await tx.dailyChecklist.findFirst({ where: { id: dailyId, businessId: outlet.businessId, outletId: outlet.id }, include });
       if (!row) throw new ApiError(404, 'Checklist tidak ditemukan');
       if (row.date.toISOString().slice(0, 10) !== today(outlet.timezone)) throw new ApiError(409, 'History hanya dapat dilihat');
+      if (!row.reviewRequired) throw new ApiError(409, 'Review tidak diwajibkan untuk outlet ini');
       const pending = row.items.filter(item => item.status === 'PENDING').length;
       if (pending && !input.acceptIncomplete) throw new ApiError(409, `${pending} pekerjaan belum selesai. Konfirmasi review checklist belum lengkap.`);
       return tx.dailyChecklist.update({ where: { id: dailyId }, data: { reviewStatus: 'REVIEWED', reviewedBy: req.user!.id, reviewedAt: new Date(), reviewNote: input.note, pendingAtReview: pending }, include });

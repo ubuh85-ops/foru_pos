@@ -8,7 +8,7 @@ vi.mock('./lib.js', async original => ({
   ...await original<typeof import('./lib.js')>(),
   prisma: {
     outlet: { findFirst: vi.fn(), findMany: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn() },
-    dailyChecklist: { findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn(), count: vi.fn() },
+    dailyChecklist: { updateMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn(), count: vi.fn() },
     dailyChecklistItem: { update: vi.fn(), createMany: vi.fn(), deleteMany: vi.fn() },
     checklistTemplateItem: { findFirst: vi.fn(), delete: vi.fn(), createMany: vi.fn(), findMany: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
     $queryRaw: vi.fn(),
@@ -16,8 +16,8 @@ vi.mock('./lib.js', async original => ({
   },
 }));
 let server: Server, base: string;
-const outlet = { id: 'outlet-a', businessId: 'business-a', timezone: 'Asia/Jakarta', checklistInitialized: true };
-const daily = () => ({ id: 'daily-a', date: new Date(today(outlet.timezone)), businessId: 'business-a', outletId: 'outlet-a', reviewStatus: 'NOT_REVIEWED', items: [{ id: 'item-a', title: 'Bersih', section: 'OPENING', sortOrder: 0, status: 'PENDING', completedAt: null, completedBy: null }], reviewer: null });
+const outlet = { id: 'outlet-a', businessId: 'business-a', timezone: 'Asia/Jakarta', status: 'ACTIVE', checklistReviewRequired: true, checklistInitialized: true };
+const daily = () => ({ id: 'daily-a', date: new Date(today(outlet.timezone)), businessId: 'business-a', outletId: 'outlet-a', reviewStatus: 'NOT_REVIEWED', reviewRequired: true, items: [{ id: 'item-a', title: 'Bersih', section: 'OPENING', sortOrder: 0, status: 'PENDING', completedAt: null, completedBy: null }], reviewer: null });
 beforeAll(async () => {
   const app = express(); app.use(express.json());
   app.use((req, _res, next) => { req.user = { id: 'user-a', businessId: 'business-a', membershipId: 'member-a', role: req.headers['x-role'] === 'OWNER' ? 'OWNER' : req.headers['x-role'] === 'CASHIER' ? 'CASHIER' : 'SUPERVISOR', outletIds: ['outlet-a'], inventoryPermissions: [], assignedWarehouseId: null }; next(); });
@@ -50,7 +50,7 @@ describe('Checklist access and lifecycle', () => {
     await request('/checklists/outlet-a/daily');
     expect(prisma.outlet.findFirst).toHaveBeenCalledWith({ where: { id: 'outlet-a', businessId: 'business-a' } });
     await request('/checklists');
-    expect(prisma.outlet.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { businessId: 'business-a', id: { in: ['outlet-a'] } } }));
+    expect(prisma.outlet.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { businessId: 'business-a', status: 'ACTIVE', id: { in: ['outlet-a'] } } }));
   });
   it('blocks cashier reviews and supervisor configuration', async () => {
     expect((await request(`${root}/review`, 'POST', { confirmed: true }, 'CASHIER')).status).toBe(403);
@@ -161,5 +161,36 @@ describe('Template additions and deletion', () => {
     vi.mocked(prisma.checklistTemplateItem.findFirst).mockResolvedValue(null);
     expect((await request('/checklists/outlet-a/templates/new-template', 'DELETE', undefined, 'OWNER')).status).toBe(404);
     expect(prisma.checklistTemplateItem.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('Per-outlet review and active outlets', () => {
+  it('blocks all checklist access for inactive outlets', async () => {
+    vi.mocked(prisma.outlet.findFirst).mockResolvedValue({ ...outlet, status: 'INACTIVE' } as never);
+    for (const path of ['/daily', '/history', '/templates', '/settings']) {
+      expect((await request('/checklists/outlet-a' + path, 'GET', undefined, 'OWNER')).status).toBe(403);
+    }
+    expect(prisma.dailyChecklist.create).not.toHaveBeenCalled();
+  });
+  it('allows only owners to configure review and only updates the selected outlet and today', async () => {
+    expect((await request('/checklists/outlet-a/settings', 'PUT', { reviewRequired: false })).status).toBe(403);
+    expect((await request('/checklists/outlet-a/settings', 'PUT', { reviewRequired: false }, 'OWNER')).status).toBe(200);
+    expect(prisma.outlet.update).toHaveBeenCalledWith({ where: { id: 'outlet-a' }, data: { checklistReviewRequired: false } });
+    expect(prisma.dailyChecklist.updateMany).toHaveBeenCalledWith({ where: { businessId: 'business-a', outletId: 'outlet-a', date: new Date(today(outlet.timezone)) }, data: { reviewRequired: false } });
+  });
+  it('rejects review when not required and validates configuration', async () => {
+    vi.mocked(prisma.dailyChecklist.findFirst).mockResolvedValue({ ...daily(), reviewRequired: false } as never);
+    expect((await request(root + '/review', 'POST', { confirmed: true, acceptIncomplete: true })).status).toBe(409);
+    expect((await request('/checklists/outlet-a/settings', 'PUT', { reviewRequired: 'false' }, 'OWNER')).status).toBe(400);
+    expect(prisma.dailyChecklist.update).not.toHaveBeenCalled();
+  });
+  it('generates the selected outlet templates with its review policy', async () => {
+    vi.mocked(prisma.outlet.findFirst).mockResolvedValue({ ...outlet, checklistReviewRequired: false } as never);
+    vi.mocked(prisma.dailyChecklist.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.dailyChecklist.create).mockResolvedValue({ ...daily(), reviewRequired: false } as never);
+    vi.mocked(prisma.checklistTemplateItem.findMany).mockResolvedValue([{ id: 'only-outlet-a', title: 'Outlet A only', section: 'OPENING', sortOrder: 0 }] as never);
+    expect((await request('/checklists/outlet-a/daily')).status).toBe(200);
+    expect(prisma.checklistTemplateItem.findMany).toHaveBeenCalledWith({ where: { businessId: 'business-a', outletId: 'outlet-a', active: true } });
+    expect(prisma.dailyChecklist.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ outletId: 'outlet-a', reviewRequired: false, items: { create: [{ templateItemId: 'only-outlet-a', title: 'Outlet A only', section: 'OPENING', sortOrder: 0 }] } }) }));
   });
 });

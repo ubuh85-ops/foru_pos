@@ -110,6 +110,7 @@ model BusinessMembership {
 }
 
 model Outlet {
+  checklistReviewRequired Boolean @default(true)
   checklistInitialized Boolean @default(false)
   checklistTemplates ChecklistTemplateItem[]
   dailyChecklists DailyChecklist[]
@@ -1254,6 +1255,7 @@ model ChecklistTemplateItem {
   @@map("checklist_template_items")
 }
 model DailyChecklist {
+  reviewRequired Boolean @default(true)
   id String @id @default(cuid())
   businessId String
   outletId String

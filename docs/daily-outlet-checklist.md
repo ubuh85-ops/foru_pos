@@ -36,3 +36,13 @@ Tidak ada migrasi lama yang diubah. Tidak perlu seed ulang atau reset database. 
 ## Validation
 
 `apps/api/src/checklists.test.ts` menguji endpoint dengan Express dan Prisma mock: pembatasan bisnis/outlet/role, snapshot, default, tanggal/zona waktu, auto-save attribution, uncheck, review belum lengkap, history read-only, dan deactivation. Pengujian ini tidak menggantikan smoke test terhadap PostgreSQL pada lingkungan deployment, terutama transaksi concurrent.
+
+## Review dan checklist per outlet
+
+Owner mengatur **Wajib review Leader** melalui Pengaturan → Checklist setelah memilih outlet. Default tetap aktif untuk menjaga perilaku sebelumnya. Perubahan berlaku untuk hari ini dan checklist baru; history menyimpan kebijakan review pada hari tersebut. Jika dimatikan, UI menampilkan “Review tidak diwajibkan” dan server tidak menerima review hari itu.
+
+Item/template tetap terpisah berdasarkan businessId dan outletId. Tambah, edit, nonaktifkan, atau hapus hanya memengaruhi outlet yang dipilih. Pilihan outlet dipertahankan saat berpindah antara checklist dan pengaturannya.
+
+Checklist dan monitoring hanya menampilkan outlet ACTIVE yang diizinkan. Endpoint juga menolak akses outlet nonaktif; catatan lamanya tidak dihapus.
+
+Migration: `20260917020000_checklist_outlet_review`.
