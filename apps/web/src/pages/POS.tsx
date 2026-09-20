@@ -64,6 +64,7 @@ export default function POS() {
   const [cat, setCat] = useState('Semua');
   const [menuView, setMenuView] = useState<'grid' | 'list'>(() => localStorage.getItem('foru:pos_menu_view') === 'list' ? 'list' : 'grid');
   const [cartCollapsed, setCartCollapsed] = useState(() => localStorage.getItem('foru:pos_cart_collapsed') === '1');
+  const [mobileCartOpen, setMobileCartOpen] = useState(false);
   const [pageSize, setPageSize] = useState(() => Number(localStorage.getItem('foru:pos_page_size') || 20));
   const [page, setPage] = useState(1);
   const [expandedCart, setExpandedCart] = useState<Record<string, boolean>>({});
@@ -229,17 +230,24 @@ export default function POS() {
     }).catch(e => setError((e as Error).message));
   }, [editOrderId, setSelectedOutletId]);
   useEffect(() => {
-    if (!config && !payOpen && !receipt) return;
+    if (!config && !payOpen && !receipt && !mobileCartOpen) return;
     history.pushState({ ...(history.state || {}), foruPosWindow: true }, '', location.href);
     const closeTopWindow = () => {
       if (receipt) setReceipt(null);
       else if (payOpen) setPayOpen(false);
       else if (config) setConfig(null);
+      else if (mobileCartOpen) setMobileCartOpen(false);
       history.pushState({ ...(history.state || {}), foruBackGuard: true }, '', location.href);
     };
     window.addEventListener('popstate', closeTopWindow, { once: true });
     return () => window.removeEventListener('popstate', closeTopWindow);
-  }, [config, payOpen, receipt]);
+  }, [config, payOpen, receipt, mobileCartOpen]);
+  useEffect(() => {
+    if (!mobileCartOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, [mobileCartOpen]);
 
   const shiftOpen = !!activeShift && activeShift.status === 'OPEN' && activeShift.outletId === outlet;
   const cats = ['Semua', ...new Set(products.map(catName))];
@@ -410,7 +418,7 @@ export default function POS() {
       setAcceptingOrderId(null);
     }
   }
-  function resetCart() { setCart([]); setCoupon(''); setCouponDiscount(0); setTrxDisc(undefined); setCustomerName(''); setCustomerPhone(''); setTableNumber(''); setOrderNote(''); if (outlet) localStorage.removeItem(`foru:pos_cart:${outlet}`); }
+  function resetCart() { setCart([]); setMobileCartOpen(false); setCoupon(''); setCouponDiscount(0); setTrxDisc(undefined); setCustomerName(''); setCustomerPhone(''); setTableNumber(''); setOrderNote(''); if (outlet) localStorage.removeItem(`foru:pos_cart:${outlet}`); }
   function cancelOrderEdit() {
     const orderId = editingOrder?.id || editOrderId;
     setEditingOrder(null);
@@ -464,7 +472,7 @@ export default function POS() {
   md:overflow-hidden 
 ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,1fr)_320px] lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_380px]'}
   `}>
-    <section className="flex min-h-0 min-w-0 flex-col p-3 sm:p-4 md:overflow-hidden md:p-4 2xl:p-5">
+    <section className={`flex min-h-0 min-w-0 flex-col p-3 sm:p-4 md:overflow-hidden md:p-4 2xl:p-5 ${cart.length ? 'pb-28 sm:pb-28 md:pb-4' : ''}`}>
       <div className="mb-3 rounded-[2rem] bg-white/95 p-2.5 shadow-sm ring-1 ring-black/5 sm:p-3">
         <div className="flex min-w-0 flex-col gap-2 md:flex-row md:items-center">
           <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -574,13 +582,14 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
       <button onClick={() => navigate('/orders?status=PENDING_PAYMENT')} className="grid h-11 w-11 place-items-center rounded-2xl bg-white text-brand-700 shadow-sm ring-1 ring-black/5" title="Orders"><ClipboardList size={19} /></button>
     </aside>}
 
-    <aside className={`${cartCollapsed ? 'md:hidden' : ''} relative flex min-w-0 flex-col border-t bg-slate-50 shadow-[-8px_0_24px_rgba(15,23,42,0.06)] md:sticky md:top-16 md:h-[calc(100vh-4rem)] md:min-h-0 md:gap-3 md:overflow-y-auto md:overscroll-contain md:border-l md:border-t-0 md:bg-[#f8faf6] md:p-3`}>
+    <aside data-back-modal={mobileCartOpen ? 'true' : undefined} className={`${mobileCartOpen ? 'fixed inset-0 z-50 flex h-[100dvh] overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]' : 'hidden'} ${cartCollapsed ? 'md:hidden' : 'md:flex'} min-w-0 flex-col border-t bg-slate-50 shadow-[-8px_0_24px_rgba(15,23,42,0.06)] md:inset-auto md:z-auto md:sticky md:top-16 md:h-[calc(100vh-4rem)] md:min-h-0 md:gap-3 md:overflow-y-auto md:overscroll-contain md:border-l md:border-t-0 md:bg-[#f8faf6] md:p-3`}>
       <div className="min-h-[220px] flex-none bg-slate-50/70 p-3 md:min-h-[180px] md:max-h-[60vh] md:overflow-y-auto md:overscroll-contain md:bg-transparent md:p-0">
         <div className="flex min-h-full flex-col rounded-3xl bg-white p-3 shadow-sm ring-1 ring-black/5 md:min-h-0 md:rounded-[1.75rem] md:border md:border-slate-100 md:p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3"><ShoppingBag className="shrink-0 text-slate-600" size={22} /><h2 className="truncate text-sm font-black text-ink">Pesanan ({cart.reduce((s, x) => s + x.qty, 0)})</h2></div>
             <div className="flex shrink-0 items-center gap-1">
               <button onClick={clearCart} disabled={!cart.length} className="flex shrink-0 items-center gap-1 rounded-xl px-2 py-1 text-sm font-semibold text-red-600 disabled:opacity-40"><Trash2 size={16} />Kosongkan</button>
+              <button data-back-close="true" onClick={() => setMobileCartOpen(false)} className="grid h-9 w-9 place-items-center rounded-xl border text-slate-500 md:hidden" title="Tutup pesanan" aria-label="Tutup pesanan"><X size={18} /></button>
               <button onClick={() => changeCartCollapsed(true)} className="hidden h-9 w-9 place-items-center rounded-xl border text-slate-500 hover:bg-brand-50 hover:text-brand-700 md:grid" title="Sembunyikan pesanan"><ChevronRight size={18} /></button>
             </div>
           </div>
@@ -659,12 +668,12 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
           <button onClick={applyTransactionDiscount} className="rounded-2xl bg-brand-50 px-3 py-2 text-xs font-extrabold text-brand-700">+ Diskon transaksi</button>
         </div>
       </div>
-<div className="shrink-0 border-t bg-white p-4 pb-[max(6rem,env(safe-area-inset-bottom))] md:rounded-[1.75rem] md:border md:border-slate-100 md:p-4 md:shadow-sm">
+<div className="shrink-0 border-t bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:rounded-[1.75rem] md:border md:border-slate-100 md:p-4 md:shadow-sm">
         <div className="space-y-1.5 text-sm"><Row label={`Subtotal (${cart.reduce((s, x) => s + x.qty, 0)} item)`} n={summary.subtotal} /><Row label="Diskon Item" n={-summary.productDiscount} /><Row label="Diskon Transaksi" n={-summary.transactionDiscount} /><Row label="Diskon Kupon" n={-couponDiscount} /><Row label="PPN (0%)" n={0} /></div>
         <div className="mt-3 flex items-end justify-between border-t pt-3"><b className="text-2xl text-ink md:text-xl">Total</b><strong className="money text-3xl text-brand-700 md:text-2xl">{rupiah(summary.grand)}</strong></div>
         <div className="mt-4 grid grid-cols-2 gap-3 md:mt-3">
           <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={saveOrder} className="h-14 rounded-2xl border border-brand-600 bg-white px-3 text-sm font-black text-brand-700 disabled:opacity-40 md:h-12">{orderSubmitting ? 'Menyimpan...' : editingOrder ? 'Update Open Bill' : 'Simpan Open Bill'}</button>
-          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={() => setPayOpen(true)} className="btn-primary h-14 rounded-2xl text-sm font-black md:h-12 md:text-base">Bayar</button>
+          <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={() => { setMobileCartOpen(false); setPayOpen(true); }} className="btn-primary h-14 rounded-2xl text-sm font-black md:h-12 md:text-base">Bayar</button>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2">
           <button disabled={!cart.length || !shiftOpen || orderSubmitting} onClick={saveOrder} className="rounded-2xl border px-2 py-3 text-xs font-extrabold text-slate-600 disabled:opacity-40">{orderSubmitting ? 'Menyimpan...' : 'Open Bill'}</button>
@@ -673,6 +682,12 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
         {editingOrder && <button onClick={cancelOrderEdit} className="mt-2 w-full rounded-2xl border px-4 py-3 text-sm font-extrabold text-slate-500">Cancel Edit</button>}
       </div>
     </aside>
+    {!mobileCartOpen && !config && !payOpen && !receipt && cart.length > 0 && <div className="fixed inset-x-3 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-[45] md:hidden">
+      <button onClick={() => setMobileCartOpen(true)} className="mx-auto flex h-16 w-full max-w-2xl items-center justify-between gap-3 rounded-2xl bg-brand-600 px-5 text-left text-white shadow-[0_14px_36px_rgba(127,29,29,0.32)] ring-1 ring-white/20" aria-label={`${editingOrder ? 'Review update' : 'Lihat pesanan'}, ${cart.reduce((s, x) => s + x.qty, 0)} item, total ${rupiah(summary.grand)}`}>
+        <span className="flex min-w-0 items-center gap-3"><ShoppingBag className="shrink-0" size={21} /><b className="truncate text-sm">{editingOrder ? 'Review Update' : 'Lihat Pesanan'} · {cart.reduce((s, x) => s + x.qty, 0)} item</b></span>
+        <strong className="money shrink-0 text-base">{rupiah(summary.grand)}</strong>
+      </button>
+    </div>}
     {dialog?.kind === 'confirm' && <ConfirmDialog
       tone={dialog.tone}
       title={dialog.title}
