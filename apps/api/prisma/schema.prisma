@@ -233,7 +233,8 @@ model Product {
   variantGroups      ProductVariantGroup[]
   variants           ProductVariant[]
   saleItems          SaleItem[]
-  recipes            ProductRecipe[]
+  recipes            ProductRecipe[]       @relation("ProductRecipeOwner")
+  recipeUsages       ProductRecipe[]       @relation("ProductRecipeComponent")
   inventoryMovements InventoryMovement[]
   business           Business              @relation(fields: [businessId], references: [id])
   sop                ProductSop?
@@ -415,21 +416,26 @@ model ProductChannelPrice {
 }
 
 model ProductRecipe {
-  id              String        @id @default(cuid())
-  productId       String        @map("product_id")
-  inventoryItemId String        @map("inventory_item_id")
-  usageQty        Decimal       @map("usage_qty") @db.Decimal(14, 3)
-  usageUnitId     String        @map("usage_unit_id")
-  wastePercent    Decimal       @default(0) @map("waste_percent") @db.Decimal(5, 2)
-  isActive        Boolean       @default(true) @map("is_active")
-  createdAt       DateTime      @default(now()) @map("created_at")
-  updatedAt       DateTime      @updatedAt @map("updated_at")
-  product         Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
-  item            InventoryItem @relation(fields: [inventoryItemId], references: [id])
-  usageUnit       InventoryUnit @relation(fields: [usageUnitId], references: [id])
+  id                 String         @id @default(cuid())
+  productId          String         @map("product_id")
+  inventoryItemId    String?        @map("inventory_item_id")
+  componentProductId String?        @map("component_product_id")
+  usageQty           Decimal        @map("usage_qty") @db.Decimal(14, 3)
+  usageUnitId        String?        @map("usage_unit_id")
+  componentUnit      String?        @map("component_unit")
+  wastePercent       Decimal        @default(0) @map("waste_percent") @db.Decimal(5, 2)
+  isActive           Boolean        @default(true) @map("is_active")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+  product            Product        @relation("ProductRecipeOwner", fields: [productId], references: [id], onDelete: Cascade)
+  componentProduct   Product?       @relation("ProductRecipeComponent", fields: [componentProductId], references: [id], onDelete: Restrict)
+  item               InventoryItem? @relation(fields: [inventoryItemId], references: [id])
+  usageUnit          InventoryUnit? @relation(fields: [usageUnitId], references: [id])
 
   @@unique([productId, inventoryItemId])
+  @@unique([productId, componentProductId])
   @@index([inventoryItemId])
+  @@index([componentProductId])
   @@index([usageUnitId])
   @@map("product_recipes")
 }

@@ -226,6 +226,7 @@ export default function ProductPage() {
   const [outlets, setOutlets] = useState<any[]>([]);
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
   const [inventoryUnits, setInventoryUnits] = useState<any[]>([]);
+  const [recipeProducts, setRecipeProducts] = useState<any[]>([]);
   const [edit, setEdit] = useState<any>(null);
   const [error, setError] = useState("");
   const [search, setSearch] = useState(urlParams.get("search") || "");
@@ -273,6 +274,7 @@ export default function ProductPage() {
     api<any[]>("/inventory/units")
       .then(setInventoryUnits)
       .catch(() => setInventoryUnits([]));
+    api<any[]>("/products").then(setRecipeProducts).catch(() => setRecipeProducts([]));
     return subscribeMasterDataChanged(() => {
       setRefreshKey((value) => value + 1);
       api<any[]>("/variant-groups").then(setGroups);
@@ -542,17 +544,34 @@ export default function ProductPage() {
         }
       );
       const productId = edit?.id || saved?.id;
-      const recipeItemIds = f.getAll("recipeInventoryItemId").map(String);
-      const recipeRows = recipeItemIds
-        .map((inventoryItemId, i) => ({
-          inventoryItemId,
-          usageQty: Number(f.getAll("recipeUsageQty")[i] || 0),
-          usageUnitId: String(f.getAll("recipeUsageUnitId")[i] || ""),
-          wastePercent: Number(f.getAll("recipeWastePercent")[i] || 0),
-          isActive: true,
-        }))
-        .filter(
-          (row) => row.inventoryItemId && row.usageUnitId && row.usageQty > 0
+      const recipeTypes = f.getAll("recipeSourceType").map(String);
+      const recipeRows = recipeTypes
+        .map((sourceType, i) => {
+          const usageQty = Number(f.getAll("recipeUsageQty")[i] || 0);
+          const wastePercent = Number(f.getAll("recipeWastePercent")[i] || 0);
+          if (sourceType === "PRODUCT") {
+            return {
+              sourceType,
+              componentProductId: String(f.getAll("recipeSourceId")[i] || ""),
+              componentUnit: String(f.getAll("recipeComponentUnit")[i] || "unit"),
+              usageQty,
+              wastePercent,
+              isActive: true,
+            };
+          }
+          return {
+            sourceType: "INVENTORY",
+            inventoryItemId: String(f.getAll("recipeSourceId")[i] || ""),
+            usageUnitId: String(f.getAll("recipeUsageUnitId")[i] || ""),
+            usageQty,
+            wastePercent,
+            isActive: true,
+          };
+        })
+        .filter((row: any) =>
+          row.usageQty > 0 && (row.sourceType === "PRODUCT"
+            ? row.componentProductId && row.componentUnit
+            : row.inventoryItemId && row.usageUnitId)
         );
       if (productId && (recipeRows.length || edit?.recipes?.length)) {
         await api(`/products/${productId}/recipe`, {
@@ -925,6 +944,7 @@ export default function ProductPage() {
               product={edit}
               items={inventoryItems}
               units={inventoryUnits}
+              products={recipeProducts}
             />
             <div className="mt-5">
               <label className="label">Outlet Availability & Pricing</label>
@@ -1163,16 +1183,21 @@ function RecipeSection({
   product,
   items,
   units,
+  products,
 }: {
   product: any;
   items: any[];
   units: any[];
+  products: any[];
 }) {
   const initialRows = (product.recipes || [])
     .filter((x: any) => x.isActive !== false)
     .map((x: any) => ({
       key: x.id,
-      inventoryItemId: x.inventoryItemId,
+      sourceType: x.componentProductId ? "PRODUCT" : "INVENTORY",
+      inventoryItemId: x.inventoryItemId || items[0]?.id || "",
+      componentProductId: x.componentProductId || products.find((candidate) => candidate.id !== product.id && candidate.status !== "INACTIVE")?.id || "",
+      componentUnit: x.componentUnit || "unit",
       usageQty: Number(x.usageQty || 0),
       usageUnitId: x.usageUnitId,
       wastePercent: Number(x.wastePercent || 0),
@@ -1185,7 +1210,10 @@ function RecipeSection({
       ...v,
       {
         key: `new-${Date.now()}`,
+        sourceType: "INVENTORY",
         inventoryItemId: items[0]?.id || "",
+        componentProductId: products.find((candidate) => candidate.id !== product.id)?.id || "",
+        componentUnit: "unit",
         usageQty: 1,
         usageUnitId: items[0]?.unitId || units[0]?.id || "",
         wastePercent: 0,
@@ -1193,24 +1221,26 @@ function RecipeSection({
     ]);
   const remove = (key: string) =>
     setRows((v) => v.filter((x) => x.key !== key));
+  const update = (key: string, patch: any) =>
+    setRows((value) => value.map((row) => row.key === key ? { ...row, ...patch } : row));
+  const componentProducts = products.filter((candidate) => candidate.id !== product.id && candidate.status !== "INACTIVE");
   return (
     <section className="mt-5 rounded-3xl border bg-slate-50 p-4">
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div>
           <p className="label mb-1">Recipe / Bahan terpakai</p>
           <p className="text-xs text-slate-400">
-            Opsional. Dipakai untuk potong stok bahan saat transaksi paid. HPP
-            laporan tetap dari produk.
+            Bisa memakai bahan baku atau produk lain sebagai sub-resep. Stok
+            ditelusuri sampai bahan baku paling bawah. HPP laporan tetap dari produk.
           </p>
         </div>
         <button type="button" onClick={add} className="btn-soft shrink-0">
-          <Plus size={16} /> Tambah Bahan
+          <Plus size={16} /> Tambah Komponen
         </button>
       </div>
-      {!items.length || !units.length ? (
+      {(!items.length || !units.length) && !componentProducts.length ? (
         <div className="mt-4 rounded-2xl bg-amber-50 p-3 text-sm text-amber-700">
-          Master bahan baku / satuan belum tersedia atau user tidak memiliki
-          akses inventory.
+          Master bahan baku, satuan, atau produk komponen belum tersedia.
         </div>
       ) : null}
       <div className="mt-4 space-y-3">
@@ -1220,7 +1250,7 @@ function RecipeSection({
             key={row.key}
           >
             <div className="mb-2 flex items-center justify-between gap-3">
-              <b className="text-sm">Bahan #{idx + 1}</b>
+              <b className="text-sm">Komponen #{idx + 1}</b>
               <button
                 type="button"
                 onClick={() => remove(row.key)}
@@ -1229,21 +1259,38 @@ function RecipeSection({
                 <Trash2 size={15} />
               </button>
             </div>
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_130px_150px_120px]">
+            <div className="mb-3 grid gap-3 sm:grid-cols-2">
               <label>
-                <span className="label">Bahan</span>
+                <span className="label">Jenis komponen</span>
                 <select
                   className="input"
-                  name="recipeInventoryItemId"
-                  defaultValue={row.inventoryItemId}
+                  name="recipeSourceType"
+                  value={row.sourceType}
+                  onChange={(event) => update(row.key, event.target.value === "PRODUCT"
+                    ? { sourceType: "PRODUCT", componentProductId: row.componentProductId || componentProducts[0]?.id || "" }
+                    : { sourceType: "INVENTORY", inventoryItemId: row.inventoryItemId || items[0]?.id || "", usageUnitId: row.usageUnitId || items[0]?.unitId || units[0]?.id || "" })}
                 >
-                  {items.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name} ({item.code})
+                  <option value="INVENTORY">Bahan baku</option>
+                  <option value="PRODUCT">Produk / sub-resep</option>
+                </select>
+              </label>
+              <label>
+                <span className="label">{row.sourceType === "PRODUCT" ? "Produk komponen" : "Bahan"}</span>
+                <select
+                  className="input"
+                  name="recipeSourceId"
+                  value={row.sourceType === "PRODUCT" ? row.componentProductId : row.inventoryItemId}
+                  onChange={(event) => update(row.key, row.sourceType === "PRODUCT" ? { componentProductId: event.target.value } : { inventoryItemId: event.target.value })}
+                >
+                  {(row.sourceType === "PRODUCT" ? componentProducts : items).map((source) => (
+                    <option key={source.id} value={source.id}>
+                      {source.name}{source.code || source.sku ? ` (${source.code || source.sku})` : ""}
                     </option>
                   ))}
                 </select>
               </label>
+            </div>
+            <div className="grid gap-3 md:grid-cols-[130px_150px_120px]">
               <label>
                 <span className="label">Qty</span>
                 <input
@@ -1255,20 +1302,21 @@ function RecipeSection({
                   defaultValue={row.usageQty}
                 />
               </label>
-              <label>
-                <span className="label">Satuan</span>
-                <select
-                  className="input"
-                  name="recipeUsageUnitId"
-                  defaultValue={row.usageUnitId}
-                >
-                  {units.map((unit) => (
-                    <option key={unit.id} value={unit.id}>
-                      {unit.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {row.sourceType === "PRODUCT" ? (
+                <label>
+                  <span className="label">Satuan produk</span>
+                  <input className="input" name="recipeComponentUnit" value={row.componentUnit} onChange={(event) => update(row.key, { componentUnit: event.target.value })} placeholder="shot / porsi" />
+                  <input type="hidden" name="recipeUsageUnitId" value="" />
+                </label>
+              ) : (
+                <label>
+                  <span className="label">Satuan</span>
+                  <select className="input" name="recipeUsageUnitId" value={row.usageUnitId} onChange={(event) => update(row.key, { usageUnitId: event.target.value })}>
+                    {units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
+                  </select>
+                  <input type="hidden" name="recipeComponentUnit" value="" />
+                </label>
+              )}
               <label>
                 <span className="label">Waste %</span>
                 <input

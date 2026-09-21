@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { ArrowDown, ArrowUp, BookOpen, ChefHat, Clock3, Plus, Search, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, BookOpen, ChefHat, Clock3, Copy, Plus, Search, Trash2, X } from 'lucide-react';
 import { API, api, type User } from '../api';
 import { useOutlet } from '../OutletContext';
 import { toast } from '../toast';
+import { appConfirm } from '../components/ui/AppDialog';
 import foruLogo from '/images/foru.png';
 
 type SopStatus = 'DRAFT' | 'PUBLISHED' | 'INACTIVE';
@@ -25,7 +26,7 @@ type SopProduct = {
   status: string;
   category?: { id: string; name: string; sortOrder: number } | null;
   categoryName: string;
-  recipe: Array<{ id: string; ingredientCode?: string | null; ingredientName: string; qty: number; unit: string; wastePercent: number }>;
+  recipe: Array<{ id: string; sourceType?: 'INVENTORY' | 'PRODUCT'; ingredientCode?: string | null; ingredientName: string; qty: number; unit: string; wastePercent: number }>;
   sop?: ProductSop | null;
 };
 type SopForm = { title: string; equipment: string; steps: SopStep[]; servingNotes: string; status: SopStatus };
@@ -109,6 +110,7 @@ export default function ProductSopPage({ user }: { user: User }) {
     {editing && (
       <SopEditor
         product={editing}
+        products={products}
         onClose={() => setEditing(null)}
         onSaved={async () => { setEditing(null); await load(); }}
       />
@@ -130,7 +132,7 @@ function SopDetail({ product, canManage, onClose, onEdit }: { product: SopProduc
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
           <div className="space-y-5">
             <img src={imageSrc(product.imageUrl)} alt={product.name} className="aspect-[4/3] w-full rounded-3xl bg-brand-50 object-cover" onError={event => { event.currentTarget.src = foruLogo; event.currentTarget.className = 'aspect-[4/3] w-full rounded-3xl bg-brand-50 object-contain p-12'; }}/>
-            {!!product.recipe.length && <section className="rounded-3xl bg-slate-50 p-4"><h3 className="mb-3 flex items-center gap-2 font-black"><ChefHat size={19}/> Bahan resep</h3><div className="space-y-2">{product.recipe.map(item => <div key={item.id} className="flex items-start justify-between gap-3 border-t border-slate-200 pt-2 text-sm"><span>{item.ingredientName}{item.ingredientCode ? <small className="ml-1 text-slate-400">({item.ingredientCode})</small> : null}</span><b className="shrink-0">{item.qty} {item.unit}{item.wastePercent ? ` + ${item.wastePercent}%` : ''}</b></div>)}</div></section>}
+            {!!product.recipe.length && <section className="rounded-3xl bg-slate-50 p-4"><h3 className="mb-3 flex items-center gap-2 font-black"><ChefHat size={19}/> Komponen resep</h3><div className="space-y-2">{product.recipe.map(item => <div key={item.id} className="flex items-start justify-between gap-3 border-t border-slate-200 pt-2 text-sm"><span>{item.ingredientName}{item.ingredientCode ? <small className="ml-1 text-slate-400">({item.ingredientCode})</small> : null}{item.sourceType === 'PRODUCT' ? <small className="ml-2 rounded-full bg-brand-50 px-2 py-0.5 font-bold text-brand-700">Sub-resep</small> : null}</span><b className="shrink-0">{item.qty} {item.unit}{item.wastePercent ? ` + ${item.wastePercent}%` : ''}</b></div>)}</div></section>}
             {sop.equipment && <section className="rounded-3xl border p-4"><h3 className="mb-2 font-black">Persiapan & peralatan</h3><p className="whitespace-pre-line text-sm leading-relaxed text-slate-600">{sop.equipment}</p></section>}
           </div>
           <section><h3 className="mb-4 flex items-center gap-2 text-xl font-black"><BookOpen size={21}/> Cara pembuatan</h3><ol className="space-y-3">{sop.steps.map((step, index) => <li key={step.id || index} className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 rounded-2xl border p-4"><span className="grid h-9 w-9 place-items-center rounded-full bg-brand-600 font-black text-white">{index + 1}</span><div><p className="whitespace-pre-line leading-relaxed text-slate-700">{step.instruction}</p>{step.durationMinutes ? <p className="mt-2 flex items-center gap-1 text-xs font-bold text-slate-400"><Clock3 size={14}/>{step.durationMinutes} menit</p> : null}</div></li>)}</ol>{sop.servingNotes && <div className="mt-5 rounded-3xl bg-amber-50 p-4 text-amber-900"><b className="block">Catatan penyajian</b><p className="mt-1 whitespace-pre-line text-sm leading-relaxed">{sop.servingNotes}</p></div>}</section>
@@ -141,12 +143,26 @@ function SopDetail({ product, canManage, onClose, onEdit }: { product: SopProduc
   </div>;
 }
 
-function SopEditor({ product, onClose, onSaved }: { product: SopProduct; onClose: () => void; onSaved: () => void | Promise<void> }) {
+function SopEditor({ product, products, onClose, onSaved }: { product: SopProduct; products: SopProduct[]; onClose: () => void; onSaved: () => void | Promise<void> }) {
   const [form, setForm] = useState<SopForm>(() => formFor(product));
   const [saving, setSaving] = useState(false);
+  const copySources = products.filter(candidate => candidate.id !== product.id && candidate.sop);
+  const [copySourceId, setCopySourceId] = useState(copySources[0]?.id || '');
   const updateStep = (index: number, patch: Partial<SopStep>) => setForm(current => ({ ...current, steps: current.steps.map((step, position) => position === index ? { ...step, ...patch } : step) }));
   const moveStep = (index: number, direction: -1 | 1) => setForm(current => { const target = index + direction; if (target < 0 || target >= current.steps.length) return current; const steps = [...current.steps]; [steps[index], steps[target]] = [steps[target], steps[index]]; return { ...current, steps }; });
   const removeStep = (index: number) => setForm(current => ({ ...current, steps: current.steps.filter((_, position) => position !== index) }));
+  const copyFromProduct = async () => {
+    const source = copySources.find(candidate => candidate.id === copySourceId);
+    if (!source?.sop) return toast.error('Pilih produk sumber yang sudah memiliki SOP.');
+    if (!await appConfirm(`Salin cara pembuatan dari ${source.name}? Langkah, peralatan, dan catatan saat ini akan diganti.`, { title: 'Salin SOP Produk', confirmText: 'Salin SOP' })) return;
+    setForm(current => ({
+      ...current,
+      equipment: source.sop?.equipment || '',
+      steps: source.sop?.steps?.length ? source.sop.steps.map(step => ({ ...step, id: stepId() })) : [emptyStep()],
+      servingNotes: source.sop?.servingNotes || '',
+    }));
+    toast.success(`Cara pembuatan disalin dari ${source.name}.`);
+  };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const steps = form.steps.map(step => ({ ...step, instruction: step.instruction.trim(), durationMinutes: step.durationMinutes || null })).filter(step => step.instruction);
@@ -164,6 +180,10 @@ function SopEditor({ product, onClose, onSaved }: { product: SopProduct; onClose
     <form onSubmit={submit} className="mx-auto min-h-[100dvh] w-full max-w-4xl bg-white md:min-h-0 md:rounded-3xl md:shadow-2xl">
       <header className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b bg-white/95 p-4 backdrop-blur md:rounded-t-3xl md:p-6"><div><p className="text-xs font-black uppercase text-brand-700">Kelola SOP Produk</p><h2 className="text-xl font-black">{product.name}</h2></div><button data-back-close="true" type="button" className="btn-icon" onClick={onClose} aria-label="Tutup"><X/></button></header>
       <div className="space-y-5 p-4 pb-28 md:p-6 md:pb-6">
+        <section className="rounded-3xl border border-brand-100 bg-brand-50/60 p-4">
+          <div className="mb-3 flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-white text-brand-700"><Copy size={19}/></span><div><h3 className="font-black text-ink">Salin cara pembuatan</h3><p className="text-xs leading-relaxed text-slate-500">Salin langkah, peralatan, dan catatan dari produk lain. Judul, status, serta bahan resep produk ini tidak berubah.</p></div></div>
+          {copySources.length ? <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]"><select className="input" value={copySourceId} onChange={event => setCopySourceId(event.target.value)}><option value="">Pilih produk sumber</option>{copySources.map(source => <option key={source.id} value={source.id}>{source.name} · {source.sop?.title}</option>)}</select><button type="button" className="btn-soft justify-center" onClick={() => void copyFromProduct()} disabled={!copySourceId}><Copy size={17}/> Salin</button></div> : <div className="rounded-2xl bg-white p-3 text-sm text-slate-500">Belum ada SOP produk lain yang dapat disalin.</div>}
+        </section>
         <label className="label">Judul SOP<input className="input mt-2" value={form.title} onChange={event => setForm({ ...form, title: event.target.value })} maxLength={200} required/></label>
         <label className="label">Persiapan & peralatan<textarea className="input mt-2 min-h-24" value={form.equipment} onChange={event => setForm({ ...form, equipment: event.target.value })} placeholder="Contoh: gelas 14 oz, sendok aduk, shaker..." maxLength={5000}/></label>
         <section><div className="mb-3 flex items-center justify-between gap-3"><div><h3 className="font-black">Langkah pembuatan</h3><p className="text-xs text-slate-400">Urutkan langkah sesuai proses operasional.</p></div><button type="button" className="btn-soft" onClick={() => setForm(current => ({ ...current, steps: [...current.steps, emptyStep()] }))}><Plus size={17}/> Tambah</button></div>

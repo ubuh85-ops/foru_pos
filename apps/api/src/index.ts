@@ -22,6 +22,7 @@ import { registerDailyReports } from './daily-reports.js';
 import { nextSaleNumber } from './sale-numbers.js';
 import { customerSaleWhere, customerTenantWhere, isValidCustomerPhone, normalizeCustomerPhone, upsertWebOrderCustomer } from './customers.js';
 import { productStockSnapshot } from './product-stock.js';
+import { createsRecipeCycle, expandRecipeGraph, type RecipeGraphRow } from './recipe-graph.js';
 import { Server as SocketIOServer } from 'socket.io';
 
 const defaultCorsOrigins = [
@@ -796,19 +797,48 @@ async function compressProductImage(input:Buffer){
   }
   throw new ApiError(400,'Gambar terlalu besar dan tidak dapat dikompresi. Silakan pilih gambar lain.');
 }
-const recipeInclude={item:{include:{unit:true,category:true}},usageUnit:true};
+const recipeInclude={item:{include:{unit:true,category:true}},usageUnit:true,componentProduct:{select:{id:true,sku:true,name:true,status:true}}};
 const productInclude={categoryRef:true,variants:true,addons:true,recipes:{include:recipeInclude,orderBy:{createdAt:'asc' as const}},outlets:{include:{outlet:true},orderBy:{outlet:{name:'asc' as const}}},channelPrices:{include:{outlet:true},orderBy:[{outlet:{name:'asc' as const}},{channel:'asc' as const}]},variantGroups:{orderBy:{sortOrder:'asc' as const},include:{group:{include:{options:{orderBy:{sortOrder:'asc' as const},include:{outlets:{include:{outlet:true}}}}}}}}};
-const recipeRowInput=z.object({inventoryItemId:z.string(),usageQty:z.coerce.number().positive(),usageUnitId:z.string(),wastePercent:z.coerce.number().min(0).max(100).default(0),isActive:z.coerce.boolean().default(true)});
+const recipeRowInput=z.object({
+  sourceType:z.enum(['INVENTORY','PRODUCT']).default('INVENTORY'),
+  inventoryItemId:z.string().optional(),
+  componentProductId:z.string().optional(),
+  usageQty:z.coerce.number().positive(),
+  usageUnitId:z.string().optional(),
+  componentUnit:z.string().trim().max(50).optional(),
+  wastePercent:z.coerce.number().min(0).max(100).default(0),
+  isActive:z.coerce.boolean().default(true)
+}).superRefine((row,ctx)=>{
+  if(row.sourceType==='INVENTORY'&&(!row.inventoryItemId||!row.usageUnitId))ctx.addIssue({code:z.ZodIssueCode.custom,message:'Bahan baku dan satuan wajib dipilih'});
+  if(row.sourceType==='PRODUCT'&&(!row.componentProductId||!row.componentUnit?.trim()))ctx.addIssue({code:z.ZodIssueCode.custom,message:'Produk komponen dan satuan wajib diisi'});
+});
 const recipeBody=z.object({items:z.array(recipeRowInput)}).or(recipeRowInput);
 function recipeRows(body:unknown){const parsed=recipeBody.parse(body);return 'items' in parsed?parsed.items:[parsed];}
+function recipeData(productId:string,row:z.infer<typeof recipeRowInput>){
+  return row.sourceType==='PRODUCT'
+    ? {productId,inventoryItemId:null,usageUnitId:null,componentProductId:row.componentProductId!,componentUnit:row.componentUnit!.trim(),usageQty:row.usageQty,wastePercent:row.wastePercent,isActive:row.isActive}
+    : {productId,inventoryItemId:row.inventoryItemId!,usageUnitId:row.usageUnitId!,componentProductId:null,componentUnit:null,usageQty:row.usageQty,wastePercent:row.wastePercent,isActive:row.isActive};
+}
 async function assertProduct(req:any,productId:string){return assertTenantProduct(req,productId);}
-async function validateRecipeRows(req:any,rows:ReturnType<typeof recipeRows>){
-  const itemIds=[...new Set(rows.map(r=>r.inventoryItemId))],unitIds=[...new Set(rows.map(r=>r.usageUnitId))];
-  const [items,units]=await Promise.all([prisma.inventoryItem.findMany({where:tenantWhereAnd(req,{id:{in:itemIds},status:'ACTIVE'})}),prisma.inventoryUnit.findMany({where:tenantWhereAnd(req,{id:{in:unitIds},status:'ACTIVE'})})]);
+async function validateRecipeRows(req:any,productId:string,rows:ReturnType<typeof recipeRows>,replace=false){
+  const inventoryRows=rows.filter(r=>r.sourceType==='INVENTORY');
+  const componentRows=rows.filter(r=>r.sourceType==='PRODUCT');
+  const itemIds=[...new Set(inventoryRows.map(r=>r.inventoryItemId!))],unitIds=[...new Set(inventoryRows.map(r=>r.usageUnitId!))],componentIds=[...new Set(componentRows.map(r=>r.componentProductId!))];
+  const [items,units,components,existingEdges]=await Promise.all([
+    prisma.inventoryItem.findMany({where:tenantWhereAnd(req,{id:{in:itemIds},status:'ACTIVE'})}),
+    prisma.inventoryUnit.findMany({where:tenantWhereAnd(req,{id:{in:unitIds},status:'ACTIVE'})}),
+    prisma.product.findMany({where:tenantWhereAnd(req,{id:{in:componentIds},status:'ACTIVE'}),select:{id:true}}),
+    prisma.productRecipe.findMany({where:{componentProductId:{not:null},product:{businessId:req.user!.businessId},...(replace?{productId:{not:productId}}:{})},select:{productId:true,componentProductId:true}})
+  ]);
   const foundItems=new Set(items.map(x=>x.id)),foundUnits=new Set(units.map(x=>x.id));
-  const duplicate=itemIds.length!==rows.length;
-  if(duplicate)throw new ApiError(400,'Bahan baku recipe tidak boleh duplikat');
-  for(const row of rows){if(!foundItems.has(row.inventoryItemId))throw new ApiError(400,'Bahan baku recipe tidak ditemukan atau inactive');if(!foundUnits.has(row.usageUnitId))throw new ApiError(400,'Satuan recipe tidak ditemukan atau inactive');}
+  const foundComponents=new Set(components.map(x=>x.id));
+  const keys=rows.map(r=>r.sourceType==='PRODUCT'?`PRODUCT:${r.componentProductId}`:`INVENTORY:${r.inventoryItemId}`);
+  if(new Set(keys).size!==keys.length)throw new ApiError(400,'Komponen recipe tidak boleh duplikat');
+  for(const row of inventoryRows){if(!foundItems.has(row.inventoryItemId!))throw new ApiError(400,'Bahan baku recipe tidak ditemukan atau inactive');if(!foundUnits.has(row.usageUnitId!))throw new ApiError(400,'Satuan recipe tidak ditemukan atau inactive');}
+  for(const row of componentRows){if(!foundComponents.has(row.componentProductId!))throw new ApiError(400,'Produk sub-resep tidak ditemukan atau inactive');}
+  const edges=existingEdges.filter((edge):edge is {productId:string;componentProductId:string}=>Boolean(edge.componentProductId));
+  const currentComponents=replace?componentIds:[...new Set([...edges.filter(edge=>edge.productId===productId).map(edge=>edge.componentProductId),...componentIds])];
+  if(createsRecipeCycle(edges,productId,currentComponents))throw new ApiError(400,'Sub-resep membentuk circular recipe');
 }
 function normalizedUnit(name?:string){return String(name||'').trim().toLowerCase();}
 function unitRatio(from?:string,to?:string){
@@ -823,25 +853,51 @@ async function inventoryUnitRatio(tx:any,itemId:string,fromUnitId:string,toUnitI
   if(conversion)return Number(conversion.multiplier);
   return unitRatio(fromName,toName);
 }
-function recipeRequiredQty(recipe:any,soldQty=1){
-  return Number(recipe.usageQty) * (1 + Number(recipe.wastePercent||0)/100) * soldQty;
+async function loadRecipeGraph(tx:any,rootProductIds:string[],businessId:string){
+  const graph=new Map<string,any[]>(),loaded=new Set<string>();
+  let pending=[...new Set(rootProductIds)];
+  for(let depth=0;pending.length&&depth<25;depth++){
+    const batch=pending.filter(id=>!loaded.has(id));
+    if(!batch.length)break;
+    batch.forEach(id=>loaded.add(id));
+    const rows=await tx.productRecipe.findMany({where:{productId:{in:batch},isActive:true,product:{businessId}},include:recipeInclude,orderBy:{createdAt:'asc'}});
+    for(const id of batch)graph.set(id,[]);
+    for(const row of rows)graph.set(row.productId,[...(graph.get(row.productId)||[]),row]);
+    pending=rows.map((row:any)=>row.componentProductId).filter((id:any):id is string=>Boolean(id)&&!loaded.has(id));
+  }
+  if(pending.some(id=>!loaded.has(id)))throw new ApiError(400,'Kedalaman sub-resep melebihi batas');
+  return graph as Map<string,RecipeGraphRow[]>;
+}
+async function expandedStockRequirements(tx:any,productId:string,businessId:string,multiplier=1){
+  const graph=await loadRecipeGraph(tx,[productId],businessId);
+  try{return expandRecipeGraph(graph,productId,multiplier);}catch{throw new ApiError(400,'Sub-resep membentuk circular recipe');}
 }
 async function productAvailabilityForOutlet(productId:string,outlet:any){
-  const recipes=await prisma.productRecipe.findMany({where:{productId,isActive:true},include:{item:{include:{unit:true}},usageUnit:true},orderBy:{createdAt:'asc'}});
+  const expanded=await expandedStockRequirements(prisma,productId,outlet.businessId);
+  const recipes=expanded.leaves;
+  if(expanded.missingProductIds.length)return {outlet,warehouse:outlet.defaultInventoryWarehouse,canProduce:null,status:'RECIPE_MISSING',items:[]};
   const warehouse=outlet.defaultInventoryWarehouse;
   if(!recipes.length)return {outlet,warehouse:null,canProduce:null,status:'RECIPE_MISSING',items:[]};
-  if(!warehouse)return {outlet,warehouse:null,canProduce:null,status:'WAREHOUSE_NOT_CONFIGURED',items:recipes.map(r=>({recipeId:r.id,item:r.item,requiredQty:recipeRequiredQty(r),availableQty:0,status:'WAREHOUSE_NOT_CONFIGURED'}))};
-  const stocks=await prisma.inventoryStock.findMany({where:{warehouseId:warehouse.id,inventoryItemId:{in:recipes.map(r=>r.inventoryItemId)}},include:{item:{include:{unit:true}}}});
+  if(!warehouse)return {outlet,warehouse:null,canProduce:null,status:'WAREHOUSE_NOT_CONFIGURED',items:recipes.map(r=>({recipeId:r.row.id,item:r.row.item,requiredQty:r.requiredQty,availableQty:0,status:'WAREHOUSE_NOT_CONFIGURED'}))};
+  const itemIds=[...new Set(recipes.map(r=>r.row.inventoryItemId).filter((id):id is string=>Boolean(id)))];
+  const stocks=await prisma.inventoryStock.findMany({where:{warehouseId:warehouse.id,inventoryItemId:{in:itemIds}},include:{item:{include:{unit:true}}}});
   const byItem=new Map(stocks.map(s=>[s.inventoryItemId,s]));
-  const items=await Promise.all(recipes.map(async recipe=>{
-    const stock=byItem.get(recipe.inventoryItemId),ratio=await inventoryUnitRatio(prisma,recipe.inventoryItemId,recipe.usageUnitId,recipe.item.unitId,recipe.usageUnit.name,recipe.item.unit.name);
-    const requiredRecipeUnit=recipeRequiredQty(recipe);
-    const requiredStockUnit=ratio==null?null:requiredRecipeUnit*ratio;
+  const requiredByItem=new Map<string,{leaf:any;requiredStockUnit:number|null}>();
+  for(const leaf of recipes){
+    const recipe:any=leaf.row,item:any=recipe.item,unit:any=recipe.usageUnit;
+    const ratio=await inventoryUnitRatio(prisma,recipe.inventoryItemId!,recipe.usageUnitId!,item.unitId,unit?.name,item.unit.name);
+    const requiredStockUnit=ratio==null?null:leaf.requiredQty*ratio;
+    const current=requiredByItem.get(recipe.inventoryItemId!);
+    const total=!current?requiredStockUnit:(current.requiredStockUnit==null||requiredStockUnit==null?null:current.requiredStockUnit+requiredStockUnit);
+    requiredByItem.set(recipe.inventoryItemId!,{leaf,requiredStockUnit:total});
+  }
+  const items=[...requiredByItem.entries()].map(([itemId,entry])=>{
+    const recipe:any=entry.leaf.row,stock=byItem.get(itemId),requiredStockUnit=entry.requiredStockUnit;
     const availableQty=Number(stock?.availableQty ?? stock?.currentQty ?? 0);
     const canProduce=requiredStockUnit&&requiredStockUnit>0?Math.floor(availableQty/requiredStockUnit):0;
-    const status=ratio==null?'UNIT_CONVERSION_MISSING':availableQty<=0?'OUT_OF_STOCK':availableQty<Number(requiredStockUnit)?'OUT_OF_STOCK':canProduce<=5?'LOW_STOCK':'AVAILABLE';
-    return {recipeId:recipe.id,item:recipe.item,usageQty:Number(recipe.usageQty),usageUnit:recipe.usageUnit,wastePercent:Number(recipe.wastePercent),requiredQty:requiredRecipeUnit,requiredStockUnit,availableQty,canProduce,status};
-  }));
+    const status=requiredStockUnit==null?'UNIT_CONVERSION_MISSING':availableQty<=0?'OUT_OF_STOCK':availableQty<Number(requiredStockUnit)?'OUT_OF_STOCK':canProduce<=5?'LOW_STOCK':'AVAILABLE';
+    return {recipeId:recipe.id,item:recipe.item,usageQty:Number(recipe.usageQty),usageUnit:recipe.usageUnit,wastePercent:Number(recipe.wastePercent),requiredQty:entry.leaf.requiredQty,requiredStockUnit,availableQty,canProduce,status};
+  });
   const canProduce=items.some(i=>i.status==='UNIT_CONVERSION_MISSING')?null:Math.min(...items.map(i=>i.canProduce));
   const status=items.some(i=>i.status==='UNIT_CONVERSION_MISSING')?'UNIT_CONVERSION_MISSING':items.some(i=>i.status==='OUT_OF_STOCK')?'OUT_OF_STOCK':(canProduce??0)<=5?'LOW_STOCK':'AVAILABLE';
   return {outlet,warehouse,canProduce,status,items};
@@ -1129,11 +1185,13 @@ api.delete('/products/:id',allow('OWNER'),asyncRoute(async(req,res)=>{const id=S
 api.delete('/products/:id/permanent',allow('OWNER'),asyncRoute(async(req,res)=>{
   const id=String(req.params.id);
   await assertTenantProduct(req,id);
-  const [saleItems,addonSaleItems,inventoryMovements]=await Promise.all([
+  const [saleItems,addonSaleItems,inventoryMovements,recipeUsages]=await Promise.all([
     prisma.saleItem.count({where:{productId:id}}),
     prisma.saleItemAddon.count({where:{addon:{productId:id}}}),
-    prisma.inventoryMovement.count({where:{productId:id}})
+    prisma.inventoryMovement.count({where:{productId:id}}),
+    prisma.productRecipe.count({where:{componentProductId:id,isActive:true}})
   ]);
+  if(recipeUsages)throw new ApiError(409,'Produk masih digunakan sebagai sub-resep. Hapus dari resep produk lain terlebih dahulu.');
   if(saleItems||addonSaleItems||inventoryMovements)throw new ApiError(409,'Produk sudah memiliki histori transaksi atau inventory. Nonaktifkan produk, tidak bisa hapus permanen.');
   await prisma.$transaction(async tx=>{
     await tx.bundleItem.deleteMany({where:{variant:{productId:id}}});
@@ -1156,17 +1214,16 @@ api.post('/products/:id/recipe',allow('OWNER','SUPERVISOR'),asyncRoute(async(req
   const productId=String(req.params.id);
   await assertProduct(req,productId);
   const rows=recipeRows(req.body);
-  if(!rows.length)throw new ApiError(400,'Recipe minimal memiliki 1 bahan baku');
-  await validateRecipeRows(req,rows);
+  if(!rows.length)throw new ApiError(400,'Recipe minimal memiliki 1 komponen');
+  await validateRecipeRows(req,productId,rows);
   const created=await prisma.$transaction(async tx=>{
     const result=[];
     for(const row of rows){
-      result.push(await tx.productRecipe.upsert({
-        where:{productId_inventoryItemId:{productId,inventoryItemId:row.inventoryItemId}},
-        update:{usageQty:row.usageQty,usageUnitId:row.usageUnitId,wastePercent:row.wastePercent,isActive:row.isActive},
-        create:{productId,inventoryItemId:row.inventoryItemId,usageQty:row.usageQty,usageUnitId:row.usageUnitId,wastePercent:row.wastePercent,isActive:row.isActive},
-        include:recipeInclude
-      }));
+      const existing=await tx.productRecipe.findFirst({where:{productId,...(row.sourceType==='PRODUCT'?{componentProductId:row.componentProductId}:{inventoryItemId:row.inventoryItemId})}});
+      const data=recipeData(productId,row);
+      result.push(existing
+        ? await tx.productRecipe.update({where:{id:existing.id},data,include:recipeInclude})
+        : await tx.productRecipe.create({data,include:recipeInclude}));
     }
     await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'PRODUCT',entityId:productId,action:'PRODUCT_RECIPE_UPDATED',oldValue:Prisma.JsonNull,newValue:{items:rows},changedBy:req.user!.id}});
     return result;
@@ -1177,11 +1234,11 @@ api.put('/products/:id/recipe',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,
   const productId=String(req.params.id);
   await assertProduct(req,productId);
   const rows=recipeRows(req.body);
-  await validateRecipeRows(req,rows);
+  await validateRecipeRows(req,productId,rows,true);
   const recipes=await prisma.$transaction(async tx=>{
     const oldValue=await tx.productRecipe.findMany({where:{productId}});
     await tx.productRecipe.deleteMany({where:{productId}});
-    await tx.productRecipe.createMany({data:rows.map(row=>({productId,inventoryItemId:row.inventoryItemId,usageQty:row.usageQty,usageUnitId:row.usageUnitId,wastePercent:row.wastePercent,isActive:row.isActive}))});
+    await tx.productRecipe.createMany({data:rows.map(row=>recipeData(productId,row))});
     await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'PRODUCT',entityId:productId,action:'PRODUCT_RECIPE_REPLACED',oldValue,newValue:{items:rows},changedBy:req.user!.id}});
     return tx.productRecipe.findMany({where:{productId},include:recipeInclude,orderBy:{createdAt:'asc'}});
   });
@@ -1550,7 +1607,7 @@ async function deductManualProductStock(tx:any,sale:any,userId:string,stockRows:
 async function deductInventoryForPaidSale(tx:any,sale:any,userId:string){
   const outlet=await tx.outlet.findUnique({where:{id:sale.outletId},include:{defaultInventoryWarehouse:true}});
   if(!outlet)throw new ApiError(404,'Outlet tidak ditemukan');
-  const productIds=[...new Set((sale.items||[]).map((item:any)=>item.productId))];
+  const productIds:string[]=[...new Set<string>((sale.items||[]).map((item:any)=>String(item.productId)))];
   if(!productIds.length)return;
   const productStocks=await tx.productOutlet.findMany({where:{outletId:sale.outletId,productId:{in:productIds}}});
   await deductManualProductStock(tx,sale,userId,productStocks);
@@ -1558,28 +1615,34 @@ async function deductInventoryForPaidSale(tx:any,sale:any,userId:string){
   const recipeProductIds=productIds.filter(productId=>(stockByProduct.get(productId) as any)?.stockMode!=='MANUAL');
   if(!recipeProductIds.length)return;
   const warehouse=outlet.defaultInventoryWarehouse;
-  const recipes=await tx.productRecipe.findMany({where:{productId:{in:recipeProductIds},isActive:true},include:{item:{include:{unit:true}},usageUnit:true}});
-  const recipesByProduct=new Map<string,any[]>();
-  for(const recipe of recipes)recipesByProduct.set(recipe.productId,[...(recipesByProduct.get(recipe.productId)||[]),recipe]);
-  if(!warehouse&&recipes.length&&outlet.blockSaleWhenIngredientOutOfStock)throw new ApiError(400,'Warehouse inventory outlet belum diset.');
+  const recipeGraph=await loadRecipeGraph(tx,recipeProductIds,sale.businessId);
+  if(!warehouse&&[...recipeGraph.values()].some(rows=>rows.length)&&outlet.blockSaleWhenIngredientOutOfStock)throw new ApiError(400,'Warehouse inventory outlet belum diset.');
   if(!warehouse)return;
   for(const item of sale.items||[]){
-    const productRecipes=recipesByProduct.get(item.productId)||[];
+    const productRecipes=recipeGraph.get(item.productId)||[];
     if(!productRecipes.length){
       if((stockByProduct.get(item.productId) as any)?.stockMode==='RECIPE')throw new ApiError(400,`Recipe produk ${item.productName} belum diset.`);
       if(!outlet.allowSaleWithoutRecipe)throw new ApiError(400,`Recipe produk ${item.productName} belum diset.`);
       continue;
     }
-    for(const recipe of productRecipes){
-      const ratio=await inventoryUnitRatio(tx,recipe.inventoryItemId,recipe.usageUnitId,recipe.item.unitId,recipe.usageUnit.name,recipe.item.unit.name);
-      if(ratio==null)throw new ApiError(400,`Konversi satuan recipe ${recipe.usageUnit.name} ke ${recipe.item.unit.name} untuk ${recipe.item.name} belum diset.`);
-      const qty=money(recipeRequiredQty(recipe,Number(item.qty))*ratio);
+    let expanded;
+    try{expanded=expandRecipeGraph(recipeGraph,item.productId,Number(item.qty));}catch{throw new ApiError(400,`Circular recipe ditemukan pada ${item.productName}.`);}
+    if(expanded.missingProductIds.length)throw new ApiError(400,`Sub-resep produk ${item.productName} belum lengkap.`);
+    const deductions=new Map<string,{recipe:any;qty:number}>();
+    for(const leaf of expanded.leaves){
+      const recipe:any=leaf.row;
+      const ratio=await inventoryUnitRatio(tx,recipe.inventoryItemId,recipe.usageUnitId,recipe.item.unitId,recipe.usageUnit?.name,recipe.item.unit.name);
+      if(ratio==null)throw new ApiError(400,`Konversi satuan recipe ${recipe.usageUnit?.name||'-'} ke ${recipe.item.unit.name} untuk ${recipe.item.name} belum diset.`);
+      const qty=money(leaf.requiredQty*ratio),current=deductions.get(recipe.inventoryItemId);
+      deductions.set(recipe.inventoryItemId,{recipe,qty:money((current?.qty||0)+qty)});
+    }
+    for(const {recipe,qty} of deductions.values()){
       const stock=await tx.inventoryStock.findUnique({where:{warehouseId_inventoryItemId:{warehouseId:warehouse.id,inventoryItemId:recipe.inventoryItemId}}});
       if(Number(stock?.currentQty||0)<qty){
         if(outlet.blockSaleWhenIngredientOutOfStock)throw new ApiError(400,'Stok tidak mencukupi.');
         continue;
       }
-      await changeInventoryStock(tx,{businessId:sale.businessId,warehouseId:warehouse.id,itemId:recipe.inventoryItemId,qty,type:'SALE_DEDUCTION',userId,unitCost:Number(recipe.item.averageCost||0),reference:sale.transactionNumber||sale.orderNumber,referenceId:sale.id,referenceType:'SALE',remarks:`Auto deduct ${item.productName}. Recipe ${recipeRequiredQty(recipe,Number(item.qty))} ${recipe.usageUnit.name} = ${qty} ${recipe.item.unit.name}`,productId:item.productId,orderItemId:item.id});
+      await changeInventoryStock(tx,{businessId:sale.businessId,warehouseId:warehouse.id,itemId:recipe.inventoryItemId,qty,type:'SALE_DEDUCTION',userId,unitCost:Number(recipe.item.averageCost||0),reference:sale.transactionNumber||sale.orderNumber,referenceId:sale.id,referenceType:'SALE',remarks:`Auto deduct ${item.productName} termasuk sub-resep = ${qty} ${recipe.item.unit.name}`,productId:item.productId,orderItemId:item.id});
     }
   }
 }
