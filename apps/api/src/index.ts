@@ -17,6 +17,7 @@ import { validatePublicSchedule } from './preorder.js';
 import { sendCustomerWebOrderPush } from './push.js';
 import { orderAttribution, recordOrderAnalytics, reconcileOrderAnalytics, registerAdminAnalytics, registerPublicAnalytics } from './web-analytics.js';
 import { registerChecklists } from './checklists.js';
+import { registerProductSops } from './product-sops.js';
 import { registerDailyReports } from './daily-reports.js';
 import { nextSaleNumber } from './sale-numbers.js';
 import { customerSaleWhere, customerTenantWhere, isValidCustomerPhone, normalizeCustomerPhone, upsertWebOrderCustomer } from './customers.js';
@@ -1829,6 +1830,7 @@ async function report(req:any,consolidated=false){if(consolidated&&req.user.role
 function dashboardPayload(r:any){const outlets=new Map<string,any>();for(const s of r.sales||[]){const x=outlets.get(s.outletId)||{outlet:s.outlet?.name||'Outlet',netSales:0,transactions:0,grossProfit:0,onlineFee:0};x.netSales+=Number(s.grandTotal);x.transactions++;x.grossProfit+=Number(s.reportGrossProfit);x.onlineFee+=Number(s.reportOnlineFee);outlets.set(s.outletId,x);}return {...r,sales:undefined,outlets:[...outlets.values()].map(x=>({...x,netSales:money(x.netSales),onlineFee:money(x.onlineFee),grossProfit:money(x.grossProfit),averageTicket:x.transactions?money(x.netSales/x.transactions):0}))};}
 registerDailyReports(api);
 registerChecklists(api);
+registerProductSops(api);
 api.get('/reports/daily',allow('OWNER'),asyncRoute(async(req,res)=>{const r=await report(req);res.json({...r,sales:undefined});}));
 api.get('/reports/dashboard',allow('OWNER'),asyncRoute(async(req,res)=>res.json(dashboardPayload(await report(req,String(req.query.consolidated||'')==='1')))));
 api.get('/dashboard',requirePermission('dashboard.view'),asyncRoute(async(req,res)=>res.json(dashboardPayload(await report(req)))));

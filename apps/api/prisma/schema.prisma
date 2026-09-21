@@ -16,7 +16,7 @@ model SaleDocumentCounter {
 
 model User {
   completedChecklistItems DailyChecklistItem[]
-  reviewedChecklists DailyChecklist[]
+  reviewedChecklists      DailyChecklist[]
   id                      String               @id @default(cuid())
   name                    String
   username                String               @unique
@@ -48,23 +48,23 @@ model User {
 }
 
 model Business {
-  checklistTemplates ChecklistTemplateItem[]
-  dailyChecklists DailyChecklist[]
+  checklistTemplates   ChecklistTemplateItem[]
+  dailyChecklists      DailyChecklist[]
   webAnalyticsEvents   WebAnalyticsEvent[]
-  id                   String              @id @default(cuid())
-  code                 String              @unique
+  id                   String                  @id @default(cuid())
+  code                 String                  @unique
   name                 String
-  legalName            String?             @map("legal_name")
-  logoUrl              String?             @map("logo_url")
+  legalName            String?                 @map("legal_name")
+  logoUrl              String?                 @map("logo_url")
   phone                String?
   email                String?
   address              String?
-  gofoodFeePercent     Decimal             @default(0) @map("gofood_fee_percent") @db.Decimal(5, 2)
-  grabfoodFeePercent   Decimal             @default(0) @map("grabfood_fee_percent") @db.Decimal(5, 2)
-  shopeefoodFeePercent Decimal             @default(0) @map("shopeefood_fee_percent") @db.Decimal(5, 2)
-  status               BusinessStatus      @default(ACTIVE)
-  createdAt            DateTime            @default(now()) @map("created_at")
-  updatedAt            DateTime            @updatedAt @map("updated_at")
+  gofoodFeePercent     Decimal                 @default(0) @map("gofood_fee_percent") @db.Decimal(5, 2)
+  grabfoodFeePercent   Decimal                 @default(0) @map("grabfood_fee_percent") @db.Decimal(5, 2)
+  shopeefoodFeePercent Decimal                 @default(0) @map("shopeefood_fee_percent") @db.Decimal(5, 2)
+  status               BusinessStatus          @default(ACTIVE)
+  createdAt            DateTime                @default(now()) @map("created_at")
+  updatedAt            DateTime                @updatedAt @map("updated_at")
 
   memberships         BusinessMembership[]
   outlets             Outlet[]
@@ -87,6 +87,7 @@ model Business {
   coupons             Coupon[]
   pushDevices         PushDevice[]
   customers           Customer[]
+  productSops         ProductSop[]
 
   @@map("businesses")
 }
@@ -110,42 +111,42 @@ model BusinessMembership {
 }
 
 model Outlet {
-  checklistReviewRequired Boolean @default(true)
-  checklistInitialized Boolean @default(false)
-  checklistTemplates ChecklistTemplateItem[]
-  dailyChecklists DailyChecklist[]
+  checklistReviewRequired           Boolean                 @default(true)
+  checklistInitialized              Boolean                 @default(false)
+  checklistTemplates                ChecklistTemplateItem[]
+  dailyChecklists                   DailyChecklist[]
   webAnalyticsEvents                WebAnalyticsEvent[]
-  id                                String                @id @default(cuid())
-  businessId                        String                @map("business_id")
+  id                                String                  @id @default(cuid())
+  businessId                        String                  @map("business_id")
   code                              String
   name                              String
   address                           String?
   phone                             String?
-  inventoryWarehouseId              String?               @map("inventory_warehouse_id")
-  blockSaleWhenIngredientOutOfStock Boolean               @default(true) @map("block_sale_when_ingredient_out_of_stock")
-  allowSaleWithoutRecipe            Boolean               @default(true) @map("allow_sale_without_recipe")
-  autoPrintReceipt                  Boolean               @default(false) @map("auto_print_receipt")
-  autoPrintKitchen                  Boolean               @default(false) @map("auto_print_kitchen")
-  autoPrintCustomerItemList         Boolean               @default(false) @map("auto_print_customer_item_list")
-  customerOrderingEnabled           Boolean               @default(false) @map("customer_ordering_enabled")
-  customerOrderingSlug              String?               @map("customer_ordering_slug")
-  acceptingCustomerOrders           Boolean               @default(true) @map("accepting_customer_orders")
-  customerOrderAllowDineIn          Boolean               @default(true) @map("customer_order_allow_dine_in")
-  customerOrderAllowTakeAway        Boolean               @default(true) @map("customer_order_allow_take_away")
-  customerOrderAllowDelivery        Boolean               @default(false) @map("customer_order_allow_delivery")
-  customerOrderRequestPhone         Boolean               @default(false) @map("customer_order_request_phone")
-  customerOrderSoundEnabled         Boolean               @default(false) @map("customer_order_sound_enabled")
-  preOrderEnabled                   Boolean               @default(true) @map("pre_order_enabled")
-  preOrderMinLeadMinutes            Int                   @default(60) @map("pre_order_min_lead_minutes")
-  preOrderMaxDaysAhead              Int                   @default(14) @map("pre_order_max_days_ahead")
-  preOrderSlotMinutes               Int                   @default(30) @map("pre_order_slot_minutes")
-  customerOrderOpenTime             String                @default("08:00") @map("customer_order_open_time")
-  customerOrderCloseTime            String                @default("21:00") @map("customer_order_close_time")
-  customerOrderOperatingDays        Int[]                 @default([0, 1, 2, 3, 4, 5, 6]) @map("customer_order_operating_days")
-  timezone                          String                @default("Asia/Jakarta")
-  status                            Status                @default(ACTIVE)
-  createdAt                         DateTime              @default(now()) @map("created_at")
-  updatedAt                         DateTime              @updatedAt @map("updated_at")
+  inventoryWarehouseId              String?                 @map("inventory_warehouse_id")
+  blockSaleWhenIngredientOutOfStock Boolean                 @default(true) @map("block_sale_when_ingredient_out_of_stock")
+  allowSaleWithoutRecipe            Boolean                 @default(true) @map("allow_sale_without_recipe")
+  autoPrintReceipt                  Boolean                 @default(false) @map("auto_print_receipt")
+  autoPrintKitchen                  Boolean                 @default(false) @map("auto_print_kitchen")
+  autoPrintCustomerItemList         Boolean                 @default(false) @map("auto_print_customer_item_list")
+  customerOrderingEnabled           Boolean                 @default(false) @map("customer_ordering_enabled")
+  customerOrderingSlug              String?                 @map("customer_ordering_slug")
+  acceptingCustomerOrders           Boolean                 @default(true) @map("accepting_customer_orders")
+  customerOrderAllowDineIn          Boolean                 @default(true) @map("customer_order_allow_dine_in")
+  customerOrderAllowTakeAway        Boolean                 @default(true) @map("customer_order_allow_take_away")
+  customerOrderAllowDelivery        Boolean                 @default(false) @map("customer_order_allow_delivery")
+  customerOrderRequestPhone         Boolean                 @default(false) @map("customer_order_request_phone")
+  customerOrderSoundEnabled         Boolean                 @default(false) @map("customer_order_sound_enabled")
+  preOrderEnabled                   Boolean                 @default(true) @map("pre_order_enabled")
+  preOrderMinLeadMinutes            Int                     @default(60) @map("pre_order_min_lead_minutes")
+  preOrderMaxDaysAhead              Int                     @default(14) @map("pre_order_max_days_ahead")
+  preOrderSlotMinutes               Int                     @default(30) @map("pre_order_slot_minutes")
+  customerOrderOpenTime             String                  @default("08:00") @map("customer_order_open_time")
+  customerOrderCloseTime            String                  @default("21:00") @map("customer_order_close_time")
+  customerOrderOperatingDays        Int[]                   @default([0, 1, 2, 3, 4, 5, 6]) @map("customer_order_operating_days")
+  timezone                          String                  @default("Asia/Jakarta")
+  status                            Status                  @default(ACTIVE)
+  createdAt                         DateTime                @default(now()) @map("created_at")
+  updatedAt                         DateTime                @updatedAt @map("updated_at")
   sessions                          CashSession[]
   couponOutlets                     CouponOutlet[]
   couponUsages                      CouponUsage[]
@@ -159,8 +160,8 @@ model Outlet {
   users                             UserOutlet[]
   variantOptions                    VariantOptionOutlet[]
   warehouses                        InventoryWarehouse[]
-  defaultInventoryWarehouse         InventoryWarehouse?   @relation("OutletDefaultInventoryWarehouse", fields: [inventoryWarehouseId], references: [id], onDelete: SetNull)
-  business                          Business              @relation(fields: [businessId], references: [id])
+  defaultInventoryWarehouse         InventoryWarehouse?     @relation("OutletDefaultInventoryWarehouse", fields: [inventoryWarehouseId], references: [id], onDelete: SetNull)
+  business                          Business                @relation(fields: [businessId], references: [id])
   pushDevices                       PushDevice[]
 
   @@unique([businessId, code])
@@ -235,6 +236,7 @@ model Product {
   recipes            ProductRecipe[]
   inventoryMovements InventoryMovement[]
   business           Business              @relation(fields: [businessId], references: [id])
+  sop                ProductSop?
 
   @@unique([businessId, sku])
   @@index([businessId])
@@ -351,24 +353,24 @@ model ProductAddon {
 }
 
 model ProductOutlet {
-  id            String   @id @default(cuid())
-  productId     String   @map("product_id")
-  outletId      String   @map("outlet_id")
-  isActive      Boolean  @default(true) @map("is_active")
-  isAvailable   Boolean  @default(true) @map("is_available")
-  isRecommended Boolean  @default(false) @map("is_recommended")
-  stockMode      ProductStockMode @default(UNLIMITED) @map("stock_mode")
-  stockQty       Int      @default(0) @map("stock_qty")
-  lowStockThreshold Int   @default(5) @map("low_stock_threshold")
-  stockUpdatedAt DateTime? @map("stock_updated_at")
-  stockUpdatedBy String?  @map("stock_updated_by")
-  outletPrice   Decimal? @map("outlet_price") @db.Decimal(14, 2)
-  outletHpp     Decimal? @map("outlet_hpp") @db.Decimal(14, 2)
-  status        Status   @default(ACTIVE)
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
-  outlet        Outlet   @relation(fields: [outletId], references: [id], onDelete: Cascade)
-  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id                String           @id @default(cuid())
+  productId         String           @map("product_id")
+  outletId          String           @map("outlet_id")
+  isActive          Boolean          @default(true) @map("is_active")
+  isAvailable       Boolean          @default(true) @map("is_available")
+  isRecommended     Boolean          @default(false) @map("is_recommended")
+  stockMode         ProductStockMode @default(UNLIMITED) @map("stock_mode")
+  stockQty          Int              @default(0) @map("stock_qty")
+  lowStockThreshold Int              @default(5) @map("low_stock_threshold")
+  stockUpdatedAt    DateTime?        @map("stock_updated_at")
+  stockUpdatedBy    String?          @map("stock_updated_by")
+  outletPrice       Decimal?         @map("outlet_price") @db.Decimal(14, 2)
+  outletHpp         Decimal?         @map("outlet_hpp") @db.Decimal(14, 2)
+  status            Status           @default(ACTIVE)
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+  outlet            Outlet           @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  product           Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@unique([productId, outletId])
   @@index([outletId, isRecommended])
@@ -376,18 +378,18 @@ model ProductOutlet {
 }
 
 model ProductStockMovement {
-  id          String                   @id @default(cuid())
-  businessId  String                   @map("business_id")
-  outletId    String                   @map("outlet_id")
-  productId   String                   @map("product_id")
-  saleId      String?                  @map("sale_id")
+  id           String                   @id @default(cuid())
+  businessId   String                   @map("business_id")
+  outletId     String                   @map("outlet_id")
+  productId    String                   @map("product_id")
+  saleId       String?                  @map("sale_id")
   movementType ProductStockMovementType @map("movement_type")
-  qty         Int
-  beforeQty   Int                      @map("before_qty")
-  afterQty    Int                      @map("after_qty")
-  reason      String?
-  createdBy   String                   @map("created_by")
-  createdAt   DateTime                 @default(now()) @map("created_at")
+  qty          Int
+  beforeQty    Int                      @map("before_qty")
+  afterQty     Int                      @map("after_qty")
+  reason       String?
+  createdBy    String                   @map("created_by")
+  createdAt    DateTime                 @default(now()) @map("created_at")
 
   @@index([businessId, outletId, createdAt])
   @@index([productId, outletId, createdAt])
@@ -430,6 +432,28 @@ model ProductRecipe {
   @@index([inventoryItemId])
   @@index([usageUnitId])
   @@map("product_recipes")
+}
+
+model ProductSop {
+  id           String           @id @default(cuid())
+  businessId   String           @map("business_id")
+  productId    String           @unique @map("product_id")
+  title        String
+  equipment    String?
+  steps        Json
+  servingNotes String?          @map("serving_notes")
+  status       ProductSopStatus @default(DRAFT)
+  version      Int              @default(1)
+  createdBy    String           @map("created_by")
+  updatedBy    String           @map("updated_by")
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
+  business     Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  product      Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, productId])
+  @@index([businessId, status])
+  @@map("product_sops")
 }
 
 model Bundle {
@@ -1107,6 +1131,12 @@ enum ProductStockMode {
   RECIPE
 }
 
+enum ProductSopStatus {
+  DRAFT
+  PUBLISHED
+  INACTIVE
+}
+
 enum ProductStockMovementType {
   MANUAL_SET
   SALE_DEDUCTION
@@ -1232,61 +1262,69 @@ enum ChecklistSection {
   OPERATIONAL
   CLOSING
 }
+
 enum ChecklistItemStatus {
   PENDING
   DONE
 }
+
 enum ChecklistReviewStatus {
   NOT_REVIEWED
   REVIEWED
 }
+
 model ChecklistTemplateItem {
-  id String @id @default(cuid())
+  id         String               @id @default(cuid())
   businessId String
-  outletId String
-  section ChecklistSection
-  title String
-  sortOrder Int @default(0)
-  active Boolean @default(true)
-  business Business @relation(fields: [businessId], references: [id])
-  outlet Outlet @relation(fields: [outletId], references: [id])
-  items DailyChecklistItem[]
+  outletId   String
+  section    ChecklistSection
+  title      String
+  sortOrder  Int                  @default(0)
+  active     Boolean              @default(true)
+  business   Business             @relation(fields: [businessId], references: [id])
+  outlet     Outlet               @relation(fields: [outletId], references: [id])
+  items      DailyChecklistItem[]
+
   @@index([businessId, outletId, active])
   @@map("checklist_template_items")
 }
+
 model DailyChecklist {
-  reviewRequired Boolean @default(true)
-  id String @id @default(cuid())
-  businessId String
-  outletId String
-  date DateTime @db.Date
-  reviewStatus ChecklistReviewStatus @default(NOT_REVIEWED)
-  reviewedBy String?
-  reviewedAt DateTime?
-  reviewNote String?
+  reviewRequired  Boolean               @default(true)
+  id              String                @id @default(cuid())
+  businessId      String
+  outletId        String
+  date            DateTime              @db.Date
+  reviewStatus    ChecklistReviewStatus @default(NOT_REVIEWED)
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  reviewNote      String?
   pendingAtReview Int?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  business Business @relation(fields: [businessId], references: [id])
-  outlet Outlet @relation(fields: [outletId], references: [id])
-  reviewer User? @relation(fields: [reviewedBy], references: [id])
-  items DailyChecklistItem[]
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  business        Business              @relation(fields: [businessId], references: [id])
+  outlet          Outlet                @relation(fields: [outletId], references: [id])
+  reviewer        User?                 @relation(fields: [reviewedBy], references: [id])
+  items           DailyChecklistItem[]
+
   @@unique([businessId, outletId, date])
   @@map("daily_checklists")
 }
+
 model DailyChecklistItem {
-  id String @id @default(cuid())
+  id               String                 @id @default(cuid())
   dailyChecklistId String
-  templateItemId String?
-  title String
-  section ChecklistSection
-  sortOrder Int
-  status ChecklistItemStatus @default(PENDING)
-  completedBy String?
-  completedAt DateTime?
-  dailyChecklist DailyChecklist @relation(fields: [dailyChecklistId], references: [id], onDelete: Cascade)
-  templateItem ChecklistTemplateItem? @relation(fields: [templateItemId], references: [id], onDelete: SetNull)
-  completer User? @relation(fields: [completedBy], references: [id])
+  templateItemId   String?
+  title            String
+  section          ChecklistSection
+  sortOrder        Int
+  status           ChecklistItemStatus    @default(PENDING)
+  completedBy      String?
+  completedAt      DateTime?
+  dailyChecklist   DailyChecklist         @relation(fields: [dailyChecklistId], references: [id], onDelete: Cascade)
+  templateItem     ChecklistTemplateItem? @relation(fields: [templateItemId], references: [id], onDelete: SetNull)
+  completer        User?                  @relation(fields: [completedBy], references: [id])
+
   @@unique([dailyChecklistId, templateItemId])
   @@map("daily_checklist_items")
 }

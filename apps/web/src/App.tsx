@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
-import { BarChart3, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, Clock3, Layers, LayoutDashboard, LogOut, Menu, Package, PackageSearch, Printer, Settings, ShoppingCart, Smartphone, Store, Tags, TrendingUp, Users, Wallet, Warehouse, X } from 'lucide-react';
+import { BarChart3, BookOpen, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, Clock3, Layers, LayoutDashboard, LogOut, Menu, Package, PackageSearch, Printer, Settings, ShoppingCart, Smartphone, Store, Tags, TrendingUp, Users, Wallet, Warehouse, X } from 'lucide-react';
 import { api, clearAuthSession, SESSION_EXPIRED_EVENT, type User } from './api';
 import HeaderOutletSelector from './components/HeaderOutletSelector';
 import { ConfirmDialog } from './components/ForuDialog';
@@ -35,6 +35,7 @@ import PreOrderRecapPage from './pages/PreOrderRecapPage';
 import MenuAvailabilityPage from './pages/MenuAvailabilityPage';
 import CategoriesPage from './pages/CategoriesPage';
 import CustomersPage, { CustomerDetailPage } from './pages/CustomersPage';
+import ProductSopPage from './pages/ProductSopPage';
 import { initSyncService, recordLocalAudit } from './sync';
 import { checkInventoryStockAlerts } from './inventoryAlerts';
 import ShiftBanner from './components/ShiftBanner';
@@ -51,6 +52,7 @@ const navGroups: NavGroup[] = [
     label: 'MASTER DATA',
     items: [
       ['/products', 'Produk', Package],
+      ['/product-sops', 'SOP Produk', BookOpen],
       ['/categories', 'Kategori', Tags],
       ['/coupons', 'Kupon & Promo', Tags],
       ['/customers', 'Pelanggan', Users],
@@ -129,6 +131,7 @@ const knownRoutes = new Set([
   '/device',
   '/settings',
   '/products',
+  '/product-sops',
   '/outlets',
   '/reports',
   '/inventory',
@@ -491,6 +494,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/users" element={user.role === 'OWNER' ? <UserManagementPage /> : <Navigate to="/pos" />} />
         <Route path="/products" element={<ProductPage />} />
+        <Route path="/product-sops" element={<ProductSopPage user={user} />} />
         <Route path="/outlets" element={user.role === 'OWNER' ? <OutletPage /> : <Navigate to="/pos" />} />
         <Route path="/reports" element={user.role === 'OWNER' ? <ReportsPage /> : <Navigate to="/pos" />} />
         <Route path="/reports/web-analytics" element={user.role === 'OWNER' ? <WebAnalyticsPage /> : <Navigate to="/pos" />} />
