@@ -63,13 +63,25 @@ const whatsappOrderMessage = (order: any) => {
   const number = order.orderNumber || order.transactionNumber || '-';
   const customer = order.customerName || 'Kak';
   const outlet = order.outlet?.name || 'FORU POS';
-  const items = (order.items || []).map((item: any, index: number) => {
+  const orderItems = order.items || [];
+  const itemSubtotals = orderItems.map((item: any) => Number(item.subtotalAfterDiscount || item.subtotal || 0));
+  const itemSubtotalTotal = itemSubtotals.reduce((sum: number, subtotal: number) => sum + subtotal, 0);
+  const grandTotal = Number(order.grandTotal ?? order.totalAmount ?? itemSubtotalTotal);
+  let allocatedTotal = 0;
+  const finalItemSubtotals = itemSubtotals.map((subtotal: number, index: number) => {
+    if (itemSubtotalTotal <= 0 || grandTotal >= itemSubtotalTotal) return subtotal;
+    if (index === itemSubtotals.length - 1) return Math.max(0, grandTotal - allocatedTotal);
+    const finalSubtotal = Math.round((subtotal / itemSubtotalTotal) * grandTotal);
+    allocatedTotal += finalSubtotal;
+    return finalSubtotal;
+  });
+  const items = orderItems.map((item: any, index: number) => {
     const details = [
       item.variantName && item.variantName !== 'Base' ? item.variantName : '',
       ...(item.addons || []).map((addon: any) => `+ ${addon.addonName}`),
       item.itemNote ? `Catatan: ${item.itemNote}` : ''
     ].filter(Boolean);
-    const subtotal = Number(item.subtotalAfterDiscount || item.subtotal || 0);
+    const subtotal = finalItemSubtotals[index];
     return `${index + 1}. ${item.qty}x ${item.productName}${details.length ? ` (${details.join(', ')})` : ''}${subtotal ? ` - ${rupiah(subtotal)}` : ''}`;
   });
   const lines = [
