@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
-import { GripVertical } from 'lucide-react';
+import { GripVertical, Pencil, Power, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import { useOutlet } from '../OutletContext';
 
@@ -76,10 +77,12 @@ function ReviewSettings({ outletId }: { outletId: string }) {
 }
 function TemplateEditor({ outletId }: { outletId: string }) {
   const [rows, setRows] = useState<Template[]>([]), [error, setError] = useState(''), [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [draggingId, setDraggingId] = useState('');
+  const [dragOverlay, setDragOverlay] = useState<{ title: string; left: number; top: number; width: number } | null>(null);
   const empty = { id: '', title: '', section: 'OPENING' as Section, sortOrder: 0, active: true };
   const [draft, setDraft] = useState<Template>(empty), [deleting, setDeleting] = useState<Template | null>(null);
   const rowsRef = useRef<Template[]>([]);
-  const dragRef = useRef<{ id: string; pointerId: number; original: Template[]; moved: boolean; target: string } | null>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ id: string; pointerId: number; original: Template[]; moved: boolean; target: string; startX: number; startY: number; x: number; y: number; frame: number } | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const updateRows = useCallback((next: Template[]) => { const ordered = orderedTemplates(next); rowsRef.current = ordered; setRows(ordered); }, []);
   const refresh = useCallback(() => api<Template[]>(`/checklists/${outletId}/templates`).then(updateRows), [outletId, updateRows]);
@@ -117,14 +120,25 @@ function TemplateEditor({ outletId }: { outletId: string }) {
   function beginDrag(event: ReactPointerEvent<HTMLButtonElement>, item: Template) {
     if (busy || (event.pointerType === 'mouse' && event.button !== 0)) return;
     event.preventDefault();
+    const card = event.currentTarget.closest<HTMLElement>('[data-checklist-item]');
+    const rect = card?.getBoundingClientRect();
+    if (!rect) return;
     const previousUserSelect = document.body.style.userSelect, previousCursor = document.body.style.cursor;
-    dragRef.current = { id: item.id, pointerId: event.pointerId, original: rowsRef.current, moved: false, target: '' };
-    setDraggingId(item.id); setError(''); setMessage('Geser item ke posisi atau bagian tujuan.');
+    dragRef.current = { id: item.id, pointerId: event.pointerId, original: rowsRef.current, moved: false, target: '', startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, frame: 0 };
+    setDraggingId(item.id); setDragOverlay({ title: item.title, left: rect.left, top: rect.top, width: rect.width }); setError(''); setMessage('');
     document.body.style.userSelect = 'none'; document.body.style.cursor = 'grabbing';
+    const paintOverlay = () => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      drag.frame = 0;
+      if (overlayRef.current) overlayRef.current.style.transform = `translate3d(${drag.x - drag.startX}px, ${drag.y - drag.startY}px, 0) scale(1.015)`;
+    };
     const move = (pointer: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag || pointer.pointerId !== drag.pointerId) return;
       pointer.preventDefault();
+      drag.x = pointer.clientX; drag.y = pointer.clientY;
+      if (!drag.frame) drag.frame = window.requestAnimationFrame(paintOverlay);
       if (pointer.clientY < 80) window.scrollBy(0, -14);
       else if (pointer.clientY > window.innerHeight - 80) window.scrollBy(0, 14);
       const target = document.elementFromPoint(pointer.clientX, pointer.clientY)?.closest<HTMLElement>('[data-checklist-drop]');
@@ -146,16 +160,17 @@ function TemplateEditor({ outletId }: { outletId: string }) {
     const finish = (pointer: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag || pointer.pointerId !== drag.pointerId) return;
-      cleanup(); dragRef.current = null; setDraggingId('');
+      cleanup(); dragRef.current = null; setDraggingId(''); setDragOverlay(null);
       if (drag.moved) void persistOrder(rowsRef.current); else setMessage('');
     };
     const cancel = (pointer: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag || pointer.pointerId !== drag.pointerId) return;
-      cleanup(); updateRows(drag.original); dragRef.current = null; setDraggingId(''); setMessage('');
+      cleanup(); updateRows(drag.original); dragRef.current = null; setDraggingId(''); setDragOverlay(null); setMessage('');
     };
     const cleanup = () => {
       window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish); window.removeEventListener('pointercancel', cancel);
+      if (dragRef.current?.frame) window.cancelAnimationFrame(dragRef.current.frame);
       document.body.style.userSelect = previousUserSelect; document.body.style.cursor = previousCursor; cleanupRef.current = null;
     };
     cleanupRef.current = cleanup;
@@ -173,14 +188,16 @@ function TemplateEditor({ outletId }: { outletId: string }) {
       return <section key={section} className={`card p-4 transition ${draggingId ? 'ring-2 ring-brand-100' : ''}`}>
         <h2 className="mb-3 flex items-center justify-between font-bold"><span>{labels[section]}</span><span className="text-xs font-medium text-slate-400">{sectionRows.length} item</span></h2>
         <div className="min-h-16 space-y-2 rounded-xl border border-dashed border-slate-200 p-2" data-checklist-drop data-checklist-section={section} data-checklist-index={sectionRows.length}>
-          {sectionRows.map((item, index) => <div key={item.id} data-checklist-drop data-checklist-item="true" data-checklist-section={section} data-checklist-index={index} className={`rounded-xl border bg-white p-2 shadow-sm transition ${draggingId === item.id ? 'pointer-events-none scale-[0.98] opacity-50' : ''}`}>
-            <div className="flex items-center gap-2"><button type="button" aria-label={`Geser ${item.title}`} title="Geser untuk mengatur urutan" disabled={busy} onPointerDown={event => beginDrag(event, item)} className="flex h-11 w-11 shrink-0 touch-none cursor-grab items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 active:cursor-grabbing"><GripVertical size={22} /></button><span className="min-w-0 flex-1"><span className="block font-medium">{item.title}</span><span className="text-xs text-slate-400">Urutan {index + 1}{!item.active ? ' · Nonaktif' : ''}</span></span></div>
-            <div className="mt-2 flex flex-wrap justify-end gap-2"><button className="btn-soft px-3 py-2 text-sm" disabled={busy} onClick={() => { setDraft(item); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Edit</button><button className="btn-soft px-3 py-2 text-sm" disabled={busy} onClick={() => void save({ ...item, active: !item.active })}>{item.active ? 'Nonaktifkan' : 'Aktifkan'}</button><button className="btn-soft px-3 py-2 text-sm text-red-700" disabled={busy} onClick={() => { setDeleting(item); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Hapus</button></div>
+          {sectionRows.map((item, index) => <div key={item.id} data-checklist-drop data-checklist-item="true" data-checklist-section={section} data-checklist-index={index} className={`flex min-h-14 items-center gap-2 rounded-xl border p-2 transition-[background-color,border-color,box-shadow,transform] duration-150 ${draggingId === item.id ? 'border-dashed border-brand-400 bg-brand-50 shadow-none' : 'bg-white shadow-sm'}`}>
+            <button type="button" aria-label={`Geser ${item.title}`} title="Tahan dan geser untuk mengatur urutan" disabled={busy} onPointerDown={event => beginDrag(event, item)} className={`flex h-10 w-10 shrink-0 touch-none cursor-grab items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 active:cursor-grabbing ${draggingId === item.id ? 'invisible' : ''}`}><GripVertical size={22} /></button>
+            <span className={`min-w-0 flex-1 truncate font-medium ${draggingId === item.id ? 'invisible' : ''}`}>{item.title}{!item.active && <span className="ml-2 text-xs font-normal text-slate-400">Nonaktif</span>}</span>
+            <div className={`flex shrink-0 items-center gap-1.5 ${draggingId === item.id ? 'invisible' : ''}`}><button title="Edit" aria-label={`Edit ${item.title}`} className="btn-soft flex h-10 w-10 items-center justify-center px-0 text-sm lg:w-auto lg:px-3" disabled={busy} onClick={() => { setDraft(item); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><Pencil size={17} /><span className="hidden lg:ml-2 lg:inline">Edit</span></button><button title={item.active ? 'Nonaktifkan' : 'Aktifkan'} aria-label={`${item.active ? 'Nonaktifkan' : 'Aktifkan'} ${item.title}`} className="btn-soft flex h-10 w-10 items-center justify-center px-0 text-sm lg:w-auto lg:px-3" disabled={busy} onClick={() => void save({ ...item, active: !item.active })}><Power size={17} /><span className="hidden lg:ml-2 lg:inline">{item.active ? 'Nonaktifkan' : 'Aktifkan'}</span></button><button title="Hapus" aria-label={`Hapus ${item.title}`} className="btn-soft flex h-10 w-10 items-center justify-center px-0 text-sm text-red-700 lg:w-auto lg:px-3" disabled={busy} onClick={() => { setDeleting(item); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><Trash2 size={17} /><span className="hidden lg:ml-2 lg:inline">Hapus</span></button></div>
           </div>)}
           {!sectionRows.length && <p className="py-4 text-center text-sm text-slate-400">Tarik item ke bagian ini.</p>}
         </div>
       </section>;
     })}</div>
+    {dragOverlay && createPortal(<div ref={overlayRef} aria-hidden className="pointer-events-none fixed z-[10000] flex min-h-14 items-center gap-3 rounded-xl border border-brand-300 bg-white/95 p-3 shadow-2xl ring-4 ring-brand-100/70 will-change-transform" style={{ left: dragOverlay.left, top: dragOverlay.top, width: dragOverlay.width }}><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600"><GripVertical size={23} /></span><span className="min-w-0 flex-1 truncate font-bold">{dragOverlay.title}</span><span className="rounded-full bg-brand-50 px-3 py-1 text-xs font-bold text-brand-700">Pindahkan</span></div>, document.body)}
   </div>;
 }
 export default function ChecklistPage({ settings = false }: { settings?: boolean }) {
