@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link } from 'react-router-dom';
+import { GripVertical } from 'lucide-react';
 import { api } from '../api';
 import { useOutlet } from '../OutletContext';
 
@@ -10,6 +11,18 @@ type Item = { id: string; title: string; section: Section; sortOrder: number; st
 type Daily = { reviewRequired: boolean; id: string; date: string; items: Item[]; updatedAt: string; reviewStatus: string; reviewer: { name: string } | null; reviewedAt: string | null; reviewNote: string | null; pendingAtReview: number | null; progress: { section: Section; done: number; total: number; percent: number }[] };
 type Summary = { canReview: boolean; canConfigure: boolean; rows: { outletId: string; name: string; date: string; reviewRequired: boolean; daily: Daily | null }[] };
 type Template = { id: string; title: string; section: Section; sortOrder: number; active: boolean };
+const orderedTemplates = (rows: Template[]) => sections.flatMap(section => rows.filter(row => row.section === section).sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id)));
+function moveTemplate(rows: Template[], id: string, targetSection: Section, targetIndex: number) {
+  const ordered = orderedTemplates(rows), dragged = ordered.find(row => row.id === id);
+  if (!dragged) return ordered;
+  const sourceIndex = ordered.filter(row => row.section === dragged.section).findIndex(row => row.id === id);
+  let insertionIndex = targetIndex;
+  if (dragged.section === targetSection && sourceIndex < insertionIndex) insertionIndex -= 1;
+  const groups = Object.fromEntries(sections.map(section => [section, ordered.filter(row => row.id !== id && row.section === section)])) as Record<Section, Template[]>;
+  insertionIndex = Math.max(0, Math.min(insertionIndex, groups[targetSection].length));
+  groups[targetSection].splice(insertionIndex, 0, { ...dragged, section: targetSection });
+  return sections.flatMap(section => groups[section].map((row, sortOrder) => ({ ...row, section, sortOrder })));
+}
 const stamp = (value: string) => new Date(value).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
 const errorText = (error: unknown) => error instanceof Error ? error.message : 'Permintaan gagal';
 function Progress({ daily }: { daily: Daily }) {
@@ -62,15 +75,20 @@ function ReviewSettings({ outletId }: { outletId: string }) {
   return <section className="card space-y-3 p-4"><h2 className="font-bold">Review outlet</h2><label className="flex items-center gap-3"><input className="h-6 w-6" type="checkbox" checked={required ?? false} disabled={required === null || busy} onChange={e => void change(e.target.checked)} />Wajib review Leader</label><p className="text-sm text-slate-500">Berlaku untuk checklist hari ini dan berikutnya. History sebelumnya tetap tersimpan.</p>{message && <p role="status" className="text-sm">{message}</p>}</section>;
 }
 function TemplateEditor({ outletId }: { outletId: string }) {
-  const [rows, setRows] = useState<Template[]>([]), [error, setError] = useState(''), [busy, setBusy] = useState(false);
+  const [rows, setRows] = useState<Template[]>([]), [error, setError] = useState(''), [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [draggingId, setDraggingId] = useState('');
   const empty = { id: '', title: '', section: 'OPENING' as Section, sortOrder: 0, active: true };
-  const [draft, setDraft] = useState<Template>(empty);
-  const [deleting, setDeleting] = useState<Template | null>(null);
-  const refresh = useCallback(() => api<Template[]>(`/checklists/${outletId}/templates`).then(setRows), [outletId]);
+  const [draft, setDraft] = useState<Template>(empty), [deleting, setDeleting] = useState<Template | null>(null);
+  const rowsRef = useRef<Template[]>([]);
+  const dragRef = useRef<{ id: string; pointerId: number; original: Template[]; moved: boolean; target: string } | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
+  const updateRows = useCallback((next: Template[]) => { const ordered = orderedTemplates(next); rowsRef.current = ordered; setRows(ordered); }, []);
+  const refresh = useCallback(() => api<Template[]>(`/checklists/${outletId}/templates`).then(updateRows), [outletId, updateRows]);
   useEffect(() => { refresh().catch(e => setError(errorText(e))); }, [refresh]);
+  useEffect(() => () => cleanupRef.current?.(), []);
+
   async function remove() {
     if (!deleting) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setMessage('');
     try {
       await api(`/checklists/${outletId}/templates/${deleting.id}`, { method: 'DELETE' });
       if (draft.id === deleting.id) setDraft(empty);
@@ -79,12 +97,91 @@ function TemplateEditor({ outletId }: { outletId: string }) {
     finally { setBusy(false); }
   }
   async function save(item: Template) {
-    setBusy(true); setError('');
-    try { const { id, title, section, sortOrder, active } = item; const body = { title, section, sortOrder, active }; await api(`/checklists/${outletId}/templates${id ? `/${id}` : ''}`, { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) }); await refresh(); setDraft(empty); }
-    catch (e) { setError(errorText(e)); }
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const { id, title, section, active } = item;
+      const sortOrder = id ? item.sortOrder : rowsRef.current.filter(row => row.section === section).length;
+      await api(`/checklists/${outletId}/templates${id ? `/${id}` : ''}`, { method: id ? 'PUT' : 'POST', body: JSON.stringify({ title, section, sortOrder, active }) });
+      await refresh(); setDraft(empty);
+    } catch (e) { setError(errorText(e)); }
     finally { setBusy(false); }
   }
-  return <div className="space-y-4"><p className="text-sm text-slate-600">Daftar item ini hanya berlaku untuk outlet yang dipilih. Setiap outlet dapat memiliki item berbeda. Item baru langsung ditambahkan ke checklist hari ini. Edit dan nonaktif berlaku untuk checklist berikutnya. Hapus menghilangkan item dari pengaturan dan checklist hari ini; history tetap tersimpan.</p>{error && <p role="alert" className="text-red-700">{error}</p>}{deleting && <div role="alertdialog" aria-label="Hapus item checklist" className="card space-y-3 border-red-200 p-4"><h2 className="font-bold">Hapus {deleting.title}?</h2><p>Item dan status centangnya akan dihapus dari checklist hari ini. History sebelumnya tetap tersimpan. Review hari ini perlu diulang jika item dihapus.</p><button className="btn-soft" disabled={busy} onClick={() => setDeleting(null)}>Batal</button><button className="btn-primary ml-2" disabled={busy} onClick={() => void remove()}>Ya, Hapus</button></div>}<form className="card space-y-3 p-4" onSubmit={e => { e.preventDefault(); void save(draft); }}><h2 className="font-bold">{draft.id ? 'Edit item' : 'Tambah item'}</h2><label className="block">Judul<input className="input" required maxLength={250} value={draft.title} onChange={e => setDraft({ ...draft, title: e.target.value })} /></label><div className="grid grid-cols-2 gap-3"><label>Bagian<select className="input" value={draft.section} onChange={e => setDraft({ ...draft, section: e.target.value as Section })}>{sections.map(s => <option key={s} value={s}>{labels[s]}</option>)}</select></label><label>Urutan<input className="input" type="number" min={0} max={10000} required value={draft.sortOrder} onChange={e => setDraft({ ...draft, sortOrder: Number(e.target.value) })} /></label></div><button className="btn-primary" disabled={busy}>Simpan Item</button>{draft.id && <button type="button" className="btn-soft ml-2" onClick={() => setDraft(empty)}>Batal Edit</button>}</form>{sections.map(section => <section key={section} className="card p-4"><h2 className="mb-3 font-bold">{labels[section]}</h2>{rows.filter(r => r.section === section).map(item => <div key={item.id} className="flex flex-wrap items-center gap-2 border-t py-3"><span className="min-w-40 flex-1">{item.sortOrder}. {item.title}{!item.active && <span className="ml-2 text-slate-500">(Nonaktif)</span>}</span><button className="btn-soft" disabled={busy} onClick={() => { setDraft(item); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Edit</button><button className="btn-soft" disabled={busy} onClick={() => void save({ ...item, active: !item.active })}>{item.active ? 'Nonaktifkan' : 'Aktifkan'}</button><button className="btn-soft text-red-700" disabled={busy} onClick={() => { setDeleting(item); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Hapus</button></div>)}</section>)}</div>;
+  async function persistOrder(next: Template[]) {
+    setBusy(true); setError(''); setMessage('Menyimpan urutan…');
+    try {
+      const saved = await api<Template[]>(`/checklists/${outletId}/templates/reorder`, { method: 'POST', body: JSON.stringify({ items: next.map(({ id, section, sortOrder }) => ({ id, section, sortOrder })) }) });
+      updateRows(saved); setDraft(current => current.id ? saved.find(row => row.id === current.id) || current : current); setMessage('Urutan checklist tersimpan otomatis.');
+    } catch (e) { setError(errorText(e)); setMessage(''); await refresh().catch(() => undefined); }
+    finally { setBusy(false); }
+  }
+  function beginDrag(event: ReactPointerEvent<HTMLButtonElement>, item: Template) {
+    if (busy || (event.pointerType === 'mouse' && event.button !== 0)) return;
+    event.preventDefault();
+    const previousUserSelect = document.body.style.userSelect, previousCursor = document.body.style.cursor;
+    dragRef.current = { id: item.id, pointerId: event.pointerId, original: rowsRef.current, moved: false, target: '' };
+    setDraggingId(item.id); setError(''); setMessage('Geser item ke posisi atau bagian tujuan.');
+    document.body.style.userSelect = 'none'; document.body.style.cursor = 'grabbing';
+    const move = (pointer: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || pointer.pointerId !== drag.pointerId) return;
+      pointer.preventDefault();
+      if (pointer.clientY < 80) window.scrollBy(0, -14);
+      else if (pointer.clientY > window.innerHeight - 80) window.scrollBy(0, 14);
+      const target = document.elementFromPoint(pointer.clientX, pointer.clientY)?.closest<HTMLElement>('[data-checklist-drop]');
+      const section = target?.dataset.checklistSection as Section | undefined;
+      if (!target || !section || !sections.includes(section)) return;
+      let index = Number(target.dataset.checklistIndex || 0);
+      if (target.dataset.checklistItem === 'true') {
+        const rect = target.getBoundingClientRect();
+        if (pointer.clientY > rect.top + rect.height / 2) index += 1;
+      }
+      const targetKey = `${section}:${index}`;
+      if (drag.target === targetKey) return;
+      drag.target = targetKey;
+      const next = moveTemplate(rowsRef.current, drag.id, section, index);
+      if (next.some((row, rowIndex) => row.id !== rowsRef.current[rowIndex]?.id || row.section !== rowsRef.current[rowIndex]?.section)) {
+        drag.moved = true; updateRows(next);
+      }
+    };
+    const finish = (pointer: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || pointer.pointerId !== drag.pointerId) return;
+      cleanup(); dragRef.current = null; setDraggingId('');
+      if (drag.moved) void persistOrder(rowsRef.current); else setMessage('');
+    };
+    const cancel = (pointer: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || pointer.pointerId !== drag.pointerId) return;
+      cleanup(); updateRows(drag.original); dragRef.current = null; setDraggingId(''); setMessage('');
+    };
+    const cleanup = () => {
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish); window.removeEventListener('pointercancel', cancel);
+      document.body.style.userSelect = previousUserSelect; document.body.style.cursor = previousCursor; cleanupRef.current = null;
+    };
+    cleanupRef.current = cleanup;
+    window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', finish); window.addEventListener('pointercancel', cancel);
+  }
+
+  return <div className="space-y-4">
+    <p className="text-sm text-slate-600">Daftar item ini hanya berlaku untuk outlet yang dipilih. Item baru langsung ditambahkan ke checklist hari ini. Tarik pegangan untuk mengubah urutan atau memindahkan item ke bagian lain; perubahan langsung diterapkan pada checklist hari ini tanpa menghapus status centang.</p>
+    {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-red-700">{error}</p>}
+    {message && <p role="status" className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700">{message}</p>}
+    {deleting && <div role="alertdialog" aria-label="Hapus item checklist" className="card space-y-3 border-red-200 p-4"><h2 className="font-bold">Hapus {deleting.title}?</h2><p>Item dan status centangnya akan dihapus dari checklist hari ini. History sebelumnya tetap tersimpan. Review hari ini perlu diulang jika item dihapus.</p><button className="btn-soft" disabled={busy} onClick={() => setDeleting(null)}>Batal</button><button className="btn-primary ml-2" disabled={busy} onClick={() => void remove()}>Ya, Hapus</button></div>}
+    <form className="card space-y-3 p-4" onSubmit={event => { event.preventDefault(); void save(draft); }}><h2 className="font-bold">{draft.id ? 'Edit item' : 'Tambah item'}</h2><label className="block">Judul<input className="input" required maxLength={250} value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label><label className="block">Bagian<select className="input" value={draft.section} onChange={event => setDraft({ ...draft, section: event.target.value as Section })}>{sections.map(section => <option key={section} value={section}>{labels[section]}</option>)}</select></label><button className="btn-primary" disabled={busy}>Simpan Item</button>{draft.id && <button type="button" className="btn-soft ml-2" onClick={() => setDraft(empty)}>Batal Edit</button>}</form>
+    <div className="space-y-4"><div><h2 className="text-lg font-black">Atur urutan</h2><p className="text-sm text-slate-500">Tekan dan geser ikon pegangan. Item dapat dipindahkan antarbagian.</p></div>{sections.map(section => {
+      const sectionRows = rows.filter(row => row.section === section);
+      return <section key={section} className={`card p-4 transition ${draggingId ? 'ring-2 ring-brand-100' : ''}`}>
+        <h2 className="mb-3 flex items-center justify-between font-bold"><span>{labels[section]}</span><span className="text-xs font-medium text-slate-400">{sectionRows.length} item</span></h2>
+        <div className="min-h-16 space-y-2 rounded-xl border border-dashed border-slate-200 p-2" data-checklist-drop data-checklist-section={section} data-checklist-index={sectionRows.length}>
+          {sectionRows.map((item, index) => <div key={item.id} data-checklist-drop data-checklist-item="true" data-checklist-section={section} data-checklist-index={index} className={`rounded-xl border bg-white p-2 shadow-sm transition ${draggingId === item.id ? 'pointer-events-none scale-[0.98] opacity-50' : ''}`}>
+            <div className="flex items-center gap-2"><button type="button" aria-label={`Geser ${item.title}`} title="Geser untuk mengatur urutan" disabled={busy} onPointerDown={event => beginDrag(event, item)} className="flex h-11 w-11 shrink-0 touch-none cursor-grab items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 active:cursor-grabbing"><GripVertical size={22} /></button><span className="min-w-0 flex-1"><span className="block font-medium">{item.title}</span><span className="text-xs text-slate-400">Urutan {index + 1}{!item.active ? ' · Nonaktif' : ''}</span></span></div>
+            <div className="mt-2 flex flex-wrap justify-end gap-2"><button className="btn-soft px-3 py-2 text-sm" disabled={busy} onClick={() => { setDraft(item); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Edit</button><button className="btn-soft px-3 py-2 text-sm" disabled={busy} onClick={() => void save({ ...item, active: !item.active })}>{item.active ? 'Nonaktifkan' : 'Aktifkan'}</button><button className="btn-soft px-3 py-2 text-sm text-red-700" disabled={busy} onClick={() => { setDeleting(item); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Hapus</button></div>
+          </div>)}
+          {!sectionRows.length && <p className="py-4 text-center text-sm text-slate-400">Tarik item ke bagian ini.</p>}
+        </div>
+      </section>;
+    })}</div>
+  </div>;
 }
 export default function ChecklistPage({ settings = false }: { settings?: boolean }) {
   const { selectedOutletId, setSelectedOutletId } = useOutlet();

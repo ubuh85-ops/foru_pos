@@ -9,7 +9,7 @@ vi.mock('./lib.js', async original => ({
   prisma: {
     outlet: { findFirst: vi.fn(), findMany: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn() },
     dailyChecklist: { updateMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn(), count: vi.fn() },
-    dailyChecklistItem: { update: vi.fn(), createMany: vi.fn(), deleteMany: vi.fn() },
+    dailyChecklistItem: { update: vi.fn(), updateMany: vi.fn(), createMany: vi.fn(), deleteMany: vi.fn() },
     checklistTemplateItem: { findFirst: vi.fn(), delete: vi.fn(), createMany: vi.fn(), findMany: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
     $queryRaw: vi.fn(),
     $transaction: vi.fn(),
@@ -161,6 +161,31 @@ describe('Template additions and deletion', () => {
     vi.mocked(prisma.checklistTemplateItem.findFirst).mockResolvedValue(null);
     expect((await request('/checklists/outlet-a/templates/new-template', 'DELETE', undefined, 'OWNER')).status).toBe(404);
     expect(prisma.checklistTemplateItem.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('Template drag reorder', () => {
+  const templates = [
+    { id: 'template-a', title: 'Buka outlet', section: 'OPENING', sortOrder: 0, active: true },
+    { id: 'template-b', title: 'Tutup outlet', section: 'CLOSING', sortOrder: 0, active: true },
+  ];
+  it('moves items across sections and updates today without clearing completion status', async () => {
+    vi.mocked(prisma.checklistTemplateItem.findMany).mockResolvedValue(templates as never);
+    const response = await request('/checklists/outlet-a/templates/reorder', 'POST', { items: [
+      { id: 'template-b', section: 'OPENING', sortOrder: 0 },
+      { id: 'template-a', section: 'OPERATIONAL', sortOrder: 0 },
+    ] }, 'OWNER');
+    expect(response.status).toBe(200);
+    expect(prisma.checklistTemplateItem.updateMany).toHaveBeenCalledWith({ where: { id: 'template-b', businessId: 'business-a', outletId: 'outlet-a' }, data: { section: 'OPENING', sortOrder: 0 } });
+    expect(prisma.dailyChecklistItem.updateMany).toHaveBeenCalledWith({ where: { dailyChecklistId: 'daily-a', templateItemId: 'template-a' }, data: { section: 'OPERATIONAL', sortOrder: 0 } });
+    expect(prisma.dailyChecklist.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'daily-a' }, data: expect.objectContaining({ reviewStatus: 'NOT_REVIEWED' }) }));
+  });
+  it('rejects duplicate, incomplete, foreign and non-owner reorder requests', async () => {
+    vi.mocked(prisma.checklistTemplateItem.findMany).mockResolvedValue(templates as never);
+    expect((await request('/checklists/outlet-a/templates/reorder', 'POST', { items: [{ id: 'template-a', section: 'OPENING', sortOrder: 0 }, { id: 'template-a', section: 'CLOSING', sortOrder: 0 }] }, 'OWNER')).status).toBe(400);
+    expect((await request('/checklists/outlet-a/templates/reorder', 'POST', { items: [{ id: 'template-a', section: 'OPENING', sortOrder: 0 }] }, 'OWNER')).status).toBe(400);
+    expect((await request('/checklists/outlet-a/templates/reorder', 'POST', { items: [{ id: 'template-a', section: 'OPENING', sortOrder: 0 }, { id: 'foreign', section: 'CLOSING', sortOrder: 0 }] }, 'OWNER')).status).toBe(400);
+    expect((await request('/checklists/outlet-a/templates/reorder', 'POST', { items: templates.map(({ id, section, sortOrder }) => ({ id, section, sortOrder })) })).status).toBe(403);
   });
 });
 

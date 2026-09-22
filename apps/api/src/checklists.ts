@@ -15,6 +15,7 @@ export const dateInput = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value =>
 }, 'Tanggal tidak valid');
 const idInput = z.string().min(1).max(100);
 const templateInput = z.object({ title: z.string().trim().min(1).max(250), section: z.enum(sections), sortOrder: z.number().int().min(0).max(10000), active: z.boolean().default(true) }).strict();
+const reorderInput = z.object({ items: z.array(z.object({ id: idInput, section: z.enum(sections), sortOrder: z.number().int().min(0).max(10000) }).strict()).min(1).max(500) }).strict();
 export const reviewInput = z.object({ confirmed: z.literal(true), acceptIncomplete: z.boolean().default(false), note: z.string().trim().max(2000).default('') }).strict();
 export function today(timezone: string, now = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
@@ -151,6 +152,28 @@ export function registerChecklists(router: Router) {
       return created;
     });
     res.status(201).json(row);
+  }));
+  router.post('/checklists/:outletId/templates/reorder', allow('OWNER'), asyncRoute(async (req, res) => {
+    const outlet = await outletFor(req), input = reorderInput.parse(req.body);
+    const ids = input.items.map(item => item.id);
+    if (new Set(ids).size !== ids.length) throw new ApiError(400, 'Item urutan tidak boleh duplikat');
+    const rows = await locked(outlet.id, async tx => {
+      await initialize(tx, outlet.businessId, outlet.id);
+      const existing = await tx.checklistTemplateItem.findMany({ where: { businessId: outlet.businessId, outletId: outlet.id } });
+      const existingIds = new Set(existing.map(item => item.id));
+      if (existing.length !== input.items.length || input.items.some(item => !existingIds.has(item.id))) throw new ApiError(400, 'Daftar item checklist tidak lengkap');
+      await Promise.all(input.items.map(item => tx.checklistTemplateItem.updateMany({
+        where: { id: item.id, businessId: outlet.businessId, outletId: outlet.id },
+        data: { section: item.section, sortOrder: item.sortOrder },
+      })));
+      const daily = await tx.dailyChecklist.findUnique({ where: { businessId_outletId_date: { businessId: outlet.businessId, outletId: outlet.id, date: new Date(today(outlet.timezone)) } } });
+      if (daily) {
+        await Promise.all(input.items.map(item => tx.dailyChecklistItem.updateMany({ where: { dailyChecklistId: daily.id, templateItemId: item.id }, data: { section: item.section, sortOrder: item.sortOrder } })));
+        await tx.dailyChecklist.update({ where: { id: daily.id }, data: { ...resetReview, updatedAt: new Date() } });
+      }
+      return tx.checklistTemplateItem.findMany({ where: { businessId: outlet.businessId, outletId: outlet.id }, orderBy: [{ section: 'asc' }, { sortOrder: 'asc' }, { id: 'asc' }] });
+    });
+    res.json(rows);
   }));
   router.put('/checklists/:outletId/templates/:itemId', allow('OWNER'), asyncRoute(async (req, res) => {
     const outlet = await outletFor(req), input = templateInput.parse(req.body), id = idInput.parse(req.params.itemId);
