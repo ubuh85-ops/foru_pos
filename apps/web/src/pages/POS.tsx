@@ -13,7 +13,7 @@ import { isValidWhatsAppNumber, openWhatsAppInvoice } from '../whatsappInvoice';
 type Option = { id: string; name: string; additionalPrice: number; hpp: number };
 type Group = { id: string; name: string; minSelect: number; maxSelect: number; required: boolean; options: Option[] };
 type Variant = { id: string; variantName: string; sellingPrice: number };
-type Product = { id: string; name: string; category: string; categoryRef?: { name: string }; basePrice: number; masterBasePrice?: number; baseHpp: number; imageUrl?: string; isAvailable?: boolean; stockMode?: 'UNLIMITED'|'MANUAL'|'RECIPE'; stockQty?: number|null; lowStockThreshold?: number; stockStatus?: string; variants: Variant[]; variantGroups: { group: Group }[] };
+type Product = { id: string; name: string; category: string; categoryRef?: { name: string }; categories?: { id: string; name: string; sortOrder?: number }[]; basePrice: number; masterBasePrice?: number; baseHpp: number; imageUrl?: string; isAvailable?: boolean; stockMode?: 'UNLIMITED'|'MANUAL'|'RECIPE'; stockQty?: number|null; lowStockThreshold?: number; stockStatus?: string; variants: Variant[]; variantGroups: { group: Group }[] };
 type Line = { key: string; productId: string; variantId?: string; selectedVariantOptionIds?: string[]; name: string; variant: string; price: number; qty: number; stockMode?: 'UNLIMITED'|'MANUAL'|'RECIPE'; stockQty?: number|null; itemNote?: string; discount?: { type: 'NOMINAL' | 'PERCENTAGE'; value: number } };
 type CartQtySnapshot = Record<string, number>;
 type PosDialog =
@@ -23,6 +23,7 @@ type PosDialog =
 
 const calcDisc = (base: number, d?: Line['discount']) => !d ? 0 : Math.min(base, d.type === 'PERCENTAGE' ? base * d.value / 100 : d.value);
 const catName = (p: Product) => p.categoryRef?.name || p.category;
+const catNames = (p: Product) => p.categories?.length ? p.categories.map(category => category.name) : [catName(p)];
 const searchKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
 const API_ORIGIN = API.replace(/\/api\/?$/, '');
 const productImageSrc = (url?: string | null) => !url ? foruLogo : url.startsWith('/storage/') ? `${API_ORIGIN}${url}` : url;
@@ -250,10 +251,15 @@ export default function POS() {
   }, [mobileCartOpen]);
 
   const shiftOpen = !!activeShift && activeShift.status === 'OPEN' && activeShift.outletId === outlet;
-  const cats = ['Semua', ...new Set(products.map(catName))];
+  const categoryOrder = new Map<string, number>();
+  for (const product of products) {
+    if (product.categories?.length) product.categories.forEach(category => categoryOrder.set(category.name, Math.min(categoryOrder.get(category.name) ?? Number.MAX_SAFE_INTEGER, Number(category.sortOrder ?? 0))));
+    else categoryOrder.set(catName(product), 0);
+  }
+  const cats = ['Semua', ...[...categoryOrder.entries()].sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0])).map(([name]) => name)];
   const filtered = products.filter(p => {
     const query = searchKey(q);
-    return (cat === 'Semua' || catName(p) === cat) && (!query || searchKey(p.name).includes(query));
+    return (cat === 'Semua' || catNames(p).includes(cat)) && (!query || searchKey(p.name).includes(query));
   });
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -524,7 +530,7 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
               {!soldOut&&lowStock&&<span className="absolute right-2 top-2 rounded-full bg-amber-500 px-3 py-1 text-xs font-black text-white">MAU HABIS{p.stockQty==null?'':` · ${p.stockQty}`}</span>}
               </div>
               <div className="p-3">
-                <p className="truncate text-[11px] font-bold text-slate-400">{catName(p)}</p>
+                <p className="truncate text-[11px] font-bold text-slate-400">{catNames(p).join(', ')}</p>
                 <h3 className="line-clamp-3 min-h-[2.35rem] text-sm font-extrabold leading-tight text-ink">{p.name}</h3>
                 <div className="mt-3 flex items-center justify-between gap-2 rounded-2xl bg-slate-50 px-3 py-2">
                   <span className="truncate text-[11px] font-bold text-slate-500">{p.variantGroups?.length ? 'Pilih opsi' : p.variants[0]?.variantName || 'Base'}</span>

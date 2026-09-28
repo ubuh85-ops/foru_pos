@@ -4,7 +4,7 @@ import { ApiError, money, prisma } from './lib.js';
 export type DiscountInput={type?:'NOMINAL'|'PERCENTAGE';value?:number};
 export type CartLine={productId:string;variantId?:string;selectedVariantOptionIds?:string[];qty:number;discount?:DiscountInput;addonIds?:string[];itemNote?:string};
 export type PriceChannel=Extract<PaymentMethod,'GOFOOD'|'GRABFOOD'|'SHOPEEFOOD'>|'DINE_IN'|'TAKE_AWAY';
-export type PricedLine={outletId:string;productId:string;variantId?:string;productName:string;variantName:string;categoryId?:string|null;category:string;qty:number;unitPrice:number;hpp:number;gross:number;discountType?:'NOMINAL'|'PERCENTAGE';discountValue?:number;discountAmount:number;net:number;itemNote?:string;addons:{id:string;name:string;price:number;hpp:number}[];selectedVariants:{groupId:string;groupName:string;optionId:string;optionName:string;additionalPrice:number;hpp:number}[];basePrice:number;outletPrice?:number;channel?:PaymentMethod;dineInPriceSnapshot:number;channelPriceSnapshot?:number;priceSource:'BASE'|'OUTLET'|'CHANNEL';baseMarginPercent:number;actualMarginPercent:number;variantPriceTotal:number;baseHpp:number;outletHpp?:number;variantHppTotal:number};
+export type PricedLine={outletId:string;productId:string;variantId?:string;productName:string;variantName:string;categoryId?:string|null;category:string;categoryIds:string[];categories:string[];qty:number;unitPrice:number;hpp:number;gross:number;discountType?:'NOMINAL'|'PERCENTAGE';discountValue?:number;discountAmount:number;net:number;itemNote?:string;addons:{id:string;name:string;price:number;hpp:number}[];selectedVariants:{groupId:string;groupName:string;optionId:string;optionName:string;additionalPrice:number;hpp:number}[];basePrice:number;outletPrice?:number;channel?:PaymentMethod;dineInPriceSnapshot:number;channelPriceSnapshot?:number;priceSource:'BASE'|'OUTLET'|'CHANNEL';baseMarginPercent:number;actualMarginPercent:number;variantPriceTotal:number;baseHpp:number;outletHpp?:number;variantHppTotal:number};
 type LoadedCoupon=Coupon&{outlets:CouponOutlet[];products:CouponProduct[];categories:CouponCategory[]};
 
 export function discountAmount(base:number,input?:DiscountInput){
@@ -42,6 +42,7 @@ export async function priceCart(items:CartLine[],outletId:string,channel?:string
       where:{AND:[businessId?{businessId}:{}, {id:line.productId,status:'ACTIVE',outlets:{some:{outletId,isAvailable:true,isActive:true,status:'ACTIVE'}}}]},
       include:{
         categoryRef:true,
+        categoryAssignments:{include:{category:true},orderBy:{sortOrder:'asc'}},
         addons:true,
         outlets:{where:{outletId}},
         channelPrices:onlineChannel?{where:{outletId,channel:onlineChannel,status:'ACTIVE'}}:false,
@@ -92,7 +93,8 @@ export async function priceCart(items:CartLine[],outletId:string,channel?:string
     const unit=effectiveBasePrice+combinedVariantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0);
     const hpp=effectiveBaseHpp+variantHppTotal+selectedAddons.reduce((s,a)=>s+Number(a.hpp),0);
     const gross=money(unit*line.qty), disc=discountAmount(gross,line.discount);
-    return {outletId,productId:line.productId,variantId,productName:product.name,variantName,categoryId:product.categoryId,category:product.categoryRef?.name||product.category,qty:line.qty,unitPrice:money(unit),hpp:money(hpp),gross,discountType:line.discount?.type,discountValue:line.discount?.value,discountAmount:disc,net:money(gross-disc),itemNote:itemNote||undefined,addons:selectedAddons.map(a=>({id:a.id,name:a.addonName,price:Number(a.price),hpp:Number(a.hpp)})),selectedVariants,basePrice:money(basePrice),outletPrice:outletPrice===undefined?undefined:money(outletPrice),channel:onlineChannel,dineInPriceSnapshot:money(dineInPrice+combinedVariantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)),channelPriceSnapshot:hasChannelPrice?money(channelPrice+combinedVariantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)):undefined,priceSource,baseMarginPercent:percentMargin(dineInPrice+combinedVariantPriceTotal, hpp),actualMarginPercent:percentMargin(unit,hpp),variantPriceTotal:money(combinedVariantPriceTotal),baseHpp:money(baseHpp),outletHpp:outletHpp===undefined?undefined:money(outletHpp),variantHppTotal:money(variantHppTotal)};
+    const assignedCategories=product.categoryAssignments.map(row=>row.category);
+    return {outletId,productId:line.productId,variantId,productName:product.name,variantName,categoryId:product.categoryId,category:product.categoryRef?.name||product.category,categoryIds:assignedCategories.length?assignedCategories.map(c=>c.id):(product.categoryId?[product.categoryId]:[]),categories:assignedCategories.length?assignedCategories.map(c=>c.name):[product.categoryRef?.name||product.category],qty:line.qty,unitPrice:money(unit),hpp:money(hpp),gross,discountType:line.discount?.type,discountValue:line.discount?.value,discountAmount:disc,net:money(gross-disc),itemNote:itemNote||undefined,addons:selectedAddons.map(a=>({id:a.id,name:a.addonName,price:Number(a.price),hpp:Number(a.hpp)})),selectedVariants,basePrice:money(basePrice),outletPrice:outletPrice===undefined?undefined:money(outletPrice),channel:onlineChannel,dineInPriceSnapshot:money(dineInPrice+combinedVariantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)),channelPriceSnapshot:hasChannelPrice?money(channelPrice+combinedVariantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)):undefined,priceSource,baseMarginPercent:percentMargin(dineInPrice+combinedVariantPriceTotal, hpp),actualMarginPercent:percentMargin(unit,hpp),variantPriceTotal:money(combinedVariantPriceTotal),baseHpp:money(baseHpp),outletHpp:outletHpp===undefined?undefined:money(outletHpp),variantHppTotal:money(variantHppTotal)};
   }));
 }
 export async function validateCoupon(code:string,outletId:string,lines:PricedLine[],customerKey?:string,businessId?:string){
@@ -107,7 +109,7 @@ export async function validateCoupon(code:string,outletId:string,lines:PricedLin
   const afterProduct=money(lines.reduce((s,l)=>s+l.net,0));
   if(afterProduct<Number(coupon.minimumTransactionAmount)) throw new ApiError(400,`Minimum transaksi kupon Rp${Number(coupon.minimumTransactionAmount).toLocaleString('id-ID')}`);
   let eligible=lines;
-  if(coupon.products.length||coupon.categories.length) eligible=lines.filter(l=>coupon.products.some(p=>p.productId===l.productId)||coupon.categories.some(c=>c.category===l.category));
+  if(coupon.products.length||coupon.categories.length) eligible=lines.filter(l=>coupon.products.some(p=>p.productId===l.productId)||coupon.categories.some(c=>l.categories.includes(c.category)));
   if(!eligible.length) throw new ApiError(400,'Tidak ada produk yang memenuhi syarat kupon');
   const base=money(eligible.reduce((s,l)=>s+l.net,0));
   let amount=coupon.discountType==='PERCENTAGE'?base*Number(coupon.discountValue)/100:Number(coupon.discountValue);

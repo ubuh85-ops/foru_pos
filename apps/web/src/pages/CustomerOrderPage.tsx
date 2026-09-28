@@ -32,6 +32,7 @@ type PublicProduct = {
   sku?: string | null;
   category?: string;
   categoryRef?: { id: string; name: string; sortOrder?: number } | null;
+  categories?: { id: string; name: string; sortOrder?: number }[];
   description?: string | null;
   imageUrl?: string | null;
   isAvailable: boolean;
@@ -335,6 +336,7 @@ export default function CustomerOrderPage() {
           product.name,
           product.sku,
           product.categoryRef?.name,
+          ...(product.categories || []).map(category => category.name),
           product.category,
           product.description,
         ].some((value) =>
@@ -351,20 +353,32 @@ export default function CustomerOrderPage() {
       { id: string; name: string; sortOrder: number; products: PublicProduct[] }
     >();
     for (const product of filteredProducts) {
-      const id = product.categoryRef?.id || product.category || "uncategorized";
-      const name = product.categoryRef?.name || product.category || "Menu";
-      if (!map.has(id))
-        map.set(id, {
-          id,
-          name,
-          sortOrder: Number(product.categoryRef?.sortOrder ?? 0),
-          products: [],
-        });
-      map.get(id)!.products.push(product);
+      const assigned = product.categories?.length
+        ? product.categories
+        : [{ id: product.categoryRef?.id || product.category || "uncategorized", name: product.categoryRef?.name || product.category || "Menu", sortOrder: product.categoryRef?.sortOrder }];
+      for (const category of assigned) {
+        if (!map.has(category.id))
+          map.set(category.id, {
+            id: category.id,
+            name: category.name,
+            sortOrder: Number(category.sortOrder ?? 0),
+            products: [],
+          });
+        map.get(category.id)!.products.push(product);
+      }
     }
     return Array.from(map.values()).sort(
       (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)
     );
+  }, [filteredProducts]);
+  const primaryGroupedProducts = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; sortOrder: number; products: PublicProduct[] }>();
+    for (const product of filteredProducts) {
+      const category = product.categories?.[0] || { id: product.categoryRef?.id || product.category || "uncategorized", name: product.categoryRef?.name || product.category || "Menu", sortOrder: product.categoryRef?.sortOrder };
+      if (!map.has(category.id)) map.set(category.id, { id: category.id, name: category.name, sortOrder: Number(category.sortOrder ?? 0), products: [] });
+      map.get(category.id)!.products.push(product);
+    }
+    return Array.from(map.values()).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
   }, [filteredProducts]);
   const searchActive = search.trim().length > 0;
   const recommendationGroup = useMemo(() => {
@@ -386,8 +400,8 @@ export default function CustomerOrderPage() {
         id: "all",
         name: "Semua",
         groups: recommendationGroup
-          ? [recommendationGroup, ...groupedProducts]
-          : groupedProducts,
+          ? [recommendationGroup, ...primaryGroupedProducts]
+          : primaryGroupedProducts,
       },
       ...(recommendationGroup
         ? [
@@ -404,7 +418,7 @@ export default function CustomerOrderPage() {
         groups: [group],
       })),
     ],
-    [groupedProducts, recommendationGroup]
+    [groupedProducts, primaryGroupedProducts, recommendationGroup]
   );
   const categoryNav = useMemo(
     () => categoryPages.map((page) => page.name),

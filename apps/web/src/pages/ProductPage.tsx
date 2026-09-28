@@ -533,6 +533,7 @@ export default function ProductPage() {
             name: f.get("name"),
             sku: f.get("sku"),
             categoryId: f.get("categoryId"),
+            categoryIds: Array.from(new Set([String(f.get("categoryId") || ""), ...f.getAll("categoryIds").map(String)])).filter(Boolean),
             description: f.get("description"),
             imageUrl: f.get("imageUrl"),
             basePrice: Number(f.get("basePrice") || 0),
@@ -842,7 +843,7 @@ export default function ProductPage() {
                       </p>
                     </td>
                     <td>{p.sku || "-"}</td>
-                    <td>{p.categoryRef?.name || p.category}</td>
+                    <td>{(p.categoryAssignments || []).map((row: any) => row.category?.name).filter(Boolean).join(", ") || p.categoryRef?.name || p.category}</td>
                     <td>
                       {selectedOutlet ? (
                         <div>
@@ -942,7 +943,7 @@ export default function ProductPage() {
               ]}
             />
             <ProductImageUpload initialUrl={edit.imageUrl} />
-            <label className="label">Kategori</label>
+            <label className="label">Kategori utama</label>
             <select
               className="input mb-3"
               name="categoryId"
@@ -955,6 +956,13 @@ export default function ProductPage() {
                 </option>
               ))}
             </select>
+            <p className="-mt-1 mb-3 text-xs text-slate-400">Kategori utama dipakai untuk laporan penjualan agar nilai tidak dihitung ganda.</p>
+            <CheckList
+              title="Kategori tampilan (bisa pilih lebih dari satu)"
+              name="categoryIds"
+              rows={categories.filter((c) => c.status !== "INACTIVE").map((c) => [c.id, c.name])}
+              checked={(edit.categoryAssignments || []).map((row: any) => row.categoryId).concat(edit.categoryId ? [edit.categoryId] : [])}
+            />
             <label className="label">Status produk master</label>
             <select
               className="input mb-3"
@@ -1400,7 +1408,7 @@ function ProductCard({
               </span>
             )}
             <p className="text-sm text-slate-400">
-              {p.sku || "Tanpa SKU"} · {p.categoryRef?.name || p.category}
+              {p.sku || "Tanpa SKU"} · {(p.categoryAssignments || []).map((row: any) => row.category?.name).filter(Boolean).join(", ") || p.categoryRef?.name || p.category}
             </p>
           </div>
         </div>

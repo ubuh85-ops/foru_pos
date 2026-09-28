@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { ArrowDown, ArrowUp, GripVertical, Plus, X } from 'lucide-react';
 import { api } from '../api';
 import { toast } from '../toast';
+import { useOutlet } from '../OutletContext';
 
 type Category = {
   id: string;
@@ -24,6 +25,7 @@ function ordered(categories: Category[]) {
 }
 
 export default function CategoriesPage() {
+  const { selectedOutletId, selectedOutlet } = useOutlet();
   const [categories, setCategories] = useState<Category[]>([]);
   const [draft, setDraft] = useState<Category[]>([]);
   const [editing, setEditing] = useState<Category | null>(null);
@@ -38,7 +40,12 @@ export default function CategoriesPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const result = await api<Category[]>('/categories');
+      if (!selectedOutletId) {
+        setCategories([]);
+        setError('Pilih outlet terlebih dahulu.');
+        return;
+      }
+      const result = await api<Category[]>(`/categories?outletId=${encodeURIComponent(selectedOutletId)}`);
       setCategories(ordered(result));
       setError('');
     } catch (err) {
@@ -49,7 +56,7 @@ export default function CategoriesPage() {
     }
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { setReordering(false); void load(); }, [selectedOutletId]);
 
   const startReorder = () => {
     setDraft(ordered(categories).map((category, index) => ({ ...category, sortOrder: (index + 1) * 10 })));
@@ -80,7 +87,7 @@ export default function CategoriesPage() {
     try {
       const result = await api<Category[]>('/categories/reorder', {
         method: 'PUT',
-        body: JSON.stringify({ categories: draft.map(({ id, sortOrder }) => ({ id, sortOrder })) }),
+        body: JSON.stringify({ outletId: selectedOutletId, categories: draft.map(({ id, sortOrder }) => ({ id, sortOrder })) }),
       });
       setCategories(ordered(result));
       setReordering(false);
@@ -126,7 +133,7 @@ export default function CategoriesPage() {
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Kategori</h1>
-          <p className="mt-1 text-slate-500">Atur kategori produk dan urutan tampilnya di POS.</p>
+          <p className="mt-1 text-slate-500">Atur kategori dan urutan tampil khusus untuk <b>{selectedOutlet?.name || 'outlet yang dipilih'}</b>.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {reordering ? (
@@ -138,7 +145,7 @@ export default function CategoriesPage() {
             </>
           ) : (
             <>
-              <button className="btn-soft" type="button" onClick={startReorder} disabled={loading || !categories.length}>Atur Urutan</button>
+              <button className="btn-soft" type="button" onClick={startReorder} disabled={loading || !selectedOutletId || !categories.length}>Atur Urutan</button>
               <button className="btn-primary" type="button" onClick={openCreate}><Plus size={18} /> Tambah Kategori</button>
             </>
           )}
@@ -148,7 +155,7 @@ export default function CategoriesPage() {
       {error && <div className="mb-4 rounded-xl bg-red-50 p-4 text-red-700">{error}</div>}
       <section className="card">
         {loading ? <div className="py-12 text-center text-slate-400">Memuat kategori...</div> : !visibleCategories.length ? (
-          <div className="py-12 text-center text-slate-400">Belum ada kategori.</div>
+          <div className="py-12 text-center text-slate-400">{selectedOutletId ? 'Belum ada kategori yang memiliki produk aktif di outlet ini.' : 'Pilih outlet dari header terlebih dahulu.'}</div>
         ) : (
           <div className="space-y-2">
             {visibleCategories.map((category, index) => (

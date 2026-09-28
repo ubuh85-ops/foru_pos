@@ -272,17 +272,24 @@ async function effectiveProductStock(productId:string,po:any,outlet:any){
   const recipeAvailability=String(po?.stockMode||'UNLIMITED')==='RECIPE'?await productAvailabilityForOutlet(productId,outlet):undefined;
   return productStockSnapshot(po,recipeAvailability);
 }
-function publicProductShape(p:any,outletId:string,channel='DINE_IN',stock=productStockSnapshot(p.outlets?.[0])){
+async function outletCategoryOrderMap(outletId:string){
+  const rows=await prisma.outletCategory.findMany({where:{outletId},select:{categoryId:true,sortOrder:true}});
+  return new Map(rows.map(row=>[row.categoryId,row.sortOrder]));
+}
+function publicProductShape(p:any,outletId:string,channel='DINE_IN',stock=productStockSnapshot(p.outlets?.[0]),categoryOrder=new Map<string,number>()){
   const po=p.outlets?.[0];
   const dineInPrice=po?.outletPrice??p.basePrice;
   const cp=p.channelPrices?.[0];
   const activePrice=cp?.price??dineInPrice;
+  const categories=(p.categoryAssignments||[]).map((row:any)=>row.category).filter((category:any)=>category.status==='ACTIVE').map((category:any)=>({id:category.id,name:category.name,sortOrder:categoryOrder.get(category.id)??category.sortOrder})).sort((a:any,b:any)=>a.sortOrder-b.sortOrder||a.name.localeCompare(b.name));
+  const displayCategory=categories[0]||(p.categoryRef?{id:p.categoryRef.id,name:p.categoryRef.name,sortOrder:p.categoryRef.sortOrder}:null);
   return {
     id:p.id,
     sku:p.sku,
     name:p.name,
-    category:p.categoryRef?.name||p.category,
-    categoryRef:p.categoryRef?{id:p.categoryRef.id,name:p.categoryRef.name,sortOrder:p.categoryRef.sortOrder}:null,
+    category:displayCategory?.name||p.category,
+    categoryRef:displayCategory,
+    categories,
     description:p.description,
     imageUrl:p.imageUrl,
     ...stock,
@@ -345,8 +352,8 @@ api.get('/public/order/:businessSlug/:outletSlug',asyncRoute(async(req,res)=>{
 api.get('/public/order/:businessSlug/:outletSlug/products',asyncRoute(async(req,res)=>{
   const {business,outlet}=await resolvePublicOrderOutlet(String(req.params.businessSlug),String(req.params.outletSlug));
   if(!outlet.customerOrderingEnabled)throw new ApiError(403,'Pesanan online tidak aktif');
-  const products=await prisma.product.findMany({where:{businessId:business.id,status:'ACTIVE',OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}],outlets:{some:{outletId:outlet.id,isActive:true,status:'ACTIVE'}}},include:{categoryRef:true,outlets:{where:{outletId:outlet.id,isActive:true}},variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId:outlet.id}}}}}}}}},orderBy:[{categoryRef:{sortOrder:'asc'}},{name:'asc'}]});
-  res.json(await Promise.all(products.map(async p=>publicProductShape(p,outlet.id,'DINE_IN',await effectiveProductStock(p.id,p.outlets[0],outlet)))));
+  const [products,categoryOrder]=await Promise.all([prisma.product.findMany({where:{businessId:business.id,status:'ACTIVE',OR:[{categoryAssignments:{some:{category:{status:'ACTIVE'}}}},{AND:[{categoryAssignments:{none:{}}},{OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}]}]}],outlets:{some:{outletId:outlet.id,isActive:true,status:'ACTIVE'}}},include:{categoryRef:true,categoryAssignments:{where:{category:{status:'ACTIVE'}},include:{category:true},orderBy:{sortOrder:'asc'}},outlets:{where:{outletId:outlet.id,isActive:true}},variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId:outlet.id}}}}}}}}},orderBy:[{categoryRef:{sortOrder:'asc'}},{name:'asc'}]}),outletCategoryOrderMap(outlet.id)]);
+  res.json(await Promise.all(products.map(async p=>publicProductShape(p,outlet.id,'DINE_IN',await effectiveProductStock(p.id,p.outlets[0],outlet),categoryOrder))));
 }));
 api.post('/public/order/:businessSlug/:outletSlug/preview',asyncRoute(async(req,res)=>{
   const d=z.object({items:z.array(publicOrderItemInput).min(1).max(30),couponCode:z.string().trim().max(50).optional()}).parse(req.body);
@@ -689,9 +696,19 @@ api.delete('/printers/:id',allow('OWNER'),asyncRoute(async(req,res)=>{await asse
 const categoryBody=z.object({name:z.string().trim().min(2),description:z.string().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
 const categoryUpdateBody=categoryBody.partial();
 const categoryReorderBody=z.object({
+  outletId:z.string().optional(),
   categories:z.array(z.object({id:z.string().min(1),sortOrder:z.coerce.number().int().nonnegative()})).min(1)
 });
-api.get('/categories',asyncRoute(async(req,res)=>res.json(await prisma.category.findMany({where:tenantWhere(req),orderBy:[{sortOrder:'asc'},{name:'asc'}]}))));
+async function categoriesForOutlet(req:any,outletId:string){
+  await assertTenantOutlet(req,outletId);
+  const rows=await prisma.category.findMany({
+    where:tenantWhereAnd(req,{productAssignments:{some:{product:{status:'ACTIVE',outlets:{some:{outletId,isActive:true,status:'ACTIVE'}}}}}}),
+    include:{outletOrders:{where:{outletId}}},
+    orderBy:[{sortOrder:'asc'},{name:'asc'}]
+  });
+  return rows.map(({outletOrders,...category})=>({...category,globalSortOrder:category.sortOrder,sortOrder:outletOrders[0]?.sortOrder??category.sortOrder})).sort((a,b)=>a.sortOrder-b.sortOrder||a.name.localeCompare(b.name));
+}
+api.get('/categories',asyncRoute(async(req,res)=>{const outletId=String(req.query.outletId||'');res.json(outletId?await categoriesForOutlet(req,outletId):await prisma.category.findMany({where:tenantWhere(req),orderBy:[{sortOrder:'asc'},{name:'asc'}]}));}));
 api.post('/categories',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const d=categoryBody.parse(req.body);
   const max=await prisma.category.aggregate({where:tenantWhere(req),_max:{sortOrder:true}});
@@ -702,17 +719,18 @@ api.put('/categories/reorder',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,r
   const d=categoryReorderBody.parse(req.body);
   const ids=d.categories.map(category=>category.id);
   if(new Set(ids).size!==ids.length)throw new ApiError(400,'Kategori duplikat dalam urutan.');
-  const existing=await prisma.category.findMany({where:tenantWhereAnd(req,{id:{in:ids}}),select:{id:true}});
+  const scopedCategories=d.outletId?await categoriesForOutlet(req,d.outletId):null;
+  const existing=d.outletId?scopedCategories!.filter(category=>ids.includes(category.id)):await prisma.category.findMany({where:tenantWhereAnd(req,{id:{in:ids}}),select:{id:true}});
   if(existing.length!==ids.length)throw new ApiError(403,'Kategori tidak diizinkan.');
   const sortOrders=d.categories.map(category=>category.sortOrder);
   if(new Set(sortOrders).size!==sortOrders.length)throw new ApiError(400,'Urutan kategori harus unik.');
-  const updated=await prisma.$transaction(async tx=>{
+  await prisma.$transaction(async tx=>{
     for(const category of d.categories){
-      await tx.category.update({where:{id:category.id},data:{sortOrder:category.sortOrder}});
+      if(d.outletId)await tx.outletCategory.upsert({where:{outletId_categoryId:{outletId:d.outletId,categoryId:category.id}},update:{sortOrder:category.sortOrder},create:{outletId:d.outletId,categoryId:category.id,sortOrder:category.sortOrder}});
+      else await tx.category.update({where:{id:category.id},data:{sortOrder:category.sortOrder}});
     }
-    return tx.category.findMany({where:tenantWhere(req),orderBy:[{sortOrder:'asc'},{name:'asc'}]});
   });
-  res.json(updated);
+  res.json(d.outletId?await categoriesForOutlet(req,d.outletId):await prisma.category.findMany({where:tenantWhere(req),orderBy:[{sortOrder:'asc'},{name:'asc'}]}));
 }));
 api.put('/categories/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertTenantCategory(req,id);res.json(await prisma.category.update({where:{id},data:categoryUpdateBody.parse(req.body)}));}));
 api.delete('/categories/:id',allow('OWNER'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertTenantCategory(req,id);res.json(await prisma.category.update({where:{id},data:{status:'INACTIVE'}}));}));
@@ -743,7 +761,7 @@ const orderChannelSchema=z.enum(orderChannels);
 const outletPricingInput=z.object({outletId:z.string(),isAvailable:z.coerce.boolean().default(true),isRecommended:z.coerce.boolean().default(false),outletPrice:z.coerce.number().nonnegative().nullable().optional(),outletHpp:z.coerce.number().nonnegative().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
 const channelPricingInput=z.object({outletId:z.string(),channel:onlineChannelSchema,price:z.coerce.number().nonnegative().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
 const productImageUrlSchema=z.string().trim().optional().nullable().refine(value=>!value||value===''||/^https?:\/\//i.test(value)||value.startsWith('/storage/products/'),{message:'Image URL tidak valid'});
-const productInput=z.object({sku:z.string().trim().optional().nullable(),name:z.string().min(2),categoryId:z.string().optional(),category:z.string().optional(),description:z.string().optional(),imageUrl:productImageUrlSchema,basePrice:z.coerce.number().nonnegative().optional(),baseHpp:z.coerce.number().nonnegative().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE'),variantGroupIds:z.array(z.string()).default([]),outletIds:z.array(z.string()).default([]),outletPricing:z.array(outletPricingInput).optional(),channelPricing:z.array(channelPricingInput).optional(),variants:z.array(z.object({variantName:z.string(),sellingPrice:z.coerce.number().nonnegative(),hpp:z.coerce.number().nonnegative()})).optional()});
+const productInput=z.object({sku:z.string().trim().optional().nullable(),name:z.string().min(2),categoryId:z.string().optional(),categoryIds:z.array(z.string()).min(1).optional(),category:z.string().optional(),description:z.string().optional(),imageUrl:productImageUrlSchema,basePrice:z.coerce.number().nonnegative().optional(),baseHpp:z.coerce.number().nonnegative().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE'),variantGroupIds:z.array(z.string()).default([]),outletIds:z.array(z.string()).default([]),outletPricing:z.array(outletPricingInput).optional(),channelPricing:z.array(channelPricingInput).optional(),variants:z.array(z.object({variantName:z.string(),sellingPrice:z.coerce.number().nonnegative(),hpp:z.coerce.number().nonnegative()})).optional()});
 const maxProductImageUploadBytes=12*1024*1024;
 const maxProductImageOutputBytes=500*1024;
 async function readRawRequest(req:any,maxBytes:number){
@@ -798,7 +816,7 @@ async function compressProductImage(input:Buffer){
   throw new ApiError(400,'Gambar terlalu besar dan tidak dapat dikompresi. Silakan pilih gambar lain.');
 }
 const recipeInclude={item:{include:{unit:true,category:true}},usageUnit:true,componentProduct:{select:{id:true,sku:true,name:true,status:true}}};
-const productInclude={categoryRef:true,variants:true,addons:true,recipes:{include:recipeInclude,orderBy:{createdAt:'asc' as const}},outlets:{include:{outlet:true},orderBy:{outlet:{name:'asc' as const}}},channelPrices:{include:{outlet:true},orderBy:[{outlet:{name:'asc' as const}},{channel:'asc' as const}]},variantGroups:{orderBy:{sortOrder:'asc' as const},include:{group:{include:{options:{orderBy:{sortOrder:'asc' as const},include:{outlets:{include:{outlet:true}}}}}}}}};
+const productInclude={categoryRef:true,categoryAssignments:{include:{category:true},orderBy:{sortOrder:'asc' as const}},variants:true,addons:true,recipes:{include:recipeInclude,orderBy:{createdAt:'asc' as const}},outlets:{include:{outlet:true},orderBy:{outlet:{name:'asc' as const}}},channelPrices:{include:{outlet:true},orderBy:[{outlet:{name:'asc' as const}},{channel:'asc' as const}]},variantGroups:{orderBy:{sortOrder:'asc' as const},include:{group:{include:{options:{orderBy:{sortOrder:'asc' as const},include:{outlets:{include:{outlet:true}}}}}}}}};
 const recipeRowInput=z.object({
   sourceType:z.enum(['INVENTORY','PRODUCT']).default('INVENTORY'),
   inventoryItemId:z.string().optional(),
@@ -912,18 +930,31 @@ async function assertRecipeAvailabilityForItems(outlet:any,items:Array<{productI
     if(availability.canProduce===null||availability.canProduce<qty||!['AVAILABLE','LOW_STOCK'].includes(availability.status))throw new ApiError(409,`Stok ${row.product.name} tidak mencukupi. Silakan perbarui pesanan.`);
   }
 }
-async function categoryName(req:any,categoryId?:string,category?:string){if(categoryId){const c=await prisma.category.findFirst({where:tenantWhereAnd(req,{id:categoryId})});if(!c)throw new ApiError(400,'Kategori tidak ditemukan');return c.name;} if(category)return category; throw new ApiError(400,'Kategori wajib diisi');}
+async function productCategorySelection(req:any,categoryIds?:string[],categoryId?:string,legacyCategory?:string){
+  const ids=[...new Set([...(categoryId?[categoryId]:[]),...(categoryIds||[])])];
+  if(!ids.length){
+    if(legacyCategory)return {categoryId:undefined,category:legacyCategory,categoryIds:[]};
+    throw new ApiError(400,'Minimal satu kategori wajib dipilih');
+  }
+  const rows=await prisma.category.findMany({where:tenantWhereAnd(req,{id:{in:ids}}),select:{id:true,name:true,status:true}});
+  if(rows.length!==ids.length)throw new ApiError(400,'Salah satu kategori tidak ditemukan');
+  const byId=new Map(rows.map(row=>[row.id,row]));
+  const primaryId=categoryId||ids[0]!;
+  const primary=byId.get(primaryId);
+  if(!primary)throw new ApiError(400,'Kategori utama tidak ditemukan');
+  return {categoryId:primary.id,category:primary.name,categoryIds:ids};
+}
 api.get('/products',asyncRoute(async(req,res)=>{
   const outletId=String(req.query.outletId||'');
   if(outletId)await assertTenantOutlet(req,outletId);
   const categoryId=String(req.query.categoryId||''),status=String(req.query.status||''),availability=String(req.query.availability||''),search=String(req.query.search||'').trim();
   const filters:any[]=[];
   if(outletId)filters.push({outlets:{some:{outletId,isActive:true}}});
-  if(categoryId)filters.push({categoryId});
+  if(categoryId)filters.push({OR:[{categoryId},{categoryAssignments:{some:{categoryId}}}]});
   if(status)filters.push({status});
   if(outletId&&availability==='AVAILABLE')filters.push({outlets:{some:{outletId,isAvailable:true,isActive:true,status:'ACTIVE'}}});
   if(outletId&&availability==='SOLD_OUT')filters.push({outlets:{some:{outletId,isActive:true,isAvailable:false}}});
-  if(search)filters.push({OR:[{name:{contains:search,mode:'insensitive'}},{sku:{contains:search,mode:'insensitive'}},{description:{contains:search,mode:'insensitive'}},{categoryRef:{name:{contains:search,mode:'insensitive'}}}]});
+  if(search)filters.push({OR:[{name:{contains:search,mode:'insensitive'}},{sku:{contains:search,mode:'insensitive'}},{description:{contains:search,mode:'insensitive'}},{categoryRef:{name:{contains:search,mode:'insensitive'}}},{categoryAssignments:{some:{category:{name:{contains:search,mode:'insensitive'}}}}}]});
   res.json(await prisma.product.findMany({where:tenantWhereAnd(req,...filters),include:productInclude,orderBy:{name:'asc'}}));
 }));
 api.post('/products/images',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
@@ -965,7 +996,7 @@ async function validateProductImportRows(req:any,text:string,mode='UPSERT',filen
     prisma.product.findMany({where:tenantWhere(req),select:{id:true,sku:true,name:true}})
   ]);
   const existingCategoryNames=new Set(categories.map(c=>c.name.trim().toLowerCase()));
-  const categoryNames=[...new Map(rows.map(r=>(pick(r,['Category','Kategori']).trim()||'Lainnya')).filter(Boolean).map(name=>[name.toLowerCase(),name])).values()];
+  const categoryNames=[...new Map(rows.flatMap(r=>(pick(r,['Category','Kategori']).trim()||'Lainnya').split('|').map(name=>name.trim()).filter(Boolean)).map(name=>[name.toLowerCase(),name])).values()];
   const missingCategoryNames=categoryNames.filter(name=>!existingCategoryNames.has(name.toLowerCase()));
   if(missingCategoryNames.length){
     await prisma.category.createMany({data:missingCategoryNames.map(name=>({name,status:'ACTIVE',businessId:req.user!.businessId})),skipDuplicates:true});
@@ -982,7 +1013,8 @@ async function validateProductImportRows(req:any,text:string,mode='UPSERT',filen
     const errors:string[]=[];
     const rawSku=pick(r,['SKU','Product Code','Product SKU']).trim();
     const name=pick(r,['Product Name','Name','Produk']).trim();
-    const category=pick(r,['Category','Kategori']).trim()||'Lainnya';
+    const categoryNamesForProduct=(pick(r,['Category','Kategori']).trim()||'Lainnya').split('|').map(value=>value.trim()).filter(Boolean);
+    const category=categoryNamesForProduct[0]||'Lainnya';
     const outletName=pick(r,['Outlet','Outlet Name']).trim();
     if(!name)errors.push('Product Name wajib diisi');
     let sku=rawSku;
@@ -991,8 +1023,9 @@ async function validateProductImportRows(req:any,text:string,mode='UPSERT',filen
       sku=autoSkuByProductName.get(nameKey)||generateImportSku(name,idx+2,usedAutoSkus);
       autoSkuByProductName.set(nameKey,sku);
     }
-    const categoryRow=category?catByName.get(category.toLowerCase()):undefined;
-    if(category&&!categoryRow)errors.push(`Category not found: ${category}`);
+    const categoryRows=categoryNamesForProduct.map(value=>catByName.get(value.toLowerCase()));
+    const categoryRow=categoryRows[0];
+    categoryNamesForProduct.forEach((value,index)=>{if(!categoryRows[index])errors.push(`Category not found: ${value}`);});
     const outlet=outletName?outletByName.get(outletName.toLowerCase()):undefined;
     if(outletName&&!outlet)errors.push(`Outlet not found: ${outletName}`);
     let status:'ACTIVE'|'INACTIVE'='ACTIVE', outletStatus:'ACTIVE'|'INACTIVE'='ACTIVE', available=true, basePrice=0, baseHpp=0, outletPrice:null|number=null, outletHpp:null|number=null, gofoodPrice:null|number=null, grabfoodPrice:null|number=null, shopeefoodPrice:null|number=null;
@@ -1017,7 +1050,7 @@ async function validateProductImportRows(req:any,text:string,mode='UPSERT',filen
       const exists=existingBySku.get(key);
       if(mode==='INSERT_ONLY'&&exists)errors.push('Duplicate SKU database');
       if(mode==='UPDATE_ONLY'&&!exists)errors.push('SKU tidak ditemukan untuk update');
-      if(!grouped.has(key))grouped.set(key,{sku,name,description:pick(r,['Description','Deskripsi']),categoryId:categoryRow?.id,category:categoryRow?.name,imageUrl:pick(r,['Image URL','Image']),status,basePrice,baseHpp,variantGroupIds,outletPricing:[],channelPricing:[]});
+      if(!grouped.has(key))grouped.set(key,{sku,name,description:pick(r,['Description','Deskripsi']),categoryId:categoryRow?.id,categoryIds:categoryRows.filter(Boolean).map(row=>row!.id),category:categoryRow?.name,imageUrl:pick(r,['Image URL','Image']),status,basePrice,baseHpp,variantGroupIds,outletPricing:[],channelPricing:[]});
       const product=grouped.get(key);
       if(outlet){
         product.outletPricing.push({outletId:outlet.id,isAvailable:available,status:outletStatus,outletPrice,outletHpp});
@@ -1029,8 +1062,8 @@ async function validateProductImportRows(req:any,text:string,mode='UPSERT',filen
   });
   return {preview,products:[...grouped.values()],summary:{totalRows:rows.length,success:preview.filter(x=>x.status==='OK').length,error:preview.filter(x=>x.status==='ERROR').length}};
 }
-api.get('/products/import-template',allow('OWNER','SUPERVISOR'),asyncRoute(async(_req,res)=>{res.setHeader('Content-Type','text/csv; charset=utf-8');res.setHeader('Content-Disposition','attachment; filename="foru-product-import-template.csv"');res.send(toCsv([productImportHeaders,['AMB001','American Breakfast','Menu breakfast','American Breakfast','','ACTIVE','18000','9000','Size|Sugar','FORU HUIS','TRUE','ACTIVE','20000','10000','23000','24000','23500']]));}));
-api.get('/products/export',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const ids=String(req.query.ids||'').split(',').map(x=>x.trim()).filter(Boolean);const products=await prisma.product.findMany({where:tenantWhereAnd(req,ids.length?{id:{in:ids}}:{}),include:productInclude,orderBy:{name:'asc'}});const rows:any[][]=[productImportHeaders];for(const p of products){const groups=p.variantGroups.map(x=>x.group.name).join('|');const base:any[]=[p.sku||'',p.name,p.description||'',p.categoryRef?.name||p.category,p.imageUrl||'',p.status,Number(p.basePrice),Number(p.baseHpp),groups];if(p.outlets.length){for(const po of p.outlets){const prices=new Map((p.channelPrices||[]).filter(cp=>cp.outletId===po.outletId).map(cp=>[cp.channel,cp.price]));rows.push([...base,po.outlet.name,po.isAvailable?'TRUE':'FALSE',po.status,po.outletPrice??'',po.outletHpp??'',prices.get('GOFOOD')??'',prices.get('GRABFOOD')??'',prices.get('SHOPEEFOOD')??'']);}}else rows.push([...base,'','','','','','','','']);}res.setHeader('Content-Type','text/csv; charset=utf-8');res.setHeader('Content-Disposition','attachment; filename="foru-products-export.csv"');res.send(toCsv(rows));}));
+api.get('/products/import-template',allow('OWNER','SUPERVISOR'),asyncRoute(async(_req,res)=>{res.setHeader('Content-Type','text/csv; charset=utf-8');res.setHeader('Content-Disposition','attachment; filename="foru-product-import-template.csv"');res.send(toCsv([productImportHeaders,['AMB001','American Breakfast','Menu breakfast','American Breakfast|Paket Hemat','','ACTIVE','18000','9000','Size|Sugar','FORU HUIS','TRUE','ACTIVE','20000','10000','23000','24000','23500']]));}));
+api.get('/products/export',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const ids=String(req.query.ids||'').split(',').map(x=>x.trim()).filter(Boolean);const products=await prisma.product.findMany({where:tenantWhereAnd(req,ids.length?{id:{in:ids}}:{}),include:productInclude,orderBy:{name:'asc'}});const rows:any[][]=[productImportHeaders];for(const p of products){const groups=p.variantGroups.map(x=>x.group.name).join('|');const categoryNames=p.categoryAssignments.length?p.categoryAssignments.map(row=>row.category.name).join('|'):(p.categoryRef?.name||p.category);const base:any[]=[p.sku||'',p.name,p.description||'',categoryNames,p.imageUrl||'',p.status,Number(p.basePrice),Number(p.baseHpp),groups];if(p.outlets.length){for(const po of p.outlets){const prices=new Map((p.channelPrices||[]).filter(cp=>cp.outletId===po.outletId).map(cp=>[cp.channel,cp.price]));rows.push([...base,po.outlet.name,po.isAvailable?'TRUE':'FALSE',po.status,po.outletPrice??'',po.outletHpp??'',prices.get('GOFOOD')??'',prices.get('GRABFOOD')??'',prices.get('SHOPEEFOOD')??'']);}}else rows.push([...base,'','','','','','','','']);}res.setHeader('Content-Type','text/csv; charset=utf-8');res.setHeader('Content-Disposition','attachment; filename="foru-products-export.csv"');res.send(toCsv(rows));}));
 api.post('/products/import',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const d=z.object({filename:z.string().optional(),mode:z.enum(['INSERT_ONLY','UPDATE_ONLY','UPSERT']).default('UPSERT'),preview:z.coerce.boolean().default(true),content:z.string().min(1),encoding:z.enum(['text','base64']).default('text')}).parse(req.body);
   const validated=await validateProductImportRows(req,d.content,d.mode,d.filename,d.encoding);
@@ -1053,6 +1086,8 @@ api.post('/products/import',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res
             await tx.productVariantGroup.deleteMany({where:{productId:existing.id}});
             await tx.productVariantGroup.createMany({data:p.variantGroupIds.map((variantGroupId:string,i:number)=>({productId:existing.id,variantGroupId,sortOrder:i})),skipDuplicates:true});
           }
+          await tx.productCategory.deleteMany({where:{productId:existing.id}});
+          await tx.productCategory.createMany({data:(p.categoryIds||[p.categoryId]).filter(Boolean).map((categoryId:string,sortOrder:number)=>({productId:existing.id,categoryId,sortOrder})),skipDuplicates:true});
           for(const x of p.outletPricing)await tx.productOutlet.upsert({where:{productId_outletId:{productId:existing.id,outletId:x.outletId}},update:{isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp},create:{productId:existing.id,outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}});
           for(const x of p.channelPricing||[]){
             if(x.price==null||x.status==='INACTIVE')await tx.productChannelPrice.deleteMany({where:{productId:existing.id,outletId:x.outletId,channel:x.channel}});
@@ -1067,7 +1102,7 @@ api.post('/products/import',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res
         }
         if(d.mode==='UPDATE_ONLY')throw new Error('SKU tidak ditemukan untuk update');
         const channelRows=(p.channelPricing||[]).filter((x:any)=>x.price!=null&&x.status==='ACTIVE');
-        await tx.product.create({data:{businessId:req.user!.businessId,sku:p.sku,name:p.name,category:p.category,categoryId:p.categoryId,description:p.description||null,imageUrl:p.imageUrl||null,basePrice:p.basePrice,baseHpp:p.baseHpp,status:p.status,variants:{create:{variantName:'Base',sellingPrice:p.basePrice,hpp:p.baseHpp}},variantGroups:{create:p.variantGroupIds.map((variantGroupId:string,i:number)=>({variantGroupId,sortOrder:i}))},outlets:{create:p.outletPricing.map((x:any)=>({outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))},channelPrices:{create:channelRows.map((x:any)=>({outletId:x.outletId,channel:x.channel,price:x.price,status:x.status}))}}});
+        await tx.product.create({data:{businessId:req.user!.businessId,sku:p.sku,name:p.name,category:p.category,categoryId:p.categoryId,categoryAssignments:{create:(p.categoryIds||[p.categoryId]).filter(Boolean).map((categoryId:string,sortOrder:number)=>({categoryId,sortOrder}))},description:p.description||null,imageUrl:p.imageUrl||null,basePrice:p.basePrice,baseHpp:p.baseHpp,status:p.status,variants:{create:{variantName:'Base',sellingPrice:p.basePrice,hpp:p.baseHpp}},variantGroups:{create:p.variantGroupIds.map((variantGroupId:string,i:number)=>({variantGroupId,sortOrder:i}))},outlets:{create:p.outletPricing.map((x:any)=>({outletId:x.outletId,isAvailable:x.isAvailable,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))},channelPrices:{create:channelRows.map((x:any)=>({outletId:x.outletId,channel:x.channel,price:x.price,status:x.status}))}}});
         imported++;
       });
       results.push({sku:p.sku,status:'OK'});
@@ -1079,7 +1114,7 @@ api.post('/products/import',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res
   await prisma.auditLog.create({data:{businessId:req.user!.businessId,entityType:'PRODUCT_IMPORT',entityId:`import-${Date.now()}`,action:'PRODUCT_IMPORT',oldValue:Prisma.JsonNull,newValue:{filename:d.filename,imported,updated,failed,total:validated.products.length},changedBy:req.user!.id}});
   res.json({summary:{imported,updated,failed,total:validated.products.length},results});
 }));
-api.get('/pos/products',asyncRoute(async(req,res)=>{ const outletId=String(req.query.outlet_id||''); await assertTenantOutlet(req,outletId); const outlet=await prisma.outlet.findFirst({where:tenantWhereAnd(req,{id:outletId}),include:{defaultInventoryWarehouse:true}});if(!outlet)throw new ApiError(404,'Outlet tidak ditemukan');const channel=String(req.query.channel||req.query.orderType||'DINE_IN').toUpperCase(); const onlineChannel=onlineChannels.includes(channel as any)?channel as typeof onlineChannels[number]:undefined; const products=await prisma.product.findMany({where:tenantWhereAnd(req,{status:'ACTIVE',OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}],outlets:{some:{outletId,isActive:true,status:'ACTIVE'}}}),include:{categoryRef:true,outlets:{where:{outletId,isActive:true}},channelPrices:onlineChannel?{where:{outletId,channel:onlineChannel,status:'ACTIVE'}}:false,variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId}}}}}}}}},orderBy:[{categoryRef:{sortOrder:'asc'}},{name:'asc'}]});res.json(await Promise.all(products.map(async p=>{const po=p.outlets[0];const stock=await effectiveProductStock(p.id,po,outlet);const dineInPrice=po?.outletPrice??p.basePrice;const cp=(p as any).channelPrices?.[0];const activePrice=cp?.price??dineInPrice;return {...p,...stock,basePrice:activePrice,baseHpp:po?.outletHpp??p.baseHpp,masterBasePrice:p.basePrice,masterBaseHpp:p.baseHpp,dineInPrice,channelPrice:cp?.price??null,priceChannel:onlineChannel||'DINE_IN',priceSource:cp?'CHANNEL':(po?.outletPrice!=null?'OUTLET':'BASE'),variantGroups:p.variantGroups.map(vg=>({...vg,group:{...vg.group,options:vg.group.options.filter(o=>!o.outlets[0]||o.outlets[0].status==='ACTIVE').map(o=>({...o,additionalPrice:o.outlets[0]?.additionalPrice??o.additionalPrice,hpp:o.outlets[0]?.hpp??o.hpp,masterAdditionalPrice:o.additionalPrice,masterHpp:o.hpp}))}}))};}))); }));
+api.get('/pos/products',asyncRoute(async(req,res)=>{ const outletId=String(req.query.outlet_id||''); await assertTenantOutlet(req,outletId); const outlet=await prisma.outlet.findFirst({where:tenantWhereAnd(req,{id:outletId}),include:{defaultInventoryWarehouse:true}});if(!outlet)throw new ApiError(404,'Outlet tidak ditemukan');const categoryOrder=await outletCategoryOrderMap(outletId);const channel=String(req.query.channel||req.query.orderType||'DINE_IN').toUpperCase(); const onlineChannel=onlineChannels.includes(channel as any)?channel as typeof onlineChannels[number]:undefined; const products=await prisma.product.findMany({where:tenantWhereAnd(req,{status:'ACTIVE',OR:[{categoryAssignments:{some:{category:{status:'ACTIVE'}}}},{AND:[{categoryAssignments:{none:{}}},{OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}]}]}],outlets:{some:{outletId,isActive:true,status:'ACTIVE'}}}),include:{categoryRef:true,categoryAssignments:{where:{category:{status:'ACTIVE'}},include:{category:true},orderBy:{sortOrder:'asc'}},outlets:{where:{outletId,isActive:true}},channelPrices:onlineChannel?{where:{outletId,channel:onlineChannel,status:'ACTIVE'}}:false,variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId}}}}}}}}},orderBy:[{categoryRef:{sortOrder:'asc'}},{name:'asc'}]});res.json(await Promise.all(products.map(async p=>{const po=p.outlets[0];const stock=await effectiveProductStock(p.id,po,outlet);const dineInPrice=po?.outletPrice??p.basePrice;const cp=(p as any).channelPrices?.[0];const activePrice=cp?.price??dineInPrice;const categories=p.categoryAssignments.map(row=>({id:row.category.id,name:row.category.name,sortOrder:categoryOrder.get(row.category.id)??row.category.sortOrder})).sort((a,b)=>a.sortOrder-b.sortOrder||a.name.localeCompare(b.name));return {...p,categories,...stock,basePrice:activePrice,baseHpp:po?.outletHpp??p.baseHpp,masterBasePrice:p.basePrice,masterBaseHpp:p.baseHpp,dineInPrice,channelPrice:cp?.price??null,priceChannel:onlineChannel||'DINE_IN',priceSource:cp?'CHANNEL':(po?.outletPrice!=null?'OUTLET':'BASE'),variantGroups:p.variantGroups.map(vg=>({...vg,group:{...vg.group,options:vg.group.options.filter(o=>!o.outlets[0]||o.outlets[0].status==='ACTIVE').map(o=>({...o,additionalPrice:o.outlets[0]?.additionalPrice??o.additionalPrice,hpp:o.outlets[0]?.hpp??o.hpp,masterAdditionalPrice:o.additionalPrice,masterHpp:o.hpp}))}}))};}))); }));
 
 api.get('/menu-availability',allow('OWNER','SUPERVISOR','CASHIER'),asyncRoute(async(req,res)=>{
   const outletId=String(req.query.outletId||'');
@@ -1132,7 +1167,7 @@ api.patch('/menu-availability/stock',allow('OWNER','SUPERVISOR','CASHIER'),async
 }));
 api.post('/products',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const d=productInput.parse(req.body);
-  const category=await categoryName(req,d.categoryId,d.category);
+  const categorySelection=await productCategorySelection(req,d.categoryIds,d.categoryId,d.category);
   const basePrice=d.basePrice??d.variants?.[0]?.sellingPrice??0,baseHpp=d.baseHpp??d.variants?.[0]?.hpp??0;
   for(const variantGroupId of d.variantGroupIds)await assertTenantVariantGroup(req,variantGroupId);
   let outletRows=(d.outletPricing??d.outletIds.map(outletId=>({outletId,isAvailable:true,isRecommended:false,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}))).map(x=>({...x,isRecommended:x.isRecommended??false,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null}));
@@ -1143,12 +1178,12 @@ api.post('/products',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   }
   const channelRows=(d.channelPricing||[]).filter(x=>x.price!=null&&x.status==='ACTIVE');
   for(const row of channelRows)await assertTenantOutlet(req,row.outletId);
-  res.status(201).json(await prisma.product.create({data:{businessId:req.user!.businessId,sku:d.sku?.trim()||null,name:d.name,category,categoryId:d.categoryId,description:d.description,imageUrl:d.imageUrl||null,basePrice,baseHpp,status:d.status,variants:{create:d.variants?.length?d.variants:[{variantName:'Base',sellingPrice:basePrice,hpp:baseHpp}]},variantGroups:{create:d.variantGroupIds.map((variantGroupId,i)=>({variantGroupId,sortOrder:i}))},outlets:{create:outletRows.map(x=>({outletId:x.outletId,isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))},channelPrices:{create:channelRows.map(x=>({outletId:x.outletId,channel:x.channel,price:x.price!,status:x.status}))}},include:productInclude}));
+  res.status(201).json(await prisma.product.create({data:{businessId:req.user!.businessId,sku:d.sku?.trim()||null,name:d.name,category:categorySelection.category,categoryId:categorySelection.categoryId,categoryAssignments:{create:categorySelection.categoryIds.map((categoryId,sortOrder)=>({categoryId,sortOrder}))},description:d.description,imageUrl:d.imageUrl||null,basePrice,baseHpp,status:d.status,variants:{create:d.variants?.length?d.variants:[{variantName:'Base',sellingPrice:basePrice,hpp:baseHpp}]},variantGroups:{create:d.variantGroupIds.map((variantGroupId,i)=>({variantGroupId,sortOrder:i}))},outlets:{create:outletRows.map(x=>({outletId:x.outletId,isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))},channelPrices:{create:channelRows.map(x=>({outletId:x.outletId,channel:x.channel,price:x.price!,status:x.status}))}},include:productInclude}));
 }));
 api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const d=productInput.partial().parse(req.body);
   const id=String(req.params.id);
-  const category=d.categoryId||d.category?await categoryName(req,d.categoryId,d.category):undefined;
+  const categorySelection=d.categoryIds||d.categoryId||d.category?await productCategorySelection(req,d.categoryIds,d.categoryId,d.category):undefined;
   if(d.variantGroupIds)for(const variantGroupId of d.variantGroupIds)await assertTenantVariantGroup(req,variantGroupId);
   if(d.outletIds)for(const outletId of d.outletIds)await assertTenantOutlet(req,outletId);
   if(d.outletPricing)for(const row of d.outletPricing)await assertTenantOutlet(req,row.outletId);
@@ -1157,6 +1192,7 @@ api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
     const current=await tx.product.findFirst({where:tenantWhereAnd(req,{id}),include:{outlets:true}});
     if(!current)throw new ApiError(404,'Produk tidak ditemukan');
     const oldBasePrice=Number(current.basePrice),oldBaseHpp=Number(current.baseHpp);
+    if(categorySelection){await tx.productCategory.deleteMany({where:{productId:id}});await tx.productCategory.createMany({data:categorySelection.categoryIds.map((categoryId,sortOrder)=>({productId:id,categoryId,sortOrder})),skipDuplicates:true});}
     if(d.variantGroupIds){await tx.productVariantGroup.deleteMany({where:{productId:id}});await tx.productVariantGroup.createMany({data:d.variantGroupIds.map((variantGroupId,i)=>({productId:id,variantGroupId,sortOrder:i})),skipDuplicates:true});}
     if(d.outletPricing){
       for(const x of d.outletPricing){
@@ -1173,7 +1209,7 @@ api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
         else await tx.productChannelPrice.upsert({where:{productId_outletId_channel:{productId:id,outletId:x.outletId,channel:x.channel}},update:{price:x.price,status:x.status},create:{productId:id,outletId:x.outletId,channel:x.channel,price:x.price,status:x.status}});
       }
     }
-    const updated=await tx.product.update({where:{id},data:{sku:d.sku===undefined?undefined:(d.sku?.trim()||null),name:d.name,category,categoryId:d.categoryId,description:d.description,imageUrl:d.imageUrl===undefined?undefined:(d.imageUrl||null),basePrice:d.basePrice,baseHpp:d.baseHpp,status:d.status},include:productInclude});
+    const updated=await tx.product.update({where:{id},data:{sku:d.sku===undefined?undefined:(d.sku?.trim()||null),name:d.name,category:categorySelection?.category,categoryId:categorySelection?.categoryId,description:d.description,imageUrl:d.imageUrl===undefined?undefined:(d.imageUrl||null),basePrice:d.basePrice,baseHpp:d.baseHpp,status:d.status},include:productInclude});
     if(d.basePrice!==undefined||d.baseHpp!==undefined){
       const baseVariant=updated.variants.find(v=>v.variantName==='Base');
       if(baseVariant)await tx.productVariant.update({where:{id:baseVariant.id},data:{sellingPrice:d.basePrice??baseVariant.sellingPrice,hpp:d.baseHpp??baseVariant.hpp}});
@@ -1186,7 +1222,7 @@ api.post('/products/:id/duplicate',allow('OWNER','SUPERVISOR'),asyncRoute(async(
   await assertTenantProduct(req,id);
   const source=await prisma.product.findFirst({
     where:tenantWhereAnd(req,{id}),
-    include:{variants:true,addons:true,outlets:true,channelPrices:true,variantGroups:true,recipes:true,sop:true}
+    include:{variants:true,addons:true,outlets:true,channelPrices:true,variantGroups:true,recipes:true,sop:true,categoryAssignments:true}
   });
   if(!source)throw new ApiError(404,'Produk tidak ditemukan');
   const baseSku=`${(source.sku||skuBaseFromName(source.name)).replace(/-COPY(?:-\d+)?$/i,'').slice(0,40)}-COPY`;
@@ -1200,6 +1236,7 @@ api.post('/products/:id/duplicate',allow('OWNER','SUPERVISOR'),asyncRoute(async(
         name:`${source.name} (Copy${copyNumber>1?` ${copyNumber}`:''})`,
         category:source.category,
         categoryId:source.categoryId,
+        categoryAssignments:{create:source.categoryAssignments.map(c=>({categoryId:c.categoryId,sortOrder:c.sortOrder}))},
         basePrice:source.basePrice,
         baseHpp:source.baseHpp,
         description:source.description,
