@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   Camera,
+  Copy,
   Download,
   Edit,
   FileDown,
@@ -594,7 +595,7 @@ export default function ProductPage() {
   }
   async function deletePermanentProduct(p: any) {
     const ok = await appConfirm(
-      `Produk "${p.name}" akan dihapus permanen. Aksi ini tidak bisa dibatalkan. Produk yang sudah punya histori transaksi/inventory akan otomatis ditolak.`,
+      `Produk "${p.name}" akan dihapus permanen dari master menu. Histori transaksi dan laporan tetap disimpan, tetapi aksi ini tidak bisa dibatalkan.`,
       {
         title: "Hapus Produk Permanen",
         confirmText: "Hapus Permanen",
@@ -603,13 +604,36 @@ export default function ProductPage() {
       }
     );
     if (!ok) return;
+    const finalOk = await appConfirm(
+      `Konfirmasi terakhir: force delete "${p.name}" beserta konfigurasi outlet, harga online, variant, addon, resep, dan SOP?`,
+      {
+        title: "Konfirmasi Force Delete",
+        confirmText: "Ya, Force Delete",
+        cancelText: "Batal",
+        danger: true,
+      }
+    );
+    if (!finalOk) return;
     try {
-      await api(`/products/${p.id}/permanent`, { method: "DELETE" });
+      await api(`/products/${p.id}/permanent?force=true`, { method: "DELETE" });
       setSelectedIds((v) => v.filter((id) => id !== p.id));
       await downloadMasterData("ONLINE");
       emitMasterDataChanged("product_master_updated");
       await load();
       toast.success("Produk berhasil dihapus permanen.");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+  async function duplicateProduct(p: any) {
+    if (!await appConfirm(`Duplikat menu "${p.name}"? Salinan dibuat nonaktif agar bisa diperiksa sebelum dijual.`, { title: "Duplikat Menu", confirmText: "Duplikat" })) return;
+    try {
+      const created: any = await api(`/products/${p.id}/duplicate`, { method: "POST" });
+      await downloadMasterData("ONLINE");
+      emitMasterDataChanged("product_master_updated");
+      await load();
+      setEdit(created);
+      toast.success("Menu berhasil diduplikat. Periksa nama, SKU, harga, dan outlet lalu aktifkan.");
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -746,6 +770,7 @@ export default function ProductPage() {
             outlet={selectedOutlet}
             outletRow={outletRow(p)}
             setEdit={setEdit}
+            onDuplicate={duplicateProduct}
             onToggleAvailability={() => toggleAvailability(p)}
             onDelete={deletePermanentProduct}
             selected={selectedIds.includes(p.id)}
@@ -874,6 +899,13 @@ export default function ProductPage() {
                           title="Edit produk"
                         >
                           <Edit size={17} />
+                        </button>
+                        <button
+                          onClick={() => duplicateProduct(p)}
+                          className="rounded-xl bg-slate-100 p-2 text-slate-700"
+                          title="Duplikat menu"
+                        >
+                          <Copy size={17} />
                         </button>
                         <button
                           onClick={() => deletePermanentProduct(p)}
@@ -1348,6 +1380,7 @@ function ProductCard({
   outlet,
   outletRow,
   setEdit,
+  onDuplicate,
   onToggleAvailability,
   onDelete,
   selected,
@@ -1378,6 +1411,13 @@ function ProductCard({
             title="Edit produk"
           >
             <Edit size={17} />
+          </button>
+          <button
+            onClick={() => onDuplicate(p)}
+            className="rounded-xl bg-slate-100 p-2 text-slate-700"
+            title="Duplikat menu"
+          >
+            <Copy size={17} />
           </button>
           <button
             onClick={() => onDelete(p)}

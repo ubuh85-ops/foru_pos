@@ -1181,19 +1181,69 @@ api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
     return tx.product.findUniqueOrThrow({where:{id},include:productInclude});
   }));
 }));
+api.post('/products/:id/duplicate',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
+  const id=String(req.params.id);
+  await assertTenantProduct(req,id);
+  const source=await prisma.product.findFirst({
+    where:tenantWhereAnd(req,{id}),
+    include:{variants:true,addons:true,outlets:true,channelPrices:true,variantGroups:true,recipes:true,sop:true}
+  });
+  if(!source)throw new ApiError(404,'Produk tidak ditemukan');
+  const baseSku=`${(source.sku||skuBaseFromName(source.name)).replace(/-COPY(?:-\d+)?$/i,'').slice(0,40)}-COPY`;
+  let sku=baseSku,copyNumber=1;
+  while(await prisma.product.findFirst({where:tenantWhereAnd(req,{sku:{equals:sku,mode:'insensitive'}}),select:{id:true}}))sku=`${baseSku}-${++copyNumber}`;
+  const duplicate=await prisma.$transaction(async tx=>{
+    const created=await tx.product.create({
+      data:{
+        businessId:req.user!.businessId,
+        sku,
+        name:`${source.name} (Copy${copyNumber>1?` ${copyNumber}`:''})`,
+        category:source.category,
+        categoryId:source.categoryId,
+        basePrice:source.basePrice,
+        baseHpp:source.baseHpp,
+        description:source.description,
+        imageUrl:source.imageUrl,
+        status:'INACTIVE',
+        variants:{create:source.variants.map(v=>({variantName:v.variantName,sellingPrice:v.sellingPrice,hpp:v.hpp,status:v.status}))},
+        addons:{create:source.addons.map(a=>({addonName:a.addonName,price:a.price,hpp:a.hpp,status:a.status}))},
+        outlets:{create:source.outlets.map(o=>({outletId:o.outletId,isActive:false,isAvailable:false,isRecommended:false,stockMode:o.stockMode,stockQty:0,lowStockThreshold:o.lowStockThreshold,outletPrice:o.outletPrice,outletHpp:o.outletHpp,status:'INACTIVE'}))},
+        channelPrices:{create:source.channelPrices.map(p=>({outletId:p.outletId,channel:p.channel,price:p.price,status:p.status}))},
+        variantGroups:{create:source.variantGroups.map(g=>({variantGroupId:g.variantGroupId,sortOrder:g.sortOrder}))},
+        recipes:{create:source.recipes.map(r=>({inventoryItemId:r.inventoryItemId,componentProductId:r.componentProductId,usageQty:r.usageQty,usageUnitId:r.usageUnitId,componentUnit:r.componentUnit,wastePercent:r.wastePercent,isActive:r.isActive}))},
+        ...(source.sop?{sop:{create:{businessId:req.user!.businessId,title:source.sop.title,equipment:source.sop.equipment,steps:source.sop.steps===null?Prisma.JsonNull:source.sop.steps as Prisma.InputJsonValue,servingNotes:source.sop.servingNotes,status:'DRAFT',version:1,createdBy:req.user!.id,updatedBy:req.user!.id}}}:{})
+      },
+      include:productInclude
+    });
+    await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'PRODUCT',entityId:created.id,action:'PRODUCT_DUPLICATED',oldValue:{sourceProductId:id},newValue:{sku:created.sku,name:created.name,status:created.status},changedBy:req.user!.id}});
+    return created;
+  });
+  res.status(201).json(duplicate);
+}));
 api.delete('/products/:id',allow('OWNER'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertTenantProduct(req,id);res.json(await prisma.product.update({where:{id},data:{status:'INACTIVE'}}));}));
 api.delete('/products/:id/permanent',allow('OWNER'),asyncRoute(async(req,res)=>{
   const id=String(req.params.id);
   await assertTenantProduct(req,id);
-  const [saleItems,addonSaleItems,inventoryMovements,recipeUsages]=await Promise.all([
+  const force=String(req.query.force||'false').toLowerCase()==='true';
+  const product=await prisma.product.findFirst({where:tenantWhereAnd(req,{id}),select:{id:true,sku:true,name:true,status:true}});
+  if(!product)throw new ApiError(404,'Produk tidak ditemukan');
+  const [saleItems,addonSaleItems,inventoryMovements,recipeUsages,activeOrders]=await Promise.all([
     prisma.saleItem.count({where:{productId:id}}),
     prisma.saleItemAddon.count({where:{addon:{productId:id}}}),
     prisma.inventoryMovement.count({where:{productId:id}}),
-    prisma.productRecipe.count({where:{componentProductId:id,isActive:true}})
+    prisma.productRecipe.count({where:{componentProductId:id}}),
+    prisma.sale.count({where:{status:{in:['DRAFT','OPEN_ORDER','ACCEPTED','PENDING_PAYMENT']},items:{some:{productId:id}}}})
   ]);
-  if(recipeUsages)throw new ApiError(409,'Produk masih digunakan sebagai sub-resep. Hapus dari resep produk lain terlebih dahulu.');
-  if(saleItems||addonSaleItems||inventoryMovements)throw new ApiError(409,'Produk sudah memiliki histori transaksi atau inventory. Nonaktifkan produk, tidak bisa hapus permanen.');
+  if(activeOrders)throw new ApiError(409,'Produk masih digunakan pada open bill/order aktif. Selesaikan atau batalkan order tersebut sebelum force delete.');
+  if(!force&&recipeUsages)throw new ApiError(409,'Produk masih digunakan sebagai sub-resep. Hapus dari resep produk lain terlebih dahulu atau gunakan force delete.');
+  if(!force&&(saleItems||addonSaleItems||inventoryMovements))throw new ApiError(409,'Produk sudah memiliki histori transaksi atau inventory. Gunakan force delete untuk menghapus master produk tanpa menghapus histori.');
   await prisma.$transaction(async tx=>{
+    if(force){
+      await tx.productRecipe.deleteMany({where:{componentProductId:id}});
+      await tx.saleItemAddon.updateMany({where:{addon:{productId:id}},data:{addonId:null}});
+      await tx.saleItem.updateMany({where:{productId:id},data:{productId:null,productVariantId:null}});
+      await tx.inventoryMovement.updateMany({where:{productId:id},data:{productId:null}});
+    }
     await tx.bundleItem.deleteMany({where:{variant:{productId:id}}});
     await tx.productChannelPrice.deleteMany({where:{productId:id}});
     await tx.productRecipe.deleteMany({where:{productId:id}});
@@ -1203,9 +1253,9 @@ api.delete('/products/:id/permanent',allow('OWNER'),asyncRoute(async(req,res)=>{
     await tx.productAddon.deleteMany({where:{productId:id}});
     await tx.productVariant.deleteMany({where:{productId:id}});
     await tx.product.delete({where:{id}});
-    await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'PRODUCT',entityId:id,action:'PRODUCT_PERMANENT_DELETED',oldValue:Prisma.JsonNull,newValue:Prisma.JsonNull,changedBy:req.user!.id}});
+    await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'PRODUCT',entityId:id,action:force?'PRODUCT_FORCE_DELETED':'PRODUCT_PERMANENT_DELETED',oldValue:product,newValue:{force,saleItems,addonSaleItems,inventoryMovements,recipeUsages,activeOrders},changedBy:req.user!.id}});
   });
-  res.json({message:'Produk berhasil dihapus permanen.'});
+  res.json({message:force?'Produk berhasil dihapus permanen. Histori transaksi tetap disimpan.':'Produk berhasil dihapus permanen.'});
 }));
 api.get('/products/:id/outlets',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const productId=String(req.params.id);await assertTenantProduct(req,productId);const [outlets,rows]=await Promise.all([prisma.outlet.findMany({where:tenantWhere(req),orderBy:{name:'asc'}}),prisma.productOutlet.findMany({where:{productId,outlet:tenantWhere(req)},include:{outlet:true}})]);res.json(outlets.map(outlet=>rows.find(r=>r.outletId===outlet.id)||{productId,outletId:outlet.id,outlet,isAvailable:false,isRecommended:false,isActive:false,outletPrice:null,outletHpp:null,status:'INACTIVE'}));}));
 api.put('/products/:id/outlets',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const productId=String(req.params.id);await assertTenantProduct(req,productId);const rows=z.object({outlets:z.array(outletPricingInput)}).parse(req.body).outlets;for(const x of rows)await assertTenantOutlet(req,x.outletId);res.json(await prisma.$transaction(async tx=>{for(const x of rows)await tx.productOutlet.upsert({where:{productId_outletId:{productId,outletId:x.outletId}},update:{isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null},create:{productId,outletId:x.outletId,isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null}});return tx.productOutlet.findMany({where:{productId,outlet:tenantWhere(req)},include:{outlet:true},orderBy:{outlet:{name:'asc'}}});}));}));
@@ -1575,7 +1625,7 @@ function openBillCustomerName(d:z.infer<typeof saleInput>){
 async function nextNumber(prefix:string,outletId:string,field:'orderNumber'|'transactionNumber'){
   return nextSaleNumber(prefix,outletId,field);
 }
-function saleItemCreate(l:any){return {outletId:l.outletId,productId:l.productId,productVariantId:l.variantId,productName:l.productName,variantName:l.variantName,itemNote:l.itemNote,qty:l.qty,sellingPrice:l.unitPrice,hpp:l.hpp,subtotal:l.gross,totalHpp:money(l.hpp*l.qty),grossProfit:money(l.net-l.hpp*l.qty),priceBeforeDiscount:l.unitPrice,discountType:l.discountType,discountValue:l.discountValue,discountAmount:l.discountAmount,subtotalAfterDiscount:l.net,selectedVariantsJson:l.selectedVariants,basePrice:l.basePrice,outletPrice:l.outletPrice,channel:l.channel,dineInPriceSnapshot:l.dineInPriceSnapshot,channelPriceSnapshot:l.channelPriceSnapshot,priceSource:l.priceSource,baseMarginPercent:l.baseMarginPercent,actualMarginPercent:l.actualMarginPercent,variantPriceTotal:l.variantPriceTotal,finalUnitPrice:l.unitPrice,baseHpp:l.baseHpp,outletHpp:l.outletHpp,variantHppTotal:l.variantHppTotal,finalUnitHpp:l.hpp,addons:{create:l.addons.map((a:any)=>({addonId:a.id,addonName:a.name,price:a.price,hpp:a.hpp}))}};}
+function saleItemCreate(l:any){return {outletId:l.outletId,productId:l.productId,productVariantId:l.variantId,productName:l.productName,productCategoryId:l.categoryId||null,productCategoryName:l.category||null,variantName:l.variantName,itemNote:l.itemNote,qty:l.qty,sellingPrice:l.unitPrice,hpp:l.hpp,subtotal:l.gross,totalHpp:money(l.hpp*l.qty),grossProfit:money(l.net-l.hpp*l.qty),priceBeforeDiscount:l.unitPrice,discountType:l.discountType,discountValue:l.discountValue,discountAmount:l.discountAmount,subtotalAfterDiscount:l.net,selectedVariantsJson:l.selectedVariants,basePrice:l.basePrice,outletPrice:l.outletPrice,channel:l.channel,dineInPriceSnapshot:l.dineInPriceSnapshot,channelPriceSnapshot:l.channelPriceSnapshot,priceSource:l.priceSource,baseMarginPercent:l.baseMarginPercent,actualMarginPercent:l.actualMarginPercent,variantPriceTotal:l.variantPriceTotal,finalUnitPrice:l.unitPrice,baseHpp:l.baseHpp,outletHpp:l.outletHpp,variantHppTotal:l.variantHppTotal,finalUnitHpp:l.hpp,addons:{create:l.addons.map((a:any)=>({addonId:a.id,addonName:a.name,price:a.price,hpp:a.hpp}))}};}
 async function buildOrderTotals(req:any,d:z.infer<typeof saleInput>){
   const lines=await priceCart(d.items,d.outletId,d.orderType,req.user!.businessId);
   const gross=money(lines.reduce((s,l)=>s+l.gross,0)),productDiscount=money(lines.reduce((s,l)=>s+l.discountAmount,0)),afterProduct=money(gross-productDiscount),transactionDiscount=discountAmount(afterProduct,d.transactionDiscount),afterTransaction=money(afterProduct-transactionDiscount);
@@ -1685,8 +1735,8 @@ api.post('/sales',asyncRoute(async(req,res)=>res.status(201).json(await createOr
 function queryDateRange(query:any){const from=String(query.from||query.date||'');const to=String(query.to||query.date||'');if(from&&to){const start=new Date(`${from}T00:00:00+07:00`),end=new Date(`${to}T00:00:00+07:00`);end.setDate(end.getDate()+1);return {gte:start,lt:end};}return query.date?dayRange(String(query.date)):undefined;}
 async function requiredOutletId(req:any){const outletId=String(req.query.outletId||req.query.outlet_id||'');if(!outletId)throw new ApiError(400,'outletId wajib dipilih untuk laporan operasional.');await assertTenantOutlet(req,outletId);return outletId;}
 async function ordersBaseWhere(req:any){const where:any=tenantWhereAnd(req,{outletId:await requiredOutletId(req)});const range=queryDateRange(req.query);if(range)where.createdAt=range;return where;}
-type ReportLine={saleId:string;productId:string;productName:string;categoryId:string|null;categoryName:string;variantName:string;qty:number;gross:number;productDiscount:number;orderDiscount:number;discount:number;net:number;cogs:number;unitHpp:number;onlineFee:number;paymentMethod:string|null};
-function saleItemCategory(item:any){return {categoryId:item.product?.categoryId||null,categoryName:item.product?.categoryRef?.name||item.product?.category||'Tanpa Kategori'};}
+type ReportLine={saleId:string;productId:string|null;productName:string;categoryId:string|null;categoryName:string;variantName:string;qty:number;gross:number;productDiscount:number;orderDiscount:number;discount:number;net:number;cogs:number;unitHpp:number;onlineFee:number;paymentMethod:string|null};
+function saleItemCategory(item:any){return {categoryId:item.productCategoryId||item.product?.categoryId||null,categoryName:item.productCategoryName||item.product?.categoryRef?.name||item.product?.category||'Tanpa Kategori'};}
 function roundReportLine(line:ReportLine){return {...line,gross:money(line.gross),productDiscount:money(line.productDiscount),orderDiscount:money(line.orderDiscount),discount:money(line.discount),net:money(line.net),cogs:money(line.cogs),unitHpp:money(line.unitHpp),onlineFee:money(line.onlineFee)};}
 async function reportLines(req:any){
   const outletId=await requiredOutletId(req);
@@ -1696,13 +1746,13 @@ async function reportLines(req:any){
   if(req.query.paymentMethod)saleWhere.paymentMethod=String(req.query.paymentMethod);
   const itemWhere:any={};
   if(req.query.productId)itemWhere.productId=String(req.query.productId);
-  if(req.query.categoryId)itemWhere.product={is:{categoryId:String(req.query.categoryId)}};
+  if(req.query.categoryId)itemWhere.OR=[{productCategoryId:String(req.query.categoryId)},{product:{is:{categoryId:String(req.query.categoryId)}}}];
   const [sales,feeBusiness]=await Promise.all([prisma.sale.findMany({where:{...saleWhere,items:{some:itemWhere}},include:{items:{include:{product:{include:{categoryRef:true}}}}},orderBy:{createdAt:'desc'}}),prisma.business.findUnique({where:{id:req.user!.businessId},select:onlineFeeSettingsSelect})]);
   const feeRates=onlineFeeRates(feeBusiness);
   const lines:ReportLine[]=[];
   for(const sale of sales as any[]){
     const allItems=sale.items||[];
-    const matching=allItems.filter((item:any)=>(!req.query.productId||item.productId===String(req.query.productId))&&(!req.query.categoryId||item.product?.categoryId===String(req.query.categoryId)));
+    const matching=allItems.filter((item:any)=>(!req.query.productId||item.productId===String(req.query.productId))&&(!req.query.categoryId||item.productCategoryId===String(req.query.categoryId)||item.product?.categoryId===String(req.query.categoryId)));
     const saleLevelDiscount=Number(sale.transactionDiscountAmount||0)+Number(sale.couponDiscountAmount||0);
     const saleSubtotalAfterProduct=allItems.reduce((n:number,item:any)=>n+Number(item.subtotalAfterDiscount||0),0);
     for(const item of matching){
@@ -1731,7 +1781,7 @@ api.get('/reports/sales',allow('OWNER'),asyncRoute(async(req,res)=>{
   const saleIds=new Set(lines.map(x=>x.saleId));
   const grossSales=money(lines.reduce((n,x)=>n+x.gross,0)),discount=money(lines.reduce((n,x)=>n+x.discount,0)),netSales=money(lines.reduce((n,x)=>n+x.net,0));
   const byCategory=groupReport(lines,x=>x.categoryId||x.categoryName,x=>({categoryId:x.categoryId,category:x.categoryName}));
-  const byProduct=groupReport(lines,x=>`${x.productId}:${x.variantName}`,x=>({productId:x.productId,productName:x.productName,categoryId:x.categoryId,category:x.categoryName,variant:x.variantName}));
+  const byProduct=groupReport(lines,x=>`${x.productId||`deleted:${x.productName}`}:${x.variantName}`,x=>({productId:x.productId,productName:x.productName,categoryId:x.categoryId,category:x.categoryName,variant:x.variantName}));
   const topSellingProduct=byProduct[0]?{productId:byProduct[0].productId,productName:byProduct[0].productName,qty:byProduct[0].qtySold,netSales:byProduct[0].netSales}:null;
   const topCategory=byCategory[0]?{categoryId:byCategory[0].categoryId,category:byCategory[0].category,qty:byCategory[0].qtySold,netSales:byCategory[0].netSales}:null;
   res.json({summary:{totalOrder:saleIds.size,totalItemSold:lines.reduce((n,x)=>n+x.qty,0),grossSales,discount,netSales,averageOrderValue:saleIds.size?money(netSales/saleIds.size):0,topSellingProduct,topCategory},byCategory,byProduct});
@@ -1740,7 +1790,7 @@ api.get('/reports/cogs',allow('OWNER'),asyncRoute(async(req,res)=>{
   const lines=await reportLines(req);
   const netSales=money(lines.reduce((n,x)=>n+x.net,0)),totalCogs=money(lines.reduce((n,x)=>n+x.cogs,0)),onlineFee=money(lines.reduce((n,x)=>n+x.onlineFee,0)),grossProfit=money(netSales-totalCogs-onlineFee);
   const byCategory=groupReport(lines,x=>x.categoryId||x.categoryName,x=>({categoryId:x.categoryId,category:x.categoryName}));
-  const byProduct=groupReport(lines,x=>`${x.productId}:${x.variantName}`,x=>({productId:x.productId,productName:x.productName,categoryId:x.categoryId,category:x.categoryName,variant:x.variantName}));
+  const byProduct=groupReport(lines,x=>`${x.productId||`deleted:${x.productName}`}:${x.variantName}`,x=>({productId:x.productId,productName:x.productName,categoryId:x.categoryId,category:x.categoryName,variant:x.variantName}));
   res.json({summary:{netSales,totalCogs,onlineFee,grossProfit,grossMarginPercent:netSales?money(grossProfit/netSales*100):0,totalItemSold:lines.reduce((n,x)=>n+x.qty,0)},byCategory,byProduct});
 }));
 api.get('/orders',asyncRoute(async(req,res)=>{const where:any=await ordersBaseWhere(req);if(req.query.status)where.status=String(req.query.status);if(req.query.customer_name)where.customerName={contains:String(req.query.customer_name),mode:'insensitive'};const open=String(req.query.status||'')==='OPEN_ORDER';res.json(await prisma.sale.findMany({where,include:{outlet:true,cashier:{select:{name:true}},items:{select:{id:true,productName:true,qty:true}}},orderBy:open?[{scheduledAt:{sort:'asc',nulls:'last'}},{createdAt:'asc'}]:{createdAt:'desc'},take:200}));}));
@@ -1776,10 +1826,10 @@ api.get('/orders/preorder-recap',asyncRoute(async(req,res)=>{
   else where.AND.push({status:{notIn:['CANCELLED','REJECTED','VOID']}});
   const orders=await prisma.sale.findMany({
     where,
-    select:{id:true,orderNumber:true,customerName:true,customerPhone:true,orderType:true,status:true,scheduledAt:true,grandTotal:true,outlet:{select:{id:true,name:true,code:true,timezone:true}},items:{select:{id:true,productId:true,productName:true,variantName:true,selectedVariantsJson:true,itemNote:true,qty:true,addons:{select:{id:true,addonName:true}},product:{select:{categoryId:true,category:true,categoryRef:{select:{id:true,name:true,sortOrder:true}}}}}}},
+    select:{id:true,orderNumber:true,customerName:true,customerPhone:true,orderType:true,status:true,scheduledAt:true,grandTotal:true,outlet:{select:{id:true,name:true,code:true,timezone:true}},items:{select:{id:true,productId:true,productName:true,productCategoryId:true,productCategoryName:true,variantName:true,selectedVariantsJson:true,itemNote:true,qty:true,addons:{select:{id:true,addonName:true}},product:{select:{categoryId:true,category:true,categoryRef:{select:{id:true,name:true,sortOrder:true}}}}}}},
     orderBy:[{scheduledAt:'asc'},{orderNumber:'asc'}],take:2000
   });
-  res.json(orders.map(order=>({...order,grandTotal:Number(order.grandTotal),items:order.items.map(item=>({...item,category:{id:item.product.categoryRef?.id||item.product.categoryId,name:item.product.categoryRef?.name||item.product.category||'Tanpa Kategori',sortOrder:item.product.categoryRef?.sortOrder??9999},product:undefined}))})));
+  res.json(orders.map(order=>({...order,grandTotal:Number(order.grandTotal),items:order.items.map(item=>({...item,category:{id:item.productCategoryId||item.product?.categoryRef?.id||item.product?.categoryId||null,name:item.productCategoryName||item.product?.categoryRef?.name||item.product?.category||'Tanpa Kategori',sortOrder:item.product?.categoryRef?.sortOrder??9999},product:undefined}))})));
 }));
 api.get('/orders/open',asyncRoute(async(req,res)=>{const outletId=await requiredOutletId(req);res.json(await prisma.sale.findMany({where:tenantWhereAnd(req,{outletId,status:'OPEN_ORDER'}),include:{outlet:true,cashier:{select:{name:true}},items:{include:{addons:true}}},orderBy:[{scheduledAt:{sort:'asc',nulls:'last'}},{createdAt:'asc'}],take:100}));}));
 api.post('/orders/:id/accept',asyncRoute(async(req,res)=>{
@@ -1898,7 +1948,7 @@ api.get('/reports/daily',allow('OWNER'),asyncRoute(async(req,res)=>{const r=awai
 api.get('/reports/dashboard',allow('OWNER'),asyncRoute(async(req,res)=>res.json(dashboardPayload(await report(req,String(req.query.consolidated||'')==='1')))));
 api.get('/dashboard',requirePermission('dashboard.view'),asyncRoute(async(req,res)=>res.json(dashboardPayload(await report(req)))));
 api.get('/dashboard/consolidated',allow('OWNER'),asyncRoute(async(req,res)=>res.json(dashboardPayload(await report(req,true)))));
-api.get('/reports/products',allow('OWNER'),asyncRoute(async(req,res)=>{const r=await report(req);const map=new Map<string,any>();for(const s of r.sales)for(const i of s.items){const revenue=Number(i.subtotalAfterDiscount);const fee=Number(s.grandTotal)>0?money(Number(s.reportOnlineFee)*revenue/Number(s.grandTotal)):0;const x=map.get(i.productId)||{productName:i.productName,qty:0,revenue:0,hpp:0,onlineFee:0};x.qty+=i.qty;x.revenue+=revenue;x.hpp+=Number(i.totalHpp);x.onlineFee+=fee;map.set(i.productId,x);}res.json([...map.values()].map(x=>({...x,onlineFee:money(x.onlineFee),grossProfit:money(x.revenue-x.hpp-x.onlineFee)})).sort((a,b)=>b.qty-a.qty));}));
+api.get('/reports/products',allow('OWNER'),asyncRoute(async(req,res)=>{const r=await report(req);const map=new Map<string,any>();for(const s of r.sales)for(const i of s.items){const revenue=Number(i.subtotalAfterDiscount);const fee=Number(s.grandTotal)>0?money(Number(s.reportOnlineFee)*revenue/Number(s.grandTotal)):0;const key=i.productId||`deleted:${i.productName}`;const x=map.get(key)||{productName:i.productName,qty:0,revenue:0,hpp:0,onlineFee:0};x.qty+=i.qty;x.revenue+=revenue;x.hpp+=Number(i.totalHpp);x.onlineFee+=fee;map.set(key,x);}res.json([...map.values()].map(x=>({...x,onlineFee:money(x.onlineFee),grossProfit:money(x.revenue-x.hpp-x.onlineFee)})).sort((a,b)=>b.qty-a.qty));}));
 api.get('/reports/outlets',allow('OWNER'),asyncRoute(async(req,res)=>{const r=await report(req);const map=new Map<string,any>();for(const s of r.sales){const x=map.get(s.outletId)||{outlet:s.outlet.name,grossSales:0,netSales:0,discount:0,onlineFee:0,grossProfit:0,transactions:0};x.grossSales+=Number(s.subtotalBeforeDiscount);x.netSales+=Number(s.grandTotal);x.discount+=Number(s.discountAmount);x.onlineFee+=Number(s.reportOnlineFee);x.grossProfit+=Number(s.reportGrossProfit);x.transactions++;map.set(s.outletId,x);}res.json([...map.values()].map(x=>({...x,onlineFee:money(x.onlineFee),grossProfit:money(x.grossProfit)})));}));
 
 app.use((err:any,_req:any,res:any,_next:any)=>{if(err instanceof z.ZodError)return res.status(400).json({message:err.issues[0]?.message||'Data tidak valid',issues:err.issues});if(err instanceof ApiError)return res.status(err.status).json({message:err.message});if(err instanceof Prisma.PrismaClientKnownRequestError&&err.code==='P2002')return res.status(409).json({message:'Data unik sudah digunakan'});console.error(err);res.status(500).json({message:'Terjadi kesalahan pada server'});});

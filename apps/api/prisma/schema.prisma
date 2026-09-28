@@ -708,9 +708,11 @@ model SaleItem {
   id                    String              @id @default(cuid())
   saleId                String              @map("sale_id")
   outletId              String              @map("outlet_id")
-  productId             String              @map("product_id")
+  productId             String?             @map("product_id")
   productVariantId      String?             @map("product_variant_id")
   productName           String              @map("product_name")
+  productCategoryId     String?             @map("product_category_id_snapshot")
+  productCategoryName   String?             @map("product_category_name_snapshot")
   variantName           String              @map("variant_name")
   itemNote              String?             @map("item_note") @db.VarChar(255)
   qty                   Int
@@ -742,22 +744,22 @@ model SaleItem {
   addons                SaleItemAddon[]
   inventoryMovements    InventoryMovement[]
   outlet                Outlet              @relation(fields: [outletId], references: [id])
-  product               Product             @relation(fields: [productId], references: [id])
-  variant               ProductVariant?     @relation(fields: [productVariantId], references: [id])
+  product               Product?            @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant               ProductVariant?     @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
   sale                  Sale                @relation(fields: [saleId], references: [id], onDelete: Cascade)
 
   @@map("sale_items")
 }
 
 model SaleItemAddon {
-  id         String       @id @default(cuid())
-  saleItemId String       @map("sale_item_id")
-  addonId    String       @map("addon_id")
-  addonName  String       @map("addon_name")
-  price      Decimal      @db.Decimal(14, 2)
-  hpp        Decimal      @db.Decimal(14, 2)
-  addon      ProductAddon @relation(fields: [addonId], references: [id])
-  saleItem   SaleItem     @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
+  id         String        @id @default(cuid())
+  saleItemId String        @map("sale_item_id")
+  addonId    String?       @map("addon_id")
+  addonName  String        @map("addon_name")
+  price      Decimal       @db.Decimal(14, 2)
+  hpp        Decimal       @db.Decimal(14, 2)
+  addon      ProductAddon? @relation(fields: [addonId], references: [id], onDelete: SetNull)
+  saleItem   SaleItem      @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
 
   @@map("sale_item_addons")
 }
