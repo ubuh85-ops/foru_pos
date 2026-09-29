@@ -816,7 +816,7 @@ function Payment({ total, initialCustomerName = '', initialCustomerPhone = '', o
   const [customerPhone, setCustomerPhone] = useState(initialCustomerPhone);
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const methods = ['CASH', 'QRIS', 'GOFOOD', 'GRABFOOD', 'SHOPEEFOOD', 'VOUCHER'];
+  const methods = ['CASH', 'QRIS', 'TRANSFER', 'GOFOOD', 'GRABFOOD', 'SHOPEEFOOD', 'VOUCHER'];
   const quickAmounts = [10000, 20000, 50000, 100000];
   const nonCash = m !== 'CASH';
   const paidAmount = nonCash ? total : cash;

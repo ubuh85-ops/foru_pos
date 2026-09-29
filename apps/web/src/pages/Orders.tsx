@@ -58,7 +58,13 @@ const normalizeWhatsappPhone = (value?: string | null) => {
   if (digits.startsWith('8')) return `62${digits}`;
   return digits;
 };
-const QRIS_PAYMENT_URL = 'https://foru.web.id/images/qris-payment.png';
+const DEFAULT_QRIS_PAYMENT_URL = 'https://foru.web.id/images/qris-payment.png';
+const absolutePaymentUrl = (value?: string | null) => {
+  const url = String(value || '').trim();
+  if (!url) return DEFAULT_QRIS_PAYMENT_URL;
+  if (/^https?:\/\//i.test(url)) return url;
+  return `https://foru.web.id${url.startsWith('/') ? '' : '/'}${url}`;
+};
 const whatsappOrderMessage = (order: any) => {
   const number = order.orderNumber || order.transactionNumber || '-';
   const customer = order.customerName || 'Kak';
@@ -84,6 +90,19 @@ const whatsappOrderMessage = (order: any) => {
     const subtotal = finalItemSubtotals[index];
     return `${index + 1}. ${item.qty}x ${item.productName}${details.length ? ` (${details.join(', ')})` : ''}${subtotal ? ` - ${rupiah(subtotal)}` : ''}`;
   });
+  const qrisEnabled = order.outlet?.customerOrderQrisEnabled !== false;
+  const transferEnabled = !!order.outlet?.customerOrderBankTransferEnabled;
+  const bankName = String(order.outlet?.customerOrderBankName || '').trim();
+  const bankAccountNumber = String(order.outlet?.customerOrderBankAccountNumber || '').trim();
+  const bankAccountHolder = String(order.outlet?.customerOrderBankAccountHolder || '').trim();
+  const hasBankDestination = transferEnabled && bankName && bankAccountNumber && bankAccountHolder;
+  const paymentLines = order.status === 'PENDING_PAYMENT'
+    ? [
+        ...(qrisEnabled ? ['', 'Pembayaran QRIS:', absolutePaymentUrl(order.outlet?.customerOrderQrisImageUrl)] : []),
+        ...(hasBankDestination ? ['', 'Pembayaran Transfer Bank:', `Bank: ${bankName}`, `No. Rekening: ${bankAccountNumber}`, `Atas Nama: ${bankAccountHolder}`] : []),
+        ...(qrisEnabled || hasBankDestination ? ['', 'Setelah membayar, mohon kirim bukti pembayaran melalui WhatsApp ini.'] : [])
+      ]
+    : [];
   const lines = [
     `Halo ${customer}, pesanan Anda sudah kami terima di ${outlet}.`,
     '',
@@ -96,9 +115,7 @@ const whatsappOrderMessage = (order: any) => {
     order.status === 'OPEN_ORDER'
       ? 'Silakan menunggu konfirmasi dari kasir.'
       : 'Silakan lanjutkan pembayaran/konfirmasi ke kasir.',
-    ...(order.status === 'PENDING_PAYMENT'
-      ? ['', 'Pembayaran QRIS:', QRIS_PAYMENT_URL, 'Setelah membayar, mohon kirim bukti pembayaran melalui WhatsApp ini.']
-      : []),
+    ...paymentLines,
     'Terima kasih.'
   ];
   return lines.join('\n');

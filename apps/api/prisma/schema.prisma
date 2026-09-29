@@ -136,6 +136,12 @@ model Outlet {
   customerOrderAllowDelivery        Boolean                 @default(false) @map("customer_order_allow_delivery")
   customerOrderRequestPhone         Boolean                 @default(false) @map("customer_order_request_phone")
   customerOrderSoundEnabled         Boolean                 @default(false) @map("customer_order_sound_enabled")
+  customerOrderQrisEnabled          Boolean                 @default(true) @map("customer_order_qris_enabled")
+  customerOrderQrisImageUrl         String?                 @default("/images/qris-payment.png") @map("customer_order_qris_image_url")
+  customerOrderBankTransferEnabled  Boolean                 @default(false) @map("customer_order_bank_transfer_enabled")
+  customerOrderBankName             String?                 @map("customer_order_bank_name")
+  customerOrderBankAccountNumber    String?                 @map("customer_order_bank_account_number")
+  customerOrderBankAccountHolder    String?                 @map("customer_order_bank_account_holder")
   preOrderEnabled                   Boolean                 @default(true) @map("pre_order_enabled")
   preOrderMinLeadMinutes            Int                     @default(60) @map("pre_order_min_lead_minutes")
   preOrderMaxDaysAhead              Int                     @default(14) @map("pre_order_max_days_ahead")
@@ -1192,6 +1198,7 @@ enum DiscountType {
 enum PaymentMethod {
   CASH
   QRIS
+  TRANSFER
   GOFOOD
   GRABFOOD
   SHOPEEFOOD

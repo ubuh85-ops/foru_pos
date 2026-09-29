@@ -25,6 +25,12 @@ type Outlet = {
   customerOrderAllowDelivery?: boolean;
   customerOrderRequestPhone?: boolean;
   customerOrderSoundEnabled?: boolean;
+  customerOrderQrisEnabled?: boolean;
+  customerOrderQrisImageUrl?: string | null;
+  customerOrderBankTransferEnabled?: boolean;
+  customerOrderBankName?: string | null;
+  customerOrderBankAccountNumber?: string | null;
+  customerOrderBankAccountHolder?: string | null;
   preOrderEnabled?: boolean;
   preOrderMinLeadMinutes?: number;
   preOrderMaxDaysAhead?: number;
@@ -116,6 +122,12 @@ export default function OutletPage() {
         customerOrderAllowDelivery: f.get('customerOrderAllowDelivery') === 'on',
         customerOrderRequestPhone: f.get('customerOrderRequestPhone') === 'on',
         customerOrderSoundEnabled: f.get('customerOrderSoundEnabled') === 'on',
+        customerOrderQrisEnabled: f.get('customerOrderQrisEnabled') === 'on',
+        customerOrderQrisImageUrl: String(f.get('customerOrderQrisImageUrl') || '').trim() || null,
+        customerOrderBankTransferEnabled: f.get('customerOrderBankTransferEnabled') === 'on',
+        customerOrderBankName: String(f.get('customerOrderBankName') || '').trim() || null,
+        customerOrderBankAccountNumber: String(f.get('customerOrderBankAccountNumber') || '').trim() || null,
+        customerOrderBankAccountHolder: String(f.get('customerOrderBankAccountHolder') || '').trim() || null,
         preOrderEnabled: f.get('preOrderEnabled') === 'on',
         preOrderMinLeadMinutes: Number(f.get('preOrderMinLeadMinutes') || 60),
         preOrderMaxDaysAhead: Number(f.get('preOrderMaxDaysAhead') || 14),
@@ -217,6 +229,18 @@ export default function OutletPage() {
             <label className="flex items-center gap-2 text-sm font-bold"><input name="customerOrderAllowDelivery" type="checkbox" defaultChecked={!!edit.customerOrderAllowDelivery} /> Allow Delivery</label>
             <label className="flex items-center gap-2 text-sm font-bold"><input name="customerOrderRequestPhone" type="checkbox" defaultChecked={!!edit.customerOrderRequestPhone} /> Request Phone Number</label>
             <label className="flex items-center gap-2 text-sm font-bold"><input name="customerOrderSoundEnabled" type="checkbox" defaultChecked={!!edit.customerOrderSoundEnabled} /> Customer Order Sound</label>
+          </div>
+          <div className="mt-4 rounded-xl border bg-white p-3">
+            <p className="mb-3 text-sm font-black text-slate-800">Metode pembayaran pelanggan</p>
+            <label className="mb-3 flex items-center gap-2 text-sm font-bold"><input name="customerOrderQrisEnabled" type="checkbox" defaultChecked={edit.customerOrderQrisEnabled !== false} /> Tampilkan QRIS di pesan WhatsApp</label>
+            <Field name="customerOrderQrisImageUrl" label="URL gambar QRIS" value={edit.customerOrderQrisImageUrl || '/images/qris-payment.png'} />
+            <div className="mt-4 border-t pt-4">
+              <label className="mb-3 flex items-center gap-2 text-sm font-bold"><input name="customerOrderBankTransferEnabled" type="checkbox" defaultChecked={!!edit.customerOrderBankTransferEnabled} /> Aktifkan transfer bank</label>
+              <Field name="customerOrderBankName" label="Nama bank" value={edit.customerOrderBankName} />
+              <Field name="customerOrderBankAccountNumber" label="Nomor rekening" value={edit.customerOrderBankAccountNumber} />
+              <Field name="customerOrderBankAccountHolder" label="Atas nama" value={edit.customerOrderBankAccountHolder} />
+              <p className="text-xs text-slate-400">Jika transfer diaktifkan, ketiga data rekening wajib diisi dan akan ditampilkan pada pesan WhatsApp pesanan.</p>
+            </div>
           </div>
           <div className="mt-4 border-t pt-4"><label className="mb-3 flex items-center gap-2 text-sm font-black"><input name="preOrderEnabled" type="checkbox" defaultChecked={edit.preOrderEnabled!==false}/> Enable Pre-Order</label><div className="grid grid-cols-3 gap-2"><Field name="preOrderMinLeadMinutes" label="Lead (menit)" value={edit.preOrderMinLeadMinutes??60}/><Field name="preOrderMaxDaysAhead" label="Maks. hari" value={edit.preOrderMaxDaysAhead??14}/><Field name="preOrderSlotMinutes" label="Slot (menit)" value={edit.preOrderSlotMinutes??30}/></div><div className="grid grid-cols-2 gap-2"><Field name="customerOrderOpenTime" label="Jam buka" value={edit.customerOrderOpenTime||'08:00'}/><Field name="customerOrderCloseTime" label="Jam tutup" value={edit.customerOrderCloseTime||'21:00'}/></div><Field name="timezone" label="Timezone" value={edit.timezone||'Asia/Jakarta'}/><p className="label">Hari operasional</p><div className="flex flex-wrap gap-2">{['Min','Sen','Sel','Rab','Kam','Jum','Sab'].map((label,day)=><label key={day} className="rounded-lg bg-white p-2 text-xs font-bold"><input className="mr-1" name={`operatingDay${day}`} type="checkbox" defaultChecked={(edit.customerOrderOperatingDays||[0,1,2,3,4,5,6]).includes(day)}/>{label}</label>)}</div></div>
           <div className="mt-3 rounded-xl bg-white p-3 text-xs text-slate-500">
