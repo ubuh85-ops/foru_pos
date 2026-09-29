@@ -165,7 +165,7 @@ export default function CustomerOrderPage() {
   async function refreshAvailability() {
     const [info, rows] = await Promise.all([
       publicFetch<any>(`/public/order/${businessSlug}/${outletSlug}`),
-      publicFetch<PublicProduct[]>(`/public/order/${businessSlug}/${outletSlug}/products`),
+      publicFetch<PublicProduct[]>(`/public/order/${businessSlug}/${outletSlug}/products?_=${Date.now()}`),
     ]);
     setMeta(info);
     setProducts(rows);

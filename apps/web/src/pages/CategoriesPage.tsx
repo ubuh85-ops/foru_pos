@@ -45,7 +45,7 @@ export default function CategoriesPage() {
         setError('Pilih outlet terlebih dahulu.');
         return;
       }
-      const result = await api<Category[]>(`/categories?outletId=${encodeURIComponent(selectedOutletId)}`);
+      const result = await api<Category[]>(`/categories?outletId=${encodeURIComponent(selectedOutletId)}&_=${Date.now()}`);
       setCategories(ordered(result));
       setError('');
     } catch (err) {

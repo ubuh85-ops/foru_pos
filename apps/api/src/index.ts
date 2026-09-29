@@ -353,6 +353,7 @@ api.get('/public/order/:businessSlug/:outletSlug/products',asyncRoute(async(req,
   const {business,outlet}=await resolvePublicOrderOutlet(String(req.params.businessSlug),String(req.params.outletSlug));
   if(!outlet.customerOrderingEnabled)throw new ApiError(403,'Pesanan online tidak aktif');
   const [products,categoryOrder]=await Promise.all([prisma.product.findMany({where:{businessId:business.id,status:'ACTIVE',OR:[{categoryAssignments:{some:{category:{status:'ACTIVE'}}}},{AND:[{categoryAssignments:{none:{}}},{OR:[{categoryId:null},{categoryRef:{status:'ACTIVE'}}]}]}],outlets:{some:{outletId:outlet.id,isActive:true,status:'ACTIVE'}}},include:{categoryRef:true,categoryAssignments:{where:{category:{status:'ACTIVE'}},include:{category:true},orderBy:{sortOrder:'asc'}},outlets:{where:{outletId:outlet.id,isActive:true}},variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId:outlet.id}}}}}}}}},orderBy:[{categoryRef:{sortOrder:'asc'}},{name:'asc'}]}),outletCategoryOrderMap(outlet.id)]);
+  res.setHeader('Cache-Control','no-store');
   res.json(await Promise.all(products.map(async p=>publicProductShape(p,outlet.id,'DINE_IN',await effectiveProductStock(p.id,p.outlets[0],outlet),categoryOrder))));
 }));
 api.post('/public/order/:businessSlug/:outletSlug/preview',asyncRoute(async(req,res)=>{
@@ -696,7 +697,7 @@ api.delete('/printers/:id',allow('OWNER'),asyncRoute(async(req,res)=>{await asse
 const categoryBody=z.object({name:z.string().trim().min(2),description:z.string().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
 const categoryUpdateBody=categoryBody.partial();
 const categoryReorderBody=z.object({
-  outletId:z.string().optional(),
+  outletId:z.string().min(1),
   categories:z.array(z.object({id:z.string().min(1),sortOrder:z.coerce.number().int().nonnegative()})).min(1)
 });
 async function categoriesForOutlet(req:any,outletId:string){
@@ -708,7 +709,7 @@ async function categoriesForOutlet(req:any,outletId:string){
   });
   return rows.map(({outletOrders,...category})=>({...category,globalSortOrder:category.sortOrder,sortOrder:outletOrders[0]?.sortOrder??category.sortOrder})).sort((a,b)=>a.sortOrder-b.sortOrder||a.name.localeCompare(b.name));
 }
-api.get('/categories',asyncRoute(async(req,res)=>{const outletId=String(req.query.outletId||'');res.json(outletId?await categoriesForOutlet(req,outletId):await prisma.category.findMany({where:tenantWhere(req),orderBy:[{sortOrder:'asc'},{name:'asc'}]}));}));
+api.get('/categories',asyncRoute(async(req,res)=>{const outletId=String(req.query.outletId||'');res.setHeader('Cache-Control','no-store');res.json(outletId?await categoriesForOutlet(req,outletId):await prisma.category.findMany({where:tenantWhere(req),orderBy:[{sortOrder:'asc'},{name:'asc'}]}));}));
 api.post('/categories',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const d=categoryBody.parse(req.body);
   const max=await prisma.category.aggregate({where:tenantWhere(req),_max:{sortOrder:true}});
@@ -719,18 +720,18 @@ api.put('/categories/reorder',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,r
   const d=categoryReorderBody.parse(req.body);
   const ids=d.categories.map(category=>category.id);
   if(new Set(ids).size!==ids.length)throw new ApiError(400,'Kategori duplikat dalam urutan.');
-  const scopedCategories=d.outletId?await categoriesForOutlet(req,d.outletId):null;
-  const existing=d.outletId?scopedCategories!.filter(category=>ids.includes(category.id)):await prisma.category.findMany({where:tenantWhereAnd(req,{id:{in:ids}}),select:{id:true}});
+  const scopedCategories=await categoriesForOutlet(req,d.outletId);
+  const existing=scopedCategories.filter(category=>ids.includes(category.id));
   if(existing.length!==ids.length)throw new ApiError(403,'Kategori tidak diizinkan.');
   const sortOrders=d.categories.map(category=>category.sortOrder);
   if(new Set(sortOrders).size!==sortOrders.length)throw new ApiError(400,'Urutan kategori harus unik.');
   await prisma.$transaction(async tx=>{
     for(const category of d.categories){
-      if(d.outletId)await tx.outletCategory.upsert({where:{outletId_categoryId:{outletId:d.outletId,categoryId:category.id}},update:{sortOrder:category.sortOrder},create:{outletId:d.outletId,categoryId:category.id,sortOrder:category.sortOrder}});
-      else await tx.category.update({where:{id:category.id},data:{sortOrder:category.sortOrder}});
+      await tx.outletCategory.upsert({where:{outletId_categoryId:{outletId:d.outletId,categoryId:category.id}},update:{sortOrder:category.sortOrder},create:{outletId:d.outletId,categoryId:category.id,sortOrder:category.sortOrder}});
     }
   });
-  res.json(d.outletId?await categoriesForOutlet(req,d.outletId):await prisma.category.findMany({where:tenantWhere(req),orderBy:[{sortOrder:'asc'},{name:'asc'}]}));
+  res.setHeader('Cache-Control','no-store');
+  res.json(await categoriesForOutlet(req,d.outletId));
 }));
 api.put('/categories/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertTenantCategory(req,id);res.json(await prisma.category.update({where:{id},data:categoryUpdateBody.parse(req.body)}));}));
 api.delete('/categories/:id',allow('OWNER'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertTenantCategory(req,id);res.json(await prisma.category.update({where:{id},data:{status:'INACTIVE'}}));}));
