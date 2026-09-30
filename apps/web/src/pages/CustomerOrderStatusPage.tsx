@@ -47,7 +47,7 @@ export default function CustomerOrderStatusPage() {
         </div>
         <div className="space-y-2 text-left">
           {(order?.items || []).map((item: any) => <div key={item.id} className="flex justify-between rounded-2xl border p-3">
-            <div><b>{item.productName}</b><p className="text-sm text-slate-500">{item.variantName || 'Base'}</p></div>
+            <div>{item.serviceDate&&<p className="font-bold text-violet-700">📅 {new Intl.DateTimeFormat('id-ID',{dateStyle:'full',timeZone:'UTC'}).format(new Date(item.serviceDate))} · {item.fulfillmentStatus}</p>}<b>{item.productName}</b><p className="text-sm text-slate-500">{item.variantName || 'Base'}</p></div>
             <span>{item.qty}x</span>
           </div>)}
         </div>

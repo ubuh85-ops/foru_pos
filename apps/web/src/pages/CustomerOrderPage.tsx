@@ -27,6 +27,9 @@ type PublicGroup = {
 };
 type PublicAddon = { id: string; addonName: string; price: number };
 type PublicProduct = {
+  serviceDate?: string;
+  dailyMenuScheduleId?: string;
+  quotaAvailable?: number | null;
   id: string;
   name: string;
   sku?: string | null;
@@ -76,41 +79,13 @@ const publicFetch = async <T,>(path: string, init?: RequestInit) => {
 const uid = () =>
   globalThis.crypto?.randomUUID?.() ||
   `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-function zonedDateTimeIso(
-  dateValue: string,
-  timeValue: string,
-  timeZone: string
-) {
-  const [year, month, day] = dateValue.split("-").map(Number),
-    [hour, minute] = timeValue.split(":").map(Number);
-  const wanted = Date.UTC(
-    year || 0,
-    (month || 1) - 1,
-    day || 1,
-    hour || 0,
-    minute || 0
-  );
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date(wanted));
-  const get = (type: string) =>
-    Number(parts.find((part) => part.type === type)?.value || 0);
-  const represented = Date.UTC(
-    get("year"),
-    get("month") - 1,
-    get("day"),
-    get("hour"),
-    get("minute")
-  );
-  return new Date(wanted - (represented - wanted)).toISOString();
+const dateLabel=(date:string)=>new Intl.DateTimeFormat('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(new Date(date+'T12:00:00'));
+function lineTotal(line:CartLine){
+  const p=line.product;
+  return line.qty*(Number(p.variants?.find(v=>v.id===line.variantId)?.sellingPrice??p.basePrice)+
+    (p.variantGroups?.flatMap(v=>v.group.options).filter(o=>line.optionIds.includes(o.id)).reduce((sum,o)=>sum+Number(o.additionalPrice),0)||0)+
+    (p.addons?.filter(a=>line.addonIds.includes(a.id)).reduce((sum,a)=>sum+Number(a.price),0)||0));
 }
-
 export default function CustomerOrderPage() {
   const { businessSlug = "", outletSlug = "" } = useParams();
   const location = useLocation();
@@ -124,6 +99,8 @@ export default function CustomerOrderPage() {
   const navigate = useNavigate();
   const [meta, setMeta] = useState<any>(null);
   const [products, setProducts] = useState<PublicProduct[]>([]);
+  const checkoutRequestId=useRef(uid());
+  const [cartError,setCartError]=useState('');
   const [cart, setCart] = useState<CartLine[]>([]);
   const [selected, setSelected] = useState<PublicProduct | null>(null);
   const [optionIds, setOptionIds] = useState<string[]>([]);
@@ -146,7 +123,20 @@ export default function CustomerOrderPage() {
   const [finalConfirm, setFinalConfirm] = useState(false);
   const [isPreOrder, setIsPreOrder] = useState(false);
   const [scheduleDate, setScheduleDate] = useState("");
-  const [scheduleTime, setScheduleTime] = useState("");
+  const [availableDates,setAvailableDates]=useState<string[]>([]);
+  const [menuLoading,setMenuLoading]=useState(false);
+  const requestVersion=useRef(0);
+  const savedCarts=useRef<{normal:CartLine[];preorder:CartLine[]}>({normal:[],preorder:[]});
+  const sortedCart=[...cart].sort((a,b)=>(a.product.serviceDate||'').localeCompare(b.product.serviceDate||''));
+  function switchMode(next:boolean){
+    savedCarts.current[isPreOrder?'preorder':'normal']=cart;
+    setCart(savedCarts.current[next?'preorder':'normal']);
+    setIsPreOrder(next);setSelected(null);setCheckout(false);setCouponCode('');setProducts([]);setError('');
+  }
+  function dateGroup(line:CartLine,index:number){
+    const date=line.product.serviceDate;
+    return date&&sortedCart[index-1]?.product.serviceDate!==date?<div className="mb-3 border-b border-violet-200 pb-2 text-violet-800"><b>📅 {dateLabel(date)}</b><p className="text-sm">Subtotal {rupiah(cart.filter(row=>row.product.serviceDate===date).reduce((sum,row)=>sum+lineTotal(row),0))}</p></div>:null;
+  }
   const [preview, setPreview] = useState({
     subtotal: 0,
     productDiscount: 0,
@@ -163,49 +153,41 @@ export default function CustomerOrderPage() {
   const chipRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   async function refreshAvailability() {
-    const [info, rows] = await Promise.all([
-      publicFetch<any>(`/public/order/${businessSlug}/${outletSlug}`),
-      publicFetch<PublicProduct[]>(`/public/order/${businessSlug}/${outletSlug}/products?_=${Date.now()}`),
-    ]);
+    const version=++requestVersion.current;
+    const info=await publicFetch<any>(`/public/order/${businessSlug}/${outletSlug}`);
+    if(version!==requestVersion.current)return {info,rows:[]};
     setMeta(info);
+    const daily=info.outlet.webOrderMode==='PREORDER_ONLY'||(isPreOrder&&info.outlet.webOrderMode==='NORMAL_AND_PREORDER'&&info.outlet.preOrderEnabled);
+    if(daily!==isPreOrder){setIsPreOrder(daily);setProducts([]);setCart([]);return {info,rows:[]};}
+    let date=scheduleDate;
+    if(daily){
+      const dates=await publicFetch<string[]>(`/public/order/${businessSlug}/${outletSlug}/preorder/dates`);
+      if(version!==requestVersion.current)return {info,rows:[]};
+      setAvailableDates(dates);
+      if(!dates.includes(date)){date=dates[0]||'';setScheduleDate(date);}
+    }
+    const rows=daily&&!date?[]:await publicFetch<PublicProduct[]>(`/public/order/${businessSlug}/${outletSlug}/${daily?'preorder/menu?date='+date:'products'}`);
+    if(version!==requestVersion.current)return {info,rows};
     setProducts(rows);
-    const latest = new Map(rows.map((product) => [product.id, product]));
-    setCart((current) =>
-      current.map((line) =>
-        latest.has(line.product.id)
-          ? { ...line, product: latest.get(line.product.id)! }
-          : line
-      )
-    );
-    return { info, rows };
+    const latest=new Map(rows.map(product=>[product.dailyMenuScheduleId||product.id,product]));
+    setCart(current=>current.map(line=>{
+      if(daily&&line.product.serviceDate!==date)return line;
+      const product=latest.get(line.product.dailyMenuScheduleId||line.product.id);
+      return {...line,product:product||{...line.product,isAvailable:false}};
+    }));
+    return {info,rows};
   }
-
-  useEffect(() => {
-    refreshAvailability()
-      .then(({ info }) => {
-        if (!info.outlet?.allowDineIn && info.outlet?.allowTakeAway)
-          setOrderType("TAKE_AWAY");
-        setError("");
-      })
-      .catch((e) => setError((e as Error).message));
-  }, [businessSlug, outletSlug]);
-
-  useEffect(() => {
-    const refresh = () => {
-      if (!document.hidden) refreshAvailability().catch(() => {});
-    };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    return () => {
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", refresh);
-    };
-  }, [businessSlug, outletSlug]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => refreshAvailability().catch(() => {}), 10000);
-    return () => window.clearInterval(timer);
-  }, [businessSlug, outletSlug]);
+  useEffect(()=>{
+    setMenuLoading(true);setProducts([]);
+    const refresh=()=>refreshAvailability().then(({info})=>{
+      if(!info.outlet?.allowDineIn&&info.outlet?.allowTakeAway)setOrderType('TAKE_AWAY');
+    }).catch(e=>setError((e as Error).message)).finally(()=>setMenuLoading(false));
+    void refresh();
+    const timer=window.setInterval(refresh,10000);
+    const focus=()=>{if(!document.hidden)void refresh();};
+    window.addEventListener('focus',focus);document.addEventListener('visibilitychange',focus);
+    return ()=>{requestVersion.current++;window.clearInterval(timer);window.removeEventListener('focus',focus);document.removeEventListener('visibilitychange',focus);};
+  },[businessSlug,outletSlug,isPreOrder,scheduleDate]);
 
   const total = useMemo(
     () =>
@@ -233,54 +215,15 @@ export default function CustomerOrderPage() {
   const storeOpen = !!meta?.outlet?.enabled && meta?.outlet?.acceptingCustomerOrders !== false;
   const phoneValid = /^\+?[0-9][0-9\s-]{7,19}$/.test(customerPhone.trim());
   const formValid =
-    storeOpen && !!cart.length &&
+    storeOpen && !cartError && !!cart.length &&
     cart.every((line) => line.product.isAvailable) &&
     customerName.trim().length >= 2 &&
     phoneValid &&
-    (!isPreOrder || (!!scheduleDate && !!scheduleTime));
-  const dateBounds = useMemo(() => {
-    const today = new Date(),
-      max = new Date();
-    max.setDate(
-      max.getDate() + Number(meta?.outlet?.preOrderMaxDaysAhead || 14)
-    );
-    const key = (d: Date) =>
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-        d.getDate()
-      ).padStart(2, "0")}`;
-    return { min: key(today), max: key(max) };
-  }, [meta]);
-  const slots = useMemo(() => {
-    if (!scheduleDate || !meta?.outlet) return [] as string[];
-    const selected = new Date(`${scheduleDate}T12:00:00`);
-    if (!(meta.outlet.operatingDays || []).includes(selected.getDay()))
-      return [];
-    const minutes = (value: string) => {
-      const [h, m] = value.split(":").map(Number);
-      return h * 60 + m;
-    };
-    const open = minutes(meta.outlet.openTime),
-      close = minutes(meta.outlet.closeTime),
-      step = Number(meta.outlet.preOrderSlotMinutes);
-    const earliest =
-      Date.now() + Number(meta.outlet.preOrderMinLeadMinutes) * 60000;
-    const rows: string[] = [];
-    for (let value = open; value < close; value += step) {
-      const time = `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(
-        value % 60
-      ).padStart(2, "0")}`;
-      if (
-        new Date(
-          zonedDateTimeIso(scheduleDate, time, meta.outlet.timezone)
-        ).getTime() >= earliest
-      )
-        rows.push(time);
-    }
-    return rows;
-  }, [scheduleDate, meta]);
-
+    (!isPreOrder || cart.every(line=>!!line.product.serviceDate));
   function publicOrderItems() {
     return cart.map((line) => ({
+      serviceDate: line.product.serviceDate,
+      dailyMenuScheduleId: line.product.dailyMenuScheduleId,
       productId: line.product.id,
       variantId: line.variantId,
       selectedVariantOptionIds: line.optionIds,
@@ -296,6 +239,7 @@ export default function CustomerOrderPage() {
       {
         method: "POST",
         body: JSON.stringify({
+          orderMode: isPreOrder?'PREORDER':'NORMAL',
           items: publicOrderItems(),
           couponCode: code || undefined,
         }),
@@ -304,19 +248,21 @@ export default function CustomerOrderPage() {
   }
 
   useEffect(() => {
-    if (!cart.length)
-      return setPreview({
+    let active=true;
+    if (!cart.length){setCartError('');setPreview({
         subtotal: 0,
         productDiscount: 0,
         transactionDiscount: 0,
         couponDiscount: 0,
         total: 0,
-      });
+      });return;}
     const timer = window.setTimeout(
       () =>
         loadPreview()
-          .then(setPreview)
+          .then(result=>{if(active){setPreview(result);setCartError('');}})
           .catch((previewError) => {
+            if(!active)return;
+            setCartError((previewError as Error).message);
             if (couponCode) {
               setCouponCode("");
               setCouponMessage((previewError as Error).message);
@@ -325,7 +271,7 @@ export default function CustomerOrderPage() {
           }),
       150
     );
-    return () => window.clearTimeout(timer);
+    return () => {active=false;window.clearTimeout(timer);};
   }, [cart, total, businessSlug, outletSlug, couponCode]);
   const filteredProducts = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -511,6 +457,7 @@ export default function CustomerOrderPage() {
   }
   function addSelected() {
     if (!selected) return;
+    if(selected.quotaAvailable!=null&&qty+cart.filter(line=>line.key!==editingKey&&line.product.dailyMenuScheduleId===selected.dailyMenuScheduleId).reduce((sum,line)=>sum+line.qty,0)>selected.quotaAvailable){setModalError('Jumlah melebihi kuota tanggal ini.');return;}
     if (!selected.isAvailable) {
       setModalError("Menu ini sedang habis.");
       return;
@@ -572,6 +519,7 @@ export default function CustomerOrderPage() {
       product.addons?.length ||
       product.variantGroups?.length
     );
+    if(product.quotaAvailable!=null&&cart.filter(line=>line.product.dailyMenuScheduleId===product.dailyMenuScheduleId).reduce((sum,line)=>sum+line.qty,0)>=product.quotaAvailable){setError('Jumlah melebihi kuota tanggal ini.');return;}
     if (customizable) return openProduct(product);
     trackWebEvent(businessSlug, outletSlug, 'ADD_TO_CART', product.id);
     setCart((rows) => [
@@ -612,8 +560,8 @@ export default function CustomerOrderPage() {
     if (!customerName.trim()) return setError("Nama customer wajib diisi.");
     if (!phoneValid) return setError("Nomor WhatsApp tidak valid.");
     if (!cart.length) return setError("Keranjang masih kosong.");
-    if (isPreOrder && (!scheduleDate || !scheduleTime))
-      return setError("Tanggal dan jam Pre-Order wajib dipilih.");
+    if (isPreOrder && cart.some(line=>!line.product.serviceDate))
+      return setError("Tanggal Pre-Order wajib dipilih.");
     setSubmitting(true);
     try {
       const result = await publicFetch<any>(
@@ -629,14 +577,9 @@ export default function CustomerOrderPage() {
             orderNote,
             couponCode: couponCode || undefined,
             isPreOrder,
-            scheduledAt: isPreOrder
-              ? zonedDateTimeIso(
-                  scheduleDate,
-                  scheduleTime,
-                  meta.outlet.timezone
-                )
-              : null,
-            customerOrderRequestId: uid(),
+            orderMode: isPreOrder?'PREORDER':'NORMAL',
+            scheduledAt: null,
+            customerOrderRequestId: checkoutRequestId.current,
             items: publicOrderItems(),
           }),
         }
@@ -668,6 +611,8 @@ export default function CustomerOrderPage() {
           </h1>
           <p className="text-sm text-slate-500">Pesan dulu, bayar di kasir.</p>
         </header>
+        {meta?.outlet?.webOrderMode==='NORMAL_AND_PREORDER'&&meta?.outlet?.preOrderEnabled&&<div className="mb-4 grid grid-cols-2 gap-2"><Choice active={!isPreOrder} onClick={()=>switchMode(false)}>Pesan Sekarang</Choice><Choice active={isPreOrder} onClick={()=>switchMode(true)}>Pre-Order</Choice></div>}
+        {cartError&&<p role="alert" className="mb-4 rounded-xl bg-red-50 p-3 text-red-700">{cartError}</p>}
         {error && (
           <div className="mb-4 rounded-2xl bg-red-50 p-3 font-semibold text-red-700">
             {error}
@@ -680,6 +625,9 @@ export default function CustomerOrderPage() {
           </div>
         )}
         <section className="sticky top-0 z-20 mb-4 rounded-3xl bg-white/95 p-4 shadow-sm backdrop-blur">
+          {isPreOrder&&<div className="mb-3 border-b pb-3"><p className="text-xs font-black uppercase text-violet-700">Daily Menu Pre-Order</p><h2 className="font-black">{scheduleDate?dateLabel(scheduleDate):'Belum ada tanggal tersedia'}</h2><p className="text-xs text-slate-500">Pilih produk apa saja. Boleh pesan hanya pada tanggal tertentu.</p><div className="mt-3 flex gap-2 overflow-x-auto pb-2">{availableDates.map(date=><button key={date} aria-pressed={date===scheduleDate} onClick={()=>{setScheduleDate(date);setProducts([]);setSelected(null);}} className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold ${date===scheduleDate?'bg-violet-700 text-white':'bg-white'}`}>{dateLabel(date)}</button>)}</div></div>}
+          {menuLoading&&<p role="status">Memuat menu…</p>}
+          {!menuLoading&&isPreOrder&&!products.length&&<p className="text-sm text-slate-500">Belum ada menu yang bisa dipesan. Jadwal mungkin ditutup atau kuota habis.</p>}
           <div className="flex flex-col gap-3 md:flex-row md:items-center">
             <div className="relative min-w-0 flex-1">
               <Search
@@ -730,8 +678,9 @@ export default function CustomerOrderPage() {
               <h2 className="text-2xl font-black">Konfirmasi Pesanan</h2>
               <p className="text-slate-500">Pesanan Kamu</p>
               <div className="mt-4 space-y-3">
-                {cart.map((line) => (
+                {sortedCart.map((line, index) => (
                   <div key={line.key} className="rounded-2xl border p-4">
+                    {dateGroup(line,index)}
                     <div className="flex justify-between gap-3">
                       <button
                         disabled={!line.product.isAvailable}
@@ -762,11 +711,7 @@ export default function CustomerOrderPage() {
                     </div>
                     <div className="mt-3 flex items-center justify-between">
                       <span className="font-bold">
-                        {rupiah(
-                          ((preview.subtotal || total) /
-                            Math.max(itemCount, 1)) *
-                            line.qty
-                        )}
+                        {rupiah(lineTotal(line))}
                       </span>
                       <div className="flex items-center rounded-xl border">
                         <button
@@ -789,6 +734,7 @@ export default function CustomerOrderPage() {
                         <button
                           disabled={!line.product.isAvailable}
                           onClick={() => {
+                            if(line.product.quotaAvailable!=null&&cart.filter(row=>row.product.dailyMenuScheduleId===line.product.dailyMenuScheduleId).reduce((sum,row)=>sum+row.qty,0)>=line.product.quotaAvailable)return;
                             const maxQty=line.product.stockMode==='MANUAL'?Math.min(50,line.product.stockQty??0):50;
                             if (line.qty < maxQty) trackWebEvent(businessSlug, outletSlug, 'ADD_TO_CART', line.product.id);
                             setCart((rows) =>
@@ -922,59 +868,6 @@ export default function CustomerOrderPage() {
               </div>
             </div>
             <div className="rounded-3xl bg-white p-5 shadow-sm">
-              <h3 className="mb-3 text-lg font-black">Waktu Pesanan</h3>
-              <div className="grid grid-cols-2 gap-2">
-                <Choice
-                  active={!isPreOrder}
-                  onClick={() => setIsPreOrder(false)}
-                >
-                  Pesan Sekarang
-                </Choice>
-                {meta?.outlet?.preOrderEnabled && (
-                  <Choice
-                    active={isPreOrder}
-                    onClick={() => setIsPreOrder(true)}
-                  >
-                    Pre-Order
-                  </Choice>
-                )}
-              </div>
-              {isPreOrder && (
-                <div className="mt-4">
-                  <h4 className="mb-2 font-black">Jadwal Pesanan</h4>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <input
-                      type="date"
-                      className="input"
-                      min={dateBounds.min}
-                      max={dateBounds.max}
-                      value={scheduleDate}
-                      onChange={(e) => {
-                        setScheduleDate(e.target.value);
-                        setScheduleTime("");
-                      }}
-                    />
-                    <select
-                      className="input"
-                      value={scheduleTime}
-                      onChange={(e) => setScheduleTime(e.target.value)}
-                    >
-                      <option value="">Pilih jam *</option>
-                      {slots.map((slot) => (
-                        <option key={slot}>{slot}</option>
-                      ))}
-                    </select>
-                  </div>
-                  {scheduleDate && !slots.length && (
-                    <p className="mt-2 text-sm font-semibold text-amber-700">
-                      Outlet tutup pada tanggal yang dipilih atau seluruh slot
-                      sudah lewat. Silakan pilih tanggal lain.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="rounded-3xl bg-white p-5 shadow-sm">
               <h3 className="mb-3 text-lg font-black">Tipe Pesanan</h3>
               <div className="grid gap-2 sm:grid-cols-3">
                 {meta?.outlet?.allowDineIn !== false && (
@@ -1083,8 +976,9 @@ export default function CustomerOrderPage() {
                 <ShoppingBag /> Pesanan ({itemCount})
               </h2>
               <div className="space-y-2">
-                {cart.map((line, i) => (
+                {sortedCart.map((line, i) => (
                   <div key={line.key} className="rounded-2xl border p-3">
+                    {dateGroup(line,i)}
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <b>{line.product.name}</b>
@@ -1092,7 +986,7 @@ export default function CustomerOrderPage() {
                       </div>
                       <button
                         onClick={() =>
-                          setCart((rows) => rows.filter((_, j) => j !== i))
+                          setCart((rows) => rows.filter(row => row.key !== line.key))
                         }
                         className="text-red-600"
                       >
@@ -1139,7 +1033,7 @@ export default function CustomerOrderPage() {
           <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-3xl bg-white p-5 shadow-xl">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-xl font-black">{selected.name}</h2>
+                <h2 className="text-xl font-black">{selected.serviceDate&&<span className="block text-sm text-violet-700">📅 {dateLabel(selected.serviceDate)}</span>}{selected.name}</h2>
                 <p className="text-brand-700">{rupiah(selected.basePrice)}</p>
               </div>
               <button onClick={() => setSelected(null)}>
@@ -1296,7 +1190,7 @@ export default function CustomerOrderPage() {
               </p>
               {isPreOrder && (
                 <p>
-                  {scheduleDate} • {scheduleTime}
+                  {[...new Set(cart.map(line=>line.product.serviceDate).filter(Boolean))].map(date=><span className="block" key={date}>{dateLabel(date!)}</span>)}
                 </p>
               )}
             </div>
@@ -1309,7 +1203,7 @@ export default function CustomerOrderPage() {
                 Kembali
               </button>
               <button
-                disabled={submitting || !storeOpen}
+                disabled={submitting || !formValid}
                 onClick={submit}
                 className="btn btn-primary disabled:opacity-50"
               >
@@ -1386,6 +1280,7 @@ function CategorySection({
                 <p className="mt-3 text-base font-black text-brand-700">
                   {rupiah(startingPrice)}
                 </p>
+                {product.quotaAvailable!=null&&<p className="mt-1 text-xs font-bold text-violet-700">Sisa kuota {product.quotaAvailable}</p>}
               </div>
               <div className="min-w-0">
                 <div className="relative aspect-square overflow-hidden rounded-2xl bg-slate-100">

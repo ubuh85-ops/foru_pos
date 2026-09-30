@@ -200,6 +200,7 @@ export default function POS() {
   useEffect(() => {
     if (!editOrderId) return;
     api<any>(`/orders/${editOrderId}`).then(order => {
+      if(order.items?.some((item:{dailyMenuScheduleId?:string})=>item.dailyMenuScheduleId)){navigate(`/orders/${order.id}`,{replace:true});return;}
       if (order.status !== 'PENDING_PAYMENT' && order.status !== 'OPEN_ORDER') throw new Error('Order sudah tidak bisa diedit karena status berubah.');
       setEditingOrder(order);
       setSelectedOutletId(order.outletId);

@@ -225,6 +225,7 @@ export default function ProductPage() {
   const [categories, setCategories] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   const [outlets, setOutlets] = useState<any[]>([]);
+  const [productionPartners, setProductionPartners] = useState<Record<string,any[]>>({});
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
   const [inventoryUnits, setInventoryUnits] = useState<any[]>([]);
   const [recipeProducts, setRecipeProducts] = useState<any[]>([]);
@@ -302,6 +303,7 @@ export default function ProductPage() {
     () => outlets.filter((o) => o.status !== "INACTIVE"),
     [outlets]
   );
+  useEffect(()=>{Promise.all(activeOutlets.map(outlet=>api<any[]>(`/production-partners?outletId=${encodeURIComponent(outlet.id)}`).then(rows=>[outlet.id,rows] as const).catch(()=>[outlet.id,[]] as const))).then(entries=>setProductionPartners(Object.fromEntries(entries)));},[outlets]);
   const selectedOutlet = activeOutlets.find((outlet) => outlet.id === outletId);
   const outletRow = (product: any) =>
     (product.outlets || []).find((row: any) => row.outletId === outletId);
@@ -507,6 +509,7 @@ export default function ProductPage() {
       const f = new FormData(e.currentTarget);
       const outletPricing = activeOutlets.map((o) => ({
         outletId: o.id,
+        productionPartnerId: String(f.get(`productionPartner_${o.id}`)||'')||null,
         isAvailable: f.get(`available_${o.id}`) === "on",
         isRecommended: f.get(`recommended_${o.id}`) === "on",
         outletPrice: f.get(`price_${o.id}`)
@@ -995,6 +998,7 @@ export default function ProductPage() {
                       <th className="p-3 text-left">Outlet</th>
                       <th>Available</th>
                       <th>Rekomendasi</th>
+                      <th>Mitra Produksi</th>
                       <th>Dine In Price</th>
                       <th>HPP</th>
                       <th>GoFood</th>
@@ -1029,6 +1033,7 @@ export default function ProductPage() {
                               defaultChecked={!!r?.isRecommended}
                             />
                           </td>
+                          <td className="min-w-48 p-2"><select className="input" name={`productionPartner_${o.id}`} defaultValue={r?.productionPartnerId||''}><option value="">Belum Ditentukan</option>{(productionPartners[o.id]||[]).filter(p=>p.status==='ACTIVE'||p.id===r?.productionPartnerId).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></td>
                           <td className="p-2">
                             <input
                               className="input"

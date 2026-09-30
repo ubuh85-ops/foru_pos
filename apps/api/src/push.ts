@@ -10,6 +10,7 @@ export type CustomerWebOrderPush = {
   customerName: string | null;
   orderType: string;
   isPreOrder: boolean;
+  orderMode?: string;
   scheduledAt: Date | null;
   grandTotal: unknown;
   outlet: { name: string; timezone: string };
@@ -36,7 +37,7 @@ function messaging() {
 }
 
 export function customerWebOrderPushContent(order: CustomerWebOrderPush) {
-  const route = order.isPreOrder ? '/orders/preorder-recap' : `/orders/${order.id}`;
+  const route = order.orderMode==='PREORDER'&&!order.scheduledAt ? `/orders/${order.id}` : order.isPreOrder ? '/orders/preorder-recap' : `/orders/${order.id}`;
   const kind = order.isPreOrder ? 'Pre-Order' : 'Order Web';
   const total = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(order.grandTotal));
   const schedule = order.isPreOrder && order.scheduledAt

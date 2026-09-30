@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { Copy, Edit, Plus } from 'lucide-react';
+import { Camera, Copy, Edit, FileUp, Image as ImageIcon, Plus } from 'lucide-react';
 import QRCode from 'qrcode';
-import { api } from '../api';
+import { API, api, handleUnauthorizedSession } from '../api';
 import { toast } from '../toast';
 
 type Outlet = {
@@ -31,6 +31,8 @@ type Outlet = {
   customerOrderBankName?: string | null;
   customerOrderBankAccountNumber?: string | null;
   customerOrderBankAccountHolder?: string | null;
+  webOrderMode?: string;
+  preorderDisplayDays?: number;
   preOrderEnabled?: boolean;
   preOrderMinLeadMinutes?: number;
   preOrderMaxDaysAhead?: number;
@@ -53,6 +55,8 @@ const Page = ({ children }: { children: any }) => <div className="p-4 lg:p-8">{c
 const Err = ({ value }: { value: string }) => value ? <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{value}</div> : null;
 const publicSlug = (value = '') => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 const CUSTOMER_ORDER_ORIGIN = 'https://foru.web.id';
+const API_ORIGIN = API.replace(/\/api\/?$/, '');
+const paymentImageSrc = (url?: string | null) => !url ? '' : url.startsWith('/storage/') ? `${API_ORIGIN}${url}` : url;
 
 function businessSlug() {
   try {
@@ -81,6 +85,68 @@ async function downloadQr(outlet: Outlet) {
   a.download = `customer-order-${publicSlug(outlet.code || outlet.name || 'outlet')}.png`;
   a.click();
   toast.success('QR berhasil dibuat.');
+}
+
+function QrisImageUpload({ outletId, initialUrl }: { outletId?: string; initialUrl?: string | null }) {
+  const [imageUrl, setImageUrl] = useState(initialUrl || '/images/qris-payment.png');
+  const [uploading, setUploading] = useState(false);
+
+  async function upload(file: File) {
+    if (!outletId) {
+      toast.error('Simpan outlet terlebih dahulu sebelum upload QRIS.');
+      return;
+    }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      toast.error('Format gambar harus JPG, PNG, atau WEBP.');
+      return;
+    }
+    if (file.size > 12 * 1024 * 1024) {
+      toast.error('Ukuran gambar maksimal 12MB.');
+      return;
+    }
+    setUploading(true);
+    try {
+      const body = new FormData();
+      body.append('image', file);
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API}/outlets/${outletId}/qris-image`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 401) handleUnauthorizedSession(result.message);
+        throw new Error(result.message || 'Upload QRIS gagal.');
+      }
+      setImageUrl(result.imageUrl || '');
+      toast.success('Gambar QRIS berhasil diupload. Klik Simpan Outlet untuk menerapkan.');
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return <div className="mb-3 rounded-2xl bg-slate-50 p-3">
+    <input type="hidden" name="customerOrderQrisImageUrl" value={imageUrl} />
+    <div className="grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)]">
+      <div className="grid aspect-square place-items-center overflow-hidden rounded-xl bg-white ring-1 ring-black/5">
+        {imageUrl ? <img src={paymentImageSrc(imageUrl)} alt="Preview QRIS" className="h-full w-full object-contain p-2" onError={() => setImageUrl('')} /> : <div className="text-center text-slate-400"><ImageIcon className="mx-auto mb-2" size={28} /><p className="text-xs font-bold">Belum ada QRIS</p></div>}
+      </div>
+      <div>
+        <p className="label mb-1">Gambar QRIS outlet</p>
+        <p className="mb-3 text-xs text-slate-400">Upload dari galeri atau kamera. Gambar dikompres otomatis dan khusus untuk outlet ini.</p>
+        <div className="flex flex-wrap gap-2">
+          <label className={`btn-soft cursor-pointer ${uploading || !outletId ? 'pointer-events-none opacity-60' : ''}`}><FileUp size={16} /> {uploading ? 'Mengupload...' : 'Upload QRIS'}<input className="hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={e => e.target.files?.[0] && upload(e.target.files[0])} /></label>
+          <label className={`btn-soft cursor-pointer ${uploading || !outletId ? 'pointer-events-none opacity-60' : ''}`}><Camera size={16} /> Kamera<input className="hidden" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={e => e.target.files?.[0] && upload(e.target.files[0])} /></label>
+          {imageUrl && <button type="button" className="btn-soft text-red-700" onClick={() => setImageUrl('')}>Hapus</button>}
+        </div>
+        {!outletId && <p className="mt-2 text-xs font-bold text-amber-700">Simpan outlet terlebih dahulu untuk mengaktifkan upload.</p>}
+        {imageUrl && <p className="mt-2 break-all text-xs text-slate-400">{imageUrl}</p>}
+      </div>
+    </div>
+  </div>;
 }
 
 export default function OutletPage() {
@@ -128,6 +194,8 @@ export default function OutletPage() {
         customerOrderBankName: String(f.get('customerOrderBankName') || '').trim() || null,
         customerOrderBankAccountNumber: String(f.get('customerOrderBankAccountNumber') || '').trim() || null,
         customerOrderBankAccountHolder: String(f.get('customerOrderBankAccountHolder') || '').trim() || null,
+        webOrderMode: f.get('webOrderMode'),
+        preorderDisplayDays: Number(f.get('preorderDisplayDays')||14),
         preOrderEnabled: f.get('preOrderEnabled') === 'on',
         preOrderMinLeadMinutes: Number(f.get('preOrderMinLeadMinutes') || 60),
         preOrderMaxDaysAhead: Number(f.get('preOrderMaxDaysAhead') || 14),
@@ -156,7 +224,7 @@ export default function OutletPage() {
   return <Page>
     <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
       <div><h2 className="text-3xl font-black">Master outlet</h2><p className="text-slate-500">Kelola lokasi operasional dan warehouse inventory outlet.</p></div>
-      <button onClick={() => setEdit({ blockSaleWhenIngredientOutOfStock: true, allowSaleWithoutRecipe: true, autoPrintReceipt: false, autoPrintKitchen: false, autoPrintCustomerItemList: false, customerOrderingEnabled: false, acceptingCustomerOrders: true, customerOrderAllowDineIn: true, customerOrderAllowTakeAway: true, customerOrderAllowDelivery:false, customerOrderRequestPhone: true, customerOrderSoundEnabled: false, preOrderEnabled:true, preOrderMinLeadMinutes:60, preOrderMaxDaysAhead:14, preOrderSlotMinutes:30, customerOrderOpenTime:'08:00', customerOrderCloseTime:'21:00', customerOrderOperatingDays:[0,1,2,3,4,5,6], timezone:'Asia/Jakarta', status: 'ACTIVE' })} className="btn-primary"><Plus size={18} /> Tambah</button>
+      <button onClick={() => setEdit({ blockSaleWhenIngredientOutOfStock: true, allowSaleWithoutRecipe: true, autoPrintReceipt: false, autoPrintKitchen: false, autoPrintCustomerItemList: false, customerOrderingEnabled: false, acceptingCustomerOrders: true, customerOrderAllowDineIn: true, customerOrderAllowTakeAway: true, customerOrderAllowDelivery:false, customerOrderRequestPhone: true, customerOrderSoundEnabled: false, customerOrderQrisEnabled: true, customerOrderQrisImageUrl: '/images/qris-payment.png', customerOrderBankTransferEnabled: false, preOrderEnabled:true, preOrderMinLeadMinutes:60, preOrderMaxDaysAhead:14, preOrderSlotMinutes:30, customerOrderOpenTime:'08:00', customerOrderCloseTime:'21:00', customerOrderOperatingDays:[0,1,2,3,4,5,6], timezone:'Asia/Jakarta', status: 'ACTIVE' })} className="btn-primary"><Plus size={18} /> Tambah</button>
     </div>
     <Err value={error} />
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -233,7 +301,7 @@ export default function OutletPage() {
           <div className="mt-4 rounded-xl border bg-white p-3">
             <p className="mb-3 text-sm font-black text-slate-800">Metode pembayaran pelanggan</p>
             <label className="mb-3 flex items-center gap-2 text-sm font-bold"><input name="customerOrderQrisEnabled" type="checkbox" defaultChecked={edit.customerOrderQrisEnabled !== false} /> Tampilkan QRIS di pesan WhatsApp</label>
-            <Field name="customerOrderQrisImageUrl" label="URL gambar QRIS" value={edit.customerOrderQrisImageUrl || '/images/qris-payment.png'} />
+            <QrisImageUpload key={`${edit.id || 'new'}:${edit.customerOrderQrisImageUrl || ''}`} outletId={edit.id} initialUrl={edit.customerOrderQrisImageUrl} />
             <div className="mt-4 border-t pt-4">
               <label className="mb-3 flex items-center gap-2 text-sm font-bold"><input name="customerOrderBankTransferEnabled" type="checkbox" defaultChecked={!!edit.customerOrderBankTransferEnabled} /> Aktifkan transfer bank</label>
               <Field name="customerOrderBankName" label="Nama bank" value={edit.customerOrderBankName} />
@@ -242,7 +310,7 @@ export default function OutletPage() {
               <p className="text-xs text-slate-400">Jika transfer diaktifkan, ketiga data rekening wajib diisi dan akan ditampilkan pada pesan WhatsApp pesanan.</p>
             </div>
           </div>
-          <div className="mt-4 border-t pt-4"><label className="mb-3 flex items-center gap-2 text-sm font-black"><input name="preOrderEnabled" type="checkbox" defaultChecked={edit.preOrderEnabled!==false}/> Enable Pre-Order</label><div className="grid grid-cols-3 gap-2"><Field name="preOrderMinLeadMinutes" label="Lead (menit)" value={edit.preOrderMinLeadMinutes??60}/><Field name="preOrderMaxDaysAhead" label="Maks. hari" value={edit.preOrderMaxDaysAhead??14}/><Field name="preOrderSlotMinutes" label="Slot (menit)" value={edit.preOrderSlotMinutes??30}/></div><div className="grid grid-cols-2 gap-2"><Field name="customerOrderOpenTime" label="Jam buka" value={edit.customerOrderOpenTime||'08:00'}/><Field name="customerOrderCloseTime" label="Jam tutup" value={edit.customerOrderCloseTime||'21:00'}/></div><Field name="timezone" label="Timezone" value={edit.timezone||'Asia/Jakarta'}/><p className="label">Hari operasional</p><div className="flex flex-wrap gap-2">{['Min','Sen','Sel','Rab','Kam','Jum','Sab'].map((label,day)=><label key={day} className="rounded-lg bg-white p-2 text-xs font-bold"><input className="mr-1" name={`operatingDay${day}`} type="checkbox" defaultChecked={(edit.customerOrderOperatingDays||[0,1,2,3,4,5,6]).includes(day)}/>{label}</label>)}</div></div>
+          <div className="mt-4 border-t pt-4"><label className="label">Mode Web Order</label><select className="input mb-3" name="webOrderMode" defaultValue={edit.webOrderMode||'NORMAL_ONLY'}><option value="NORMAL_ONLY">Normal saja</option><option value="PREORDER_ONLY">Daily Pre-Order saja</option><option value="NORMAL_AND_PREORDER">Normal + Daily Pre-Order</option></select><Field name="preorderDisplayDays" label="Tampilkan jadwal (hari)" value={edit.preorderDisplayDays??14}/><label className="mb-3 flex items-center gap-2 text-sm font-black"><input name="preOrderEnabled" type="checkbox" defaultChecked={edit.preOrderEnabled!==false}/> Enable Pre-Order</label><div className="grid grid-cols-3 gap-2"><Field name="preOrderMinLeadMinutes" label="Lead (menit)" value={edit.preOrderMinLeadMinutes??60}/><Field name="preOrderMaxDaysAhead" label="Maks. hari" value={edit.preOrderMaxDaysAhead??14}/><Field name="preOrderSlotMinutes" label="Slot (menit)" value={edit.preOrderSlotMinutes??30}/></div><div className="grid grid-cols-2 gap-2"><Field name="customerOrderOpenTime" label="Jam buka" value={edit.customerOrderOpenTime||'08:00'}/><Field name="customerOrderCloseTime" label="Jam tutup" value={edit.customerOrderCloseTime||'21:00'}/></div><Field name="timezone" label="Timezone" value={edit.timezone||'Asia/Jakarta'}/><p className="label">Hari operasional</p><div className="flex flex-wrap gap-2">{['Min','Sen','Sel','Rab','Kam','Jum','Sab'].map((label,day)=><label key={day} className="rounded-lg bg-white p-2 text-xs font-bold"><input className="mr-1" name={`operatingDay${day}`} type="checkbox" defaultChecked={(edit.customerOrderOperatingDays||[0,1,2,3,4,5,6]).includes(day)}/>{label}</label>)}</div></div>
           <div className="mt-3 rounded-xl bg-white p-3 text-xs text-slate-500">
             Order URL: <span className="font-bold text-slate-700">{edit.id ? customerOrderUrl(edit) : 'Simpan outlet dulu untuk link final.'}</span>
           </div>

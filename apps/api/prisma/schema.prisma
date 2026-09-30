@@ -48,6 +48,7 @@ model User {
 }
 
 model Business {
+  productionPartners   ProductionPartner[]
   checklistTemplates   ChecklistTemplateItem[]
   dailyChecklists      DailyChecklist[]
   webAnalyticsEvents   WebAnalyticsEvent[]
@@ -111,6 +112,10 @@ model BusinessMembership {
 }
 
 model Outlet {
+  webOrderMode                      WebOrderMode            @default(NORMAL_ONLY) @map("web_order_mode")
+  preorderDisplayDays               Int                     @default(14) @map("preorder_display_days")
+  dailyMenuSchedules                DailyMenuSchedule[]
+  productionPartners                ProductionPartner[]
   checklistReviewRequired           Boolean                 @default(true)
   checklistInitialized              Boolean                 @default(false)
   checklistTemplates                ChecklistTemplateItem[]
@@ -218,6 +223,7 @@ model PushDevice {
 }
 
 model Product {
+  dailyMenuSchedules  DailyMenuSchedule[]
   webAnalyticsEvents  WebAnalyticsEvent[]
   id                  String                @id @default(cuid())
   businessId          String                @map("business_id")
@@ -393,27 +399,30 @@ model ProductAddon {
 }
 
 model ProductOutlet {
-  id                String           @id @default(cuid())
-  productId         String           @map("product_id")
-  outletId          String           @map("outlet_id")
-  isActive          Boolean          @default(true) @map("is_active")
-  isAvailable       Boolean          @default(true) @map("is_available")
-  isRecommended     Boolean          @default(false) @map("is_recommended")
-  stockMode         ProductStockMode @default(UNLIMITED) @map("stock_mode")
-  stockQty          Int              @default(0) @map("stock_qty")
-  lowStockThreshold Int              @default(5) @map("low_stock_threshold")
-  stockUpdatedAt    DateTime?        @map("stock_updated_at")
-  stockUpdatedBy    String?          @map("stock_updated_by")
-  outletPrice       Decimal?         @map("outlet_price") @db.Decimal(14, 2)
-  outletHpp         Decimal?         @map("outlet_hpp") @db.Decimal(14, 2)
-  status            Status           @default(ACTIVE)
-  createdAt         DateTime         @default(now()) @map("created_at")
-  updatedAt         DateTime         @updatedAt @map("updated_at")
-  outlet            Outlet           @relation(fields: [outletId], references: [id], onDelete: Cascade)
-  product           Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id                  String             @id @default(cuid())
+  productId           String             @map("product_id")
+  outletId            String             @map("outlet_id")
+  isActive            Boolean            @default(true) @map("is_active")
+  isAvailable         Boolean            @default(true) @map("is_available")
+  isRecommended       Boolean            @default(false) @map("is_recommended")
+  stockMode           ProductStockMode   @default(UNLIMITED) @map("stock_mode")
+  stockQty            Int                @default(0) @map("stock_qty")
+  lowStockThreshold   Int                @default(5) @map("low_stock_threshold")
+  stockUpdatedAt      DateTime?          @map("stock_updated_at")
+  stockUpdatedBy      String?            @map("stock_updated_by")
+  outletPrice         Decimal?           @map("outlet_price") @db.Decimal(14, 2)
+  outletHpp           Decimal?           @map("outlet_hpp") @db.Decimal(14, 2)
+  productionPartnerId String?            @map("production_partner_id")
+  status              Status             @default(ACTIVE)
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+  outlet              Outlet             @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  product             Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productionPartner   ProductionPartner? @relation(fields: [productionPartnerId], references: [id], onDelete: SetNull)
 
   @@unique([productId, outletId])
   @@index([outletId, isRecommended])
+  @@index([productionPartnerId])
   @@map("product_outlets")
 }
 
@@ -549,6 +558,8 @@ model CashSession {
 }
 
 model Sale {
+  orderMode                 OrderMode           @default(NORMAL) @map("order_mode")
+  quotaReleasedAt           DateTime?           @map("quota_released_at")
   webAnalytics              Json?               @map("web_analytics")
   analyticsEvents           WebAnalyticsEvent[]
   id                        String              @id @default(cuid())
@@ -744,50 +755,127 @@ model IdempotencyKey {
 }
 
 model SaleItem {
-  id                    String              @id @default(cuid())
-  saleId                String              @map("sale_id")
-  outletId              String              @map("outlet_id")
-  productId             String?             @map("product_id")
-  productVariantId      String?             @map("product_variant_id")
-  productName           String              @map("product_name")
-  productCategoryId     String?             @map("product_category_id_snapshot")
-  productCategoryName   String?             @map("product_category_name_snapshot")
-  variantName           String              @map("variant_name")
-  itemNote              String?             @map("item_note") @db.VarChar(255)
+  serviceDate           DateTime?              @map("service_date") @db.Date
+  dailyMenuScheduleId   String?                @map("daily_menu_schedule_id")
+  dailyMenuSchedule     DailyMenuSchedule?     @relation(fields: [dailyMenuScheduleId], references: [id], onDelete: Restrict)
+  fulfillmentStatus     String                 @default("PENDING") @map("fulfillment_status")
+  productionPartnerId   String?                @map("production_partner_id")
+  productionPartnerName String?                @map("production_partner_name_snapshot")
+  productionPartnerType ProductionPartnerType? @map("production_partner_type_snapshot")
+  fulfilledAt           DateTime?              @map("fulfilled_at")
+  id                    String                 @id @default(cuid())
+  saleId                String                 @map("sale_id")
+  outletId              String                 @map("outlet_id")
+  productId             String?                @map("product_id")
+  productVariantId      String?                @map("product_variant_id")
+  productName           String                 @map("product_name")
+  productCategoryId     String?                @map("product_category_id_snapshot")
+  productCategoryName   String?                @map("product_category_name_snapshot")
+  variantName           String                 @map("variant_name")
+  itemNote              String?                @map("item_note") @db.VarChar(255)
   qty                   Int
-  sellingPrice          Decimal             @map("selling_price") @db.Decimal(14, 2)
-  hpp                   Decimal             @db.Decimal(14, 2)
-  subtotal              Decimal             @db.Decimal(14, 2)
-  totalHpp              Decimal             @map("total_hpp") @db.Decimal(14, 2)
-  grossProfit           Decimal             @map("gross_profit") @db.Decimal(14, 2)
-  priceBeforeDiscount   Decimal             @map("price_before_discount") @db.Decimal(14, 2)
+  sellingPrice          Decimal                @map("selling_price") @db.Decimal(14, 2)
+  hpp                   Decimal                @db.Decimal(14, 2)
+  subtotal              Decimal                @db.Decimal(14, 2)
+  totalHpp              Decimal                @map("total_hpp") @db.Decimal(14, 2)
+  grossProfit           Decimal                @map("gross_profit") @db.Decimal(14, 2)
+  priceBeforeDiscount   Decimal                @map("price_before_discount") @db.Decimal(14, 2)
   discountType          DiscountType?
-  discountValue         Decimal?            @map("discount_value") @db.Decimal(14, 2)
-  discountAmount        Decimal             @default(0) @map("discount_amount") @db.Decimal(14, 2)
-  subtotalAfterDiscount Decimal             @map("subtotal_after_discount") @db.Decimal(14, 2)
-  selectedVariantsJson  Json?               @map("selected_variants_json")
-  basePrice             Decimal             @default(0) @map("base_price") @db.Decimal(14, 2)
-  outletPrice           Decimal?            @map("outlet_price") @db.Decimal(14, 2)
-  channel               PaymentMethod?      @map("channel")
-  dineInPriceSnapshot   Decimal?            @map("dine_in_price_snapshot") @db.Decimal(14, 2)
-  channelPriceSnapshot  Decimal?            @map("channel_price_snapshot") @db.Decimal(14, 2)
-  priceSource           String?             @map("price_source")
-  baseMarginPercent     Decimal?            @map("base_margin_percent_snapshot") @db.Decimal(8, 2)
-  actualMarginPercent   Decimal?            @map("actual_margin_percent") @db.Decimal(8, 2)
-  variantPriceTotal     Decimal             @default(0) @map("variant_price_total") @db.Decimal(14, 2)
-  finalUnitPrice        Decimal             @default(0) @map("final_unit_price") @db.Decimal(14, 2)
-  baseHpp               Decimal             @default(0) @map("base_hpp") @db.Decimal(14, 2)
-  outletHpp             Decimal?            @map("outlet_hpp") @db.Decimal(14, 2)
-  variantHppTotal       Decimal             @default(0) @map("variant_hpp_total") @db.Decimal(14, 2)
-  finalUnitHpp          Decimal             @default(0) @map("final_unit_hpp") @db.Decimal(14, 2)
+  discountValue         Decimal?               @map("discount_value") @db.Decimal(14, 2)
+  discountAmount        Decimal                @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  subtotalAfterDiscount Decimal                @map("subtotal_after_discount") @db.Decimal(14, 2)
+  selectedVariantsJson  Json?                  @map("selected_variants_json")
+  basePrice             Decimal                @default(0) @map("base_price") @db.Decimal(14, 2)
+  outletPrice           Decimal?               @map("outlet_price") @db.Decimal(14, 2)
+  channel               PaymentMethod?         @map("channel")
+  dineInPriceSnapshot   Decimal?               @map("dine_in_price_snapshot") @db.Decimal(14, 2)
+  channelPriceSnapshot  Decimal?               @map("channel_price_snapshot") @db.Decimal(14, 2)
+  priceSource           String?                @map("price_source")
+  baseMarginPercent     Decimal?               @map("base_margin_percent_snapshot") @db.Decimal(8, 2)
+  actualMarginPercent   Decimal?               @map("actual_margin_percent") @db.Decimal(8, 2)
+  variantPriceTotal     Decimal                @default(0) @map("variant_price_total") @db.Decimal(14, 2)
+  finalUnitPrice        Decimal                @default(0) @map("final_unit_price") @db.Decimal(14, 2)
+  baseHpp               Decimal                @default(0) @map("base_hpp") @db.Decimal(14, 2)
+  outletHpp             Decimal?               @map("outlet_hpp") @db.Decimal(14, 2)
+  variantHppTotal       Decimal                @default(0) @map("variant_hpp_total") @db.Decimal(14, 2)
+  finalUnitHpp          Decimal                @default(0) @map("final_unit_hpp") @db.Decimal(14, 2)
   addons                SaleItemAddon[]
   inventoryMovements    InventoryMovement[]
-  outlet                Outlet              @relation(fields: [outletId], references: [id])
-  product               Product?            @relation(fields: [productId], references: [id], onDelete: SetNull)
-  variant               ProductVariant?     @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
-  sale                  Sale                @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  outlet                Outlet                 @relation(fields: [outletId], references: [id])
+  product               Product?               @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant               ProductVariant?        @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
+  sale                  Sale                   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productionPartner     ProductionPartner?     @relation(fields: [productionPartnerId], references: [id], onDelete: SetNull)
 
+  @@index([outletId, serviceDate])
+  @@index([productionPartnerId, serviceDate])
   @@map("sale_items")
+}
+
+enum WebOrderMode {
+  NORMAL_ONLY
+  PREORDER_ONLY
+  NORMAL_AND_PREORDER
+}
+
+enum ProductionPartnerType {
+  INTERNAL_KITCHEN
+  EXTERNAL_VENDOR
+}
+
+enum OrderMode {
+  NORMAL
+  PREORDER
+}
+
+model DailyMenuSchedule {
+  id                  String             @id @default(cuid())
+  outletId            String             @map("outlet_id")
+  scheduleDate        DateTime           @map("schedule_date") @db.Date
+  productId           String             @map("product_id")
+  productionPartnerId String?            @map("production_partner_id")
+  priceOverride       Decimal?           @map("price_override") @db.Decimal(14, 2)
+  quota               Int?
+  soldQty             Int                @default(0) @map("sold_qty")
+  isAvailable         Boolean            @default(true) @map("is_available")
+  sortOrder           Int                @default(0) @map("sort_order")
+  cutoffAt            DateTime?          @map("cutoff_at")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+  outlet              Outlet             @relation(fields: [outletId], references: [id])
+  product             Product            @relation(fields: [productId], references: [id])
+  productionPartner   ProductionPartner? @relation(fields: [productionPartnerId], references: [id], onDelete: SetNull)
+  items               SaleItem[]
+
+  @@unique([outletId, scheduleDate, productId])
+  @@index([outletId, scheduleDate, isAvailable])
+  @@index([productionPartnerId, scheduleDate])
+  @@map("daily_menu_schedules")
+}
+
+model ProductionPartner {
+  id          String                @id @default(cuid())
+  businessId  String                @map("business_id")
+  outletId    String                @map("outlet_id")
+  name        String
+  type        ProductionPartnerType @default(INTERNAL_KITCHEN)
+  contactName String?               @map("contact_name")
+  phone       String?
+  address     String?
+  notes       String?
+  sortOrder   Int                   @default(0) @map("sort_order")
+  status      Status                @default(ACTIVE)
+  createdAt   DateTime              @default(now()) @map("created_at")
+  updatedAt   DateTime              @updatedAt @map("updated_at")
+  business    Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  outlet      Outlet                @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  products    ProductOutlet[]
+  schedules   DailyMenuSchedule[]
+  saleItems   SaleItem[]
+
+  @@unique([outletId, name])
+  @@index([businessId, outletId, status])
+  @@map("production_partners")
 }
 
 model SaleItemAddon {
@@ -1145,9 +1233,9 @@ model CouponUsage {
   couponId  String   @map("coupon_id")
   saleId    String   @unique @map("sale_id")
   outletId  String   @map("outlet_id")
-  cashierId String   @map("cashier_id")
+  cashierId String?  @map("cashier_id")
   usedAt    DateTime @default(now()) @map("used_at")
-  cashier   User     @relation(fields: [cashierId], references: [id])
+  cashier   User?    @relation(fields: [cashierId], references: [id])
   coupon    Coupon   @relation(fields: [couponId], references: [id])
   outlet    Outlet   @relation(fields: [outletId], references: [id])
   sale      Sale     @relation(fields: [saleId], references: [id])

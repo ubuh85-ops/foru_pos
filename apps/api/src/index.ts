@@ -11,8 +11,9 @@ import * as XLSX from 'xlsx';
 import path from 'path';
 import { promises as fs } from 'fs';
 import sharp from 'sharp';
-import { allow, ApiError, assertOutlet, asyncRoute, auth, dayRange, defaultBusinessForUser, defaultInventoryPermissions, hasPermission, money, prisma, requirePermission, tenantAnd, tenantScope } from './lib.js';
+import { allow, ApiError, assertManagedOutlet, assertOutlet, asyncRoute, auth, dayRange, defaultBusinessForUser, defaultInventoryPermissions, hasPermission, money, prisma, requirePermission, tenantAnd, tenantScope } from './lib.js';
 import { discountAmount, legacyVariantPrice, priceCart, validateCoupon } from './discount.js';
+import { assertOrderMode, dailyTotals, publicDailyWhere, dateValue, serviceDateInput, registerDailyMenuAdmin, releaseDailyQuota } from './daily-menu.js';
 import { validatePublicSchedule } from './preorder.js';
 import { sendCustomerWebOrderPush } from './push.js';
 import { orderAttribution, recordOrderAnalytics, reconcileOrderAnalytics, registerAdminAnalytics, registerPublicAnalytics } from './web-analytics.js';
@@ -120,6 +121,11 @@ realtime.on('connection', socket => {
 
 app.use(cors(corsOptions));
 app.use('/storage/products', express.static(path.join(storageRoot, 'products'), {
+  fallthrough: false,
+  maxAge: '30d',
+  immutable: true
+}));
+app.use('/storage/qris', express.static(path.join(storageRoot, 'qris'), {
   fallthrough: false,
   maxAge: '30d',
   immutable: true
@@ -313,7 +319,7 @@ function publicProductShape(p:any,outletId:string,channel='DINE_IN',stock=produc
     }))
   };
 }
-const publicOrderItemInput=z.object({productId:z.string(),variantId:z.string().optional(),selectedVariantOptionIds:z.array(z.string()).default([]),qty:z.number().int().min(1).max(50),addonIds:z.array(z.string()).default([]),itemNote:z.string().trim().max(255).optional()});
+const publicOrderItemInput=z.object({serviceDate:serviceDateInput.optional(),dailyMenuScheduleId:z.string().optional(),productId:z.string(),variantId:z.string().optional(),selectedVariantOptionIds:z.array(z.string()).default([]),qty:z.number().int().min(1).max(50),addonIds:z.array(z.string()).default([]),itemNote:z.string().trim().max(255).optional()});
 const publicOrderInput=z.object({
   analytics:z.unknown().optional(),
   customerName:z.string().trim().min(2,'Nama customer wajib diisi').max(80),
@@ -322,6 +328,7 @@ const publicOrderInput=z.object({
   tableNumber:z.string().trim().max(30).optional().or(z.literal('')),
   orderNote:z.string().trim().max(500).optional().or(z.literal('')),
   couponCode:z.string().trim().max(50).optional(),
+  orderMode:z.enum(['NORMAL','PREORDER']).default('NORMAL'),
   isPreOrder:z.boolean().default(false),
   scheduledAt:z.string().datetime({offset:true}).nullable().optional(),
   customerOrderRequestId:z.string().trim().min(8).max(120),
@@ -342,12 +349,12 @@ function assertPublicOrderRateLimit(req:express.Request){
 api.get('/public/order/status/:token',asyncRoute(async(req,res)=>{
   const sale=await prisma.sale.findUnique({where:{publicOrderToken:String(req.params.token)},include:{outlet:true,business:true,items:{include:{addons:true}}}});
   if(!sale)throw new ApiError(404,'Status pesanan tidak ditemukan');
-  res.json({orderNumber:sale.orderNumber,status:sale.status,customerName:sale.customerName,customerPhone:sale.customerPhone,tableNumber:sale.tableNumber,orderType:sale.orderType,orderNote:sale.orderNote,isPreOrder:sale.isPreOrder,scheduledAt:sale.scheduledAt,rejectionReason:sale.rejectionReason,grandTotal:sale.grandTotal,submittedAt:sale.submittedAt,acceptedAt:sale.acceptedAt,paidAt:sale.paidAt,outlet:{name:sale.outlet.name,code:sale.outlet.code,timezone:sale.outlet.timezone},business:{name:sale.business.name,code:sale.business.code,logoUrl:sale.business.logoUrl},items:sale.items.map(i=>({id:i.id,productName:i.productName,variantName:i.variantName,qty:i.qty,itemNote:i.itemNote,subtotalAfterDiscount:i.subtotalAfterDiscount,addons:i.addons.map(a=>({addonName:a.addonName,price:a.price}))}))});
+  res.json({orderNumber:sale.orderNumber,status:sale.status,customerName:sale.customerName,customerPhone:sale.customerPhone,tableNumber:sale.tableNumber,orderType:sale.orderType,orderNote:sale.orderNote,orderMode:sale.orderMode,isPreOrder:sale.isPreOrder,scheduledAt:sale.scheduledAt,rejectionReason:sale.rejectionReason,grandTotal:sale.grandTotal,submittedAt:sale.submittedAt,acceptedAt:sale.acceptedAt,paidAt:sale.paidAt,outlet:{name:sale.outlet.name,code:sale.outlet.code,timezone:sale.outlet.timezone},business:{name:sale.business.name,code:sale.business.code,logoUrl:sale.business.logoUrl},items:sale.items.map(i=>({serviceDate:i.serviceDate,fulfillmentStatus:i.fulfillmentStatus,id:i.id,productName:i.productName,variantName:i.variantName,qty:i.qty,itemNote:i.itemNote,subtotalAfterDiscount:i.subtotalAfterDiscount,addons:i.addons.map(a=>({addonName:a.addonName,price:a.price}))}))});
 }));
 api.get('/public/order/:businessSlug/:outletSlug',asyncRoute(async(req,res)=>{
   const {business,outlet}=await resolvePublicOrderOutlet(String(req.params.businessSlug),String(req.params.outletSlug));
   const enabled=outlet.customerOrderingEnabled;
-  res.json({business:{name:business.name,code:business.code,logoUrl:business.logoUrl},outlet:{name:outlet.name,code:outlet.code,slug:outlet.customerOrderingSlug||publicSlug(outlet.code),enabled,acceptingCustomerOrders:outlet.acceptingCustomerOrders,allowDineIn:outlet.customerOrderAllowDineIn,allowTakeAway:outlet.customerOrderAllowTakeAway,allowDelivery:outlet.customerOrderAllowDelivery,requestPhone:true,preOrderEnabled:outlet.preOrderEnabled,preOrderMinLeadMinutes:outlet.preOrderMinLeadMinutes,preOrderMaxDaysAhead:outlet.preOrderMaxDaysAhead,preOrderSlotMinutes:outlet.preOrderSlotMinutes,openTime:outlet.customerOrderOpenTime,closeTime:outlet.customerOrderCloseTime,operatingDays:outlet.customerOrderOperatingDays,timezone:outlet.timezone}});
+  res.json({business:{name:business.name,code:business.code,logoUrl:business.logoUrl},outlet:{name:outlet.name,code:outlet.code,slug:outlet.customerOrderingSlug||publicSlug(outlet.code),enabled,acceptingCustomerOrders:outlet.acceptingCustomerOrders,allowDineIn:outlet.customerOrderAllowDineIn,allowTakeAway:outlet.customerOrderAllowTakeAway,allowDelivery:outlet.customerOrderAllowDelivery,requestPhone:true,preorderEnabled:outlet.preOrderEnabled,webOrderMode:outlet.webOrderMode,preorderDisplayDays:outlet.preorderDisplayDays,preOrderEnabled:outlet.preOrderEnabled,preOrderMinLeadMinutes:outlet.preOrderMinLeadMinutes,preOrderMaxDaysAhead:outlet.preOrderMaxDaysAhead,preOrderSlotMinutes:outlet.preOrderSlotMinutes,openTime:outlet.customerOrderOpenTime,closeTime:outlet.customerOrderCloseTime,operatingDays:outlet.customerOrderOperatingDays,timezone:outlet.timezone}});
 }));
 api.get('/public/order/:businessSlug/:outletSlug/products',asyncRoute(async(req,res)=>{
   const {business,outlet}=await resolvePublicOrderOutlet(String(req.params.businessSlug),String(req.params.outletSlug));
@@ -356,12 +363,39 @@ api.get('/public/order/:businessSlug/:outletSlug/products',asyncRoute(async(req,
   res.setHeader('Cache-Control','no-store');
   res.json(await Promise.all(products.map(async p=>publicProductShape(p,outlet.id,'DINE_IN',await effectiveProductStock(p.id,p.outlets[0],outlet),categoryOrder))));
 }));
+for(const endpoint of ['dates','menu'])api.get('/public/order/:businessSlug/:outletSlug/preorder/'+endpoint,asyncRoute(async(req,res)=>{
+  const {outlet}=await resolvePublicOrderOutlet(String(req.params.businessSlug),String(req.params.outletSlug));
+  if(!outlet.customerOrderingEnabled)throw new ApiError(403,'Pesanan online tidak aktif');
+  assertOrderMode(outlet,'PREORDER');
+  const date=endpoint==='menu'?dateValue(serviceDateInput.parse(req.query.date)):null;
+  const rows=await prisma.dailyMenuSchedule.findMany({
+    where:publicDailyWhere(outlet),
+    include:{product:{include:{
+      categoryRef:true,categoryAssignments:{include:{category:true}},outlets:{where:{outletId:outlet.id}},
+      variants:{where:{status:'ACTIVE'}},addons:{where:{status:'ACTIVE'}},
+      variantGroups:{orderBy:{sortOrder:'asc'},include:{group:{include:{options:{
+        where:{status:'ACTIVE'},orderBy:{sortOrder:'asc'},include:{outlets:{where:{outletId:outlet.id}}}
+      }}}}}
+    }}},orderBy:[{scheduleDate:'asc'},{sortOrder:'asc'}]
+  });
+  const available=rows.filter(row=>row.quota===null||row.soldQty<row.quota);
+  res.setHeader('Cache-Control','no-store');
+  if(endpoint==='dates')return res.json([...new Set(available.map(row=>row.scheduleDate.toISOString().slice(0,10)))]);
+  const categoryOrder=await outletCategoryOrderMap(outlet.id);
+  res.json(available.filter(row=>row.scheduleDate.getTime()===date!.getTime()).map(row=>{
+    const product=row.product,po=product.outlets[0]!;
+    const shaped=publicProductShape({...product,outlets:[{...po,outletPrice:row.priceOverride??po.outletPrice}]},outlet.id,'DINE_IN',undefined,categoryOrder);
+    return {...shaped,isAvailable:true,stockMode:'UNLIMITED',stockQty:null,stockStatus:'AVAILABLE',dailyMenuScheduleId:row.id,serviceDate:row.scheduleDate.toISOString().slice(0,10),quotaAvailable:row.quota===null?null:row.quota-row.soldQty,cutoffAt:row.cutoffAt};
+  }));
+}));
 api.post('/public/order/:businessSlug/:outletSlug/preview',asyncRoute(async(req,res)=>{
-  const d=z.object({items:z.array(publicOrderItemInput).min(1).max(30),couponCode:z.string().trim().max(50).optional()}).parse(req.body);
+  const d=z.object({orderMode:z.enum(['NORMAL','PREORDER']).default('NORMAL'),items:z.array(publicOrderItemInput).min(1).max(30),couponCode:z.string().trim().max(50).optional()}).parse(req.body);
   const {business,outlet}=await resolvePublicOrderOutlet(String(req.params.businessSlug),String(req.params.outletSlug));
   if(!outlet.customerOrderingEnabled||!outlet.acceptingCustomerOrders)throw new ApiError(403,'Pesanan online sedang ditutup');
-  await assertRecipeAvailabilityForItems(outlet,d.items);
-  const totals=await buildOrderTotals({user:{businessId:business.id,id:'CUSTOMER_WEB'}},{outletId:outlet.id,items:d.items,couponCode:d.couponCode} as any);
+  assertOrderMode(outlet,d.orderMode);
+  if(d.orderMode==='NORMAL'&&d.items.some(i=>i.serviceDate||i.dailyMenuScheduleId))throw new ApiError(400,'Keranjang berbeda mode tidak dapat digabung');
+  if(d.orderMode==='NORMAL')await assertRecipeAvailabilityForItems(outlet,d.items);
+  const totals=d.orderMode==='PREORDER'?await prisma.$transaction(tx=>dailyTotals(tx,outlet,d.items,d.couponCode)):await buildOrderTotals({user:{businessId:business.id,id:'CUSTOMER_WEB'}},{outletId:outlet.id,items:d.items,couponCode:d.couponCode} as any);
   res.json({subtotal:totals.gross,productDiscount:totals.productDiscount,transactionDiscount:totals.transactionDiscount,couponDiscount:totals.couponDiscount,total:totals.grand,coupon:totals.couponResult?{code:totals.couponResult.coupon.couponCode,name:totals.couponResult.coupon.couponName}:null});
 }));
 api.post('/public/order/:businessSlug/:outletSlug/orders',asyncRoute(async(req,res)=>{
@@ -372,21 +406,42 @@ api.post('/public/order/:businessSlug/:outletSlug/orders',asyncRoute(async(req,r
   if(d.orderType==='DINE_IN'&&!outlet.customerOrderAllowDineIn)throw new ApiError(400,'Dine In tidak tersedia untuk pesanan online');
   if(d.orderType==='TAKE_AWAY'&&!outlet.customerOrderAllowTakeAway)throw new ApiError(400,'Take Away tidak tersedia untuk pesanan online');
   if(d.orderType==='DELIVERY'&&!outlet.customerOrderAllowDelivery)throw new ApiError(400,'Delivery tidak tersedia untuk pesanan online');
-  const scheduledAt=validatePublicSchedule(d,outlet);
+  assertOrderMode(outlet,d.orderMode);
+  if(d.orderMode==='NORMAL'&&d.items.some(i=>i.serviceDate||i.dailyMenuScheduleId))throw new ApiError(400,'Keranjang berbeda mode tidak dapat digabung');
+  if(d.orderMode==='NORMAL'&&d.isPreOrder)throw new ApiError(400,'Pilih tanggal dan produk dari Daily Menu untuk Pre-Order');
+  const scheduledAt=d.orderMode==='PREORDER'?null:validatePublicSchedule(d,outlet);
   const existing=await prisma.sale.findUnique({where:{customerOrderRequestId:d.customerOrderRequestId},include:{items:{include:{addons:true}},outlet:true}});
   if(existing){
     if(existing.businessId!==business.id||existing.outletId!==outlet.id)throw new ApiError(409,'Request order sudah digunakan');
     return res.status(200).json({id:existing.id,orderNumber:existing.orderNumber,publicOrderToken:existing.publicOrderToken,status:existing.status,grandTotal:existing.grandTotal,outlet:{name:existing.outlet.name,code:existing.outlet.code}});
   }
   const fakeReq={user:{businessId:business.id,id:'CUSTOMER_WEB'}};
-  await assertRecipeAvailabilityForItems(outlet,d.items);
-  const totals=await buildOrderTotals(fakeReq,{outletId:outlet.id,customerName:d.customerName,orderType:d.orderType,items:d.items,couponCode:d.couponCode} as any);
+  if(d.orderMode==='NORMAL')await assertRecipeAvailabilityForItems(outlet,d.items);
+  const normalTotals=d.orderMode==='NORMAL'?await buildOrderTotals(fakeReq,{outletId:outlet.id,customerName:d.customerName,orderType:d.orderType,items:d.items,couponCode:d.couponCode} as any):null;
   const orderNumber=await nextNumber('ORD',outlet.id,'orderNumber');
   const publicOrderToken=crypto.randomBytes(24).toString('hex');
   const created=await prisma.$transaction(async tx=>{
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${business.id}), hashtext(${d.customerOrderRequestId}))`;
+    const replay=await tx.sale.findUnique({where:{customerOrderRequestId:d.customerOrderRequestId},include:{items:{include:{addons:true}},outlet:true}});
+    if(replay){if(replay.businessId!==business.id||replay.outletId!==outlet.id)throw new ApiError(409,'Request order sudah digunakan');return replay;}
+    const currentOutlet=await tx.outlet.findUniqueOrThrow({where:{id:outlet.id}});
+    assertOrderMode(currentOutlet,d.orderMode);
+    if(!currentOutlet.customerOrderingEnabled||!currentOutlet.acceptingCustomerOrders)throw new ApiError(409,'Pesanan online sedang ditutup');
+    const totals=d.orderMode==='PREORDER'?await dailyTotals(tx,currentOutlet,d.items,d.couponCode,true):normalTotals!;
     const submittedAt=new Date();
     const customer=await upsertWebOrderCustomer(tx,{businessId:business.id,customerName:d.customerName,customerPhone:d.customerPhone,orderedAt:submittedAt});
-    return tx.sale.create({data:{businessId:business.id,orderNumber,outletId:outlet.id,customerId:customer.id,customerName:d.customerName,customerPhone:normalizeCustomerPhone(d.customerPhone),tableNumber:d.orderType==='DINE_IN'?d.tableNumber?.trim()||null:null,orderNote:d.orderNote?.trim()||null,orderType:d.orderType,orderSource:'CUSTOMER_WEB',webAnalytics:orderAttribution(d.analytics),customerOrderRequestId:d.customerOrderRequestId,publicOrderToken,isPreOrder:d.isPreOrder,scheduledAt,submittedAt,subtotal:totals.gross,discountAmount:money(totals.productDiscount+totals.transactionDiscount+totals.couponDiscount),totalAmount:totals.grand,subtotalBeforeDiscount:totals.gross,productDiscountTotal:totals.productDiscount,transactionDiscountAmount:totals.transactionDiscount,couponCode:totals.couponResult?.coupon.couponCode,couponDiscountAmount:totals.couponDiscount,grandTotal:totals.grand,totalHpp:totals.totalHpp,grossProfit:0,status:'OPEN_ORDER',items:{create:totals.lines.map(saleItemCreate)}},include:{items:{include:{addons:true}},outlet:true}});
+    const sale=await tx.sale.create({data:{businessId:business.id,orderNumber,outletId:outlet.id,customerId:customer.id,customerName:d.customerName,customerPhone:normalizeCustomerPhone(d.customerPhone),tableNumber:d.orderType==='DINE_IN'?d.tableNumber?.trim()||null:null,orderNote:d.orderNote?.trim()||null,orderType:d.orderType,orderSource:'CUSTOMER_WEB',webAnalytics:orderAttribution(d.analytics),customerOrderRequestId:d.customerOrderRequestId,publicOrderToken,orderMode:d.orderMode,isPreOrder:d.orderMode==='PREORDER'||d.isPreOrder,scheduledAt,submittedAt,subtotal:totals.gross,discountAmount:money(totals.productDiscount+totals.transactionDiscount+totals.couponDiscount),totalAmount:totals.grand,subtotalBeforeDiscount:totals.gross,productDiscountTotal:totals.productDiscount,transactionDiscountAmount:totals.transactionDiscount,couponCode:totals.couponResult?.coupon.couponCode,couponDiscountAmount:totals.couponDiscount,grandTotal:totals.grand,totalHpp:totals.totalHpp,grossProfit:0,status:'OPEN_ORDER',items:{create:totals.lines.map(saleItemCreate)}},include:{items:{include:{addons:true}},outlet:true}});
+    if(d.orderMode==='PREORDER'&&totals.couponResult){
+      const coupon=totals.couponResult.coupon;
+      if(coupon.usagePerCustomer!==null){
+        const used=await tx.couponUsage.count({where:{couponId:coupon.id,sale:{customerId:customer.id}}});
+        if(used>=coupon.usagePerCustomer)throw new ApiError(409,'Batas penggunaan kupon per customer tercapai');
+      }
+      const count=await tx.$executeRaw`UPDATE coupons SET used_count=used_count+1 WHERE id=${coupon.id} AND status='ACTIVE' AND start_date<=CURRENT_TIMESTAMP AND end_date>=CURRENT_TIMESTAMP AND (usage_limit IS NULL OR used_count<usage_limit)`;
+      if(count!==1)throw new ApiError(409,'Kuota kupon habis');
+      await tx.couponUsage.create({data:{couponId:coupon.id,saleId:sale.id,outletId:outlet.id}});
+    }
+    return sale;
   });
   void recordOrderAnalytics(created).catch(() => console.error('Web order analytics queued for retry'));
   res.status(201).json({id:created.id,orderNumber:created.orderNumber,publicOrderToken:created.publicOrderToken,status:created.status,grandTotal:created.grandTotal,outlet:{name:created.outlet.name,code:created.outlet.code}});
@@ -405,6 +460,7 @@ api.post('/public/order/:businessSlug/:outletSlug/orders',asyncRoute(async(req,r
 
 registerPublicAnalytics(api, resolvePublicOrderOutlet);
 api.use(auth);
+registerDailyMenuAdmin(api,assertTenantOutlet);
 registerAdminAnalytics(api);
 let analyticsReconciling = false;
 const analyticsTimer = setInterval(() => {
@@ -665,6 +721,8 @@ const outletCustomerOrderingSchema={
   customerOrderBankName:z.string().trim().max(100).nullable().optional(),
   customerOrderBankAccountNumber:z.string().trim().max(50).nullable().optional(),
   customerOrderBankAccountHolder:z.string().trim().max(100).nullable().optional(),
+  webOrderMode:z.enum(['NORMAL_ONLY','PREORDER_ONLY','NORMAL_AND_PREORDER']).optional(),
+  preorderDisplayDays:z.coerce.number().int().min(1).max(365).optional(),
   preOrderEnabled:z.coerce.boolean().optional(),
   preOrderMinLeadMinutes:z.coerce.number().int().min(0).max(1440).optional(),
   preOrderMaxDaysAhead:z.coerce.number().int().min(0).max(365).optional(),
@@ -688,7 +746,25 @@ api.post('/outlets',allow('OWNER'),asyncRoute(async(req,res)=>{
   if(d.inventoryWarehouseId)await assertWarehouseAccess(req,d.inventoryWarehouseId);
   res.status(201).json(await prisma.outlet.create({data:{...d,businessId:req.user!.businessId},include:outletInclude}));
 }));
-api.put('/outlets/:id',allow('OWNER'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertTenantOutlet(req,id);const d=z.object({code:z.string().min(2).optional(),name:z.string().min(2).optional(),address:z.string().nullable().optional(),phone:z.string().nullable().optional(),inventoryWarehouseId:z.string().nullable().optional(),blockSaleWhenIngredientOutOfStock:z.coerce.boolean().optional(),allowSaleWithoutRecipe:z.coerce.boolean().optional(),...outletCustomerOrderingSchema,...outletPrintSettingsSchema,status:z.enum(['ACTIVE','INACTIVE']).optional()}).parse(req.body);validateOutletPaymentSettings(d);if(d.inventoryWarehouseId)await assertWarehouseAccess(req,d.inventoryWarehouseId);res.json(await prisma.outlet.update({where:{id},data:d,include:outletInclude}));}));
+api.put('/outlets/:id',allow('OWNER'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertManagedOutlet(req,id);const d=z.object({code:z.string().min(2).optional(),name:z.string().min(2).optional(),address:z.string().nullable().optional(),phone:z.string().nullable().optional(),inventoryWarehouseId:z.string().nullable().optional(),blockSaleWhenIngredientOutOfStock:z.coerce.boolean().optional(),allowSaleWithoutRecipe:z.coerce.boolean().optional(),...outletCustomerOrderingSchema,...outletPrintSettingsSchema,status:z.enum(['ACTIVE','INACTIVE']).optional()}).parse(req.body);validateOutletPaymentSettings(d);if(d.inventoryWarehouseId)await assertWarehouseAccess(req,d.inventoryWarehouseId);res.json(await prisma.outlet.update({where:{id},data:d,include:outletInclude}));}));
+api.post('/outlets/:id/qris-image',allow('OWNER'),asyncRoute(async(req,res)=>{
+  const outletId=String(req.params.id);
+  const outlet=await assertManagedOutlet(req,outletId);
+  const businessId=req.user?.businessId;
+  if(!businessId||outlet.businessId!==businessId)throw new ApiError(403,'Outlet tidak diizinkan');
+  const boundary=multipartBoundary(req);
+  if(!boundary)throw new ApiError(400,'Gunakan multipart/form-data.');
+  const raw=await readRawRequest(req,maxProductImageUploadBytes);
+  const file=parseMultipartImage(raw,boundary);
+  if(!file||!file.buffer.length)throw new ApiError(400,'File gambar QRIS wajib diupload.');
+  if(!file.mime.toLowerCase().startsWith('image/'))throw new ApiError(400,'File harus berupa gambar.');
+  const image=await compressProductImage(file.buffer);
+  const dir=path.join(storageRoot,'qris',businessId,outletId);
+  await fs.mkdir(dir,{recursive:true});
+  const filename=`qris_${crypto.randomUUID()}.webp`;
+  await fs.writeFile(path.join(dir,filename),image.buffer);
+  res.status(201).json({imageUrl:`/storage/qris/${businessId}/${outletId}/${filename}`,size:image.size,width:image.width,height:image.height});
+}));
 api.patch('/outlets/:id/customer-orders',allow('OWNER','SUPERVISOR','CASHIER'),asyncRoute(async(req,res)=>{const id=String(req.params.id);await assertTenantOutlet(req,id);const d=z.object({acceptingCustomerOrders:z.boolean()}).parse(req.body);const outlet=await prisma.outlet.findFirst({where:{id,businessId:req.user!.businessId,status:'ACTIVE'}});if(!outlet)throw new ApiError(403,'Outlet tidak diizinkan');if(!outlet.customerOrderingEnabled)throw new ApiError(400,'Web Order belum diaktifkan untuk outlet ini');res.json(await prisma.$transaction(async tx=>{const updated=await tx.outlet.update({where:{id},data:d,include:outletInclude});await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'OUTLET',entityId:id,action:d.acceptingCustomerOrders?'WEB_ORDER_OPENED':'WEB_ORDER_CLOSED',oldValue:{acceptingCustomerOrders:outlet.acceptingCustomerOrders},newValue:d,changedBy:req.user!.id}});return updated;}));}));
 api.put('/outlets/:id/inventory-warehouse',allow('OWNER'),asyncRoute(async(req,res)=>{
   const id=String(req.params.id);
@@ -772,7 +848,7 @@ api.put('/settings/online-fees',allow('OWNER'),asyncRoute(async(req,res)=>{const
 const orderChannels=['DINE_IN','TAKE_AWAY',...onlineChannels] as const;
 const onlineChannelSchema=z.enum(onlineChannels);
 const orderChannelSchema=z.enum(orderChannels);
-const outletPricingInput=z.object({outletId:z.string(),isAvailable:z.coerce.boolean().default(true),isRecommended:z.coerce.boolean().default(false),outletPrice:z.coerce.number().nonnegative().nullable().optional(),outletHpp:z.coerce.number().nonnegative().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
+const outletPricingInput=z.object({outletId:z.string(),productionPartnerId:z.string().nullable().optional(),isAvailable:z.coerce.boolean().default(true),isRecommended:z.coerce.boolean().default(false),outletPrice:z.coerce.number().nonnegative().nullable().optional(),outletHpp:z.coerce.number().nonnegative().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
 const channelPricingInput=z.object({outletId:z.string(),channel:onlineChannelSchema,price:z.coerce.number().nonnegative().nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
 const productImageUrlSchema=z.string().trim().optional().nullable().refine(value=>!value||value===''||/^https?:\/\//i.test(value)||value.startsWith('/storage/products/'),{message:'Image URL tidak valid'});
 const productInput=z.object({sku:z.string().trim().optional().nullable(),name:z.string().min(2),categoryId:z.string().optional(),categoryIds:z.array(z.string()).min(1).optional(),category:z.string().optional(),description:z.string().optional(),imageUrl:productImageUrlSchema,basePrice:z.coerce.number().nonnegative().optional(),baseHpp:z.coerce.number().nonnegative().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE'),variantGroupIds:z.array(z.string()).default([]),outletIds:z.array(z.string()).default([]),outletPricing:z.array(outletPricingInput).optional(),channelPricing:z.array(channelPricingInput).optional(),variants:z.array(z.object({variantName:z.string(),sellingPrice:z.coerce.number().nonnegative(),hpp:z.coerce.number().nonnegative()})).optional()});
@@ -830,7 +906,7 @@ async function compressProductImage(input:Buffer){
   throw new ApiError(400,'Gambar terlalu besar dan tidak dapat dikompresi. Silakan pilih gambar lain.');
 }
 const recipeInclude={item:{include:{unit:true,category:true}},usageUnit:true,componentProduct:{select:{id:true,sku:true,name:true,status:true}}};
-const productInclude={categoryRef:true,categoryAssignments:{include:{category:true},orderBy:{sortOrder:'asc' as const}},variants:true,addons:true,recipes:{include:recipeInclude,orderBy:{createdAt:'asc' as const}},outlets:{include:{outlet:true},orderBy:{outlet:{name:'asc' as const}}},channelPrices:{include:{outlet:true},orderBy:[{outlet:{name:'asc' as const}},{channel:'asc' as const}]},variantGroups:{orderBy:{sortOrder:'asc' as const},include:{group:{include:{options:{orderBy:{sortOrder:'asc' as const},include:{outlets:{include:{outlet:true}}}}}}}}};
+const productInclude={categoryRef:true,categoryAssignments:{include:{category:true},orderBy:{sortOrder:'asc' as const}},variants:true,addons:true,recipes:{include:recipeInclude,orderBy:{createdAt:'asc' as const}},outlets:{include:{outlet:true,productionPartner:true},orderBy:{outlet:{name:'asc' as const}}},channelPrices:{include:{outlet:true},orderBy:[{outlet:{name:'asc' as const}},{channel:'asc' as const}]},variantGroups:{orderBy:{sortOrder:'asc' as const},include:{group:{include:{options:{orderBy:{sortOrder:'asc' as const},include:{outlets:{include:{outlet:true}}}}}}}}};
 const recipeRowInput=z.object({
   sourceType:z.enum(['INVENTORY','PRODUCT']).default('INVENTORY'),
   inventoryItemId:z.string().optional(),
@@ -1184,15 +1260,15 @@ api.post('/products',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const categorySelection=await productCategorySelection(req,d.categoryIds,d.categoryId,d.category);
   const basePrice=d.basePrice??d.variants?.[0]?.sellingPrice??0,baseHpp=d.baseHpp??d.variants?.[0]?.hpp??0;
   for(const variantGroupId of d.variantGroupIds)await assertTenantVariantGroup(req,variantGroupId);
-  let outletRows=(d.outletPricing??d.outletIds.map(outletId=>({outletId,isAvailable:true,isRecommended:false,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}))).map(x=>({...x,isRecommended:x.isRecommended??false,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null}));
-  for(const row of outletRows)await assertTenantOutlet(req,row.outletId);
+  let outletRows=(d.outletPricing??d.outletIds.map(outletId=>({outletId,productionPartnerId:null,isAvailable:true,isRecommended:false,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}))).map(x=>({...x,productionPartnerId:x.productionPartnerId??null,isRecommended:x.isRecommended??false,outletPrice:x.outletPrice??null,outletHpp:x.outletHpp??null}));
+  for(const row of outletRows){await assertTenantOutlet(req,row.outletId);if(row.productionPartnerId&&!await prisma.productionPartner.findFirst({where:{id:row.productionPartnerId,outletId:row.outletId,businessId:req.user!.businessId,status:'ACTIVE'}}))throw new ApiError(400,'Mitra Produksi tidak valid untuk outlet produk');}
   if(!outletRows.length){
     const outlets=await prisma.outlet.findMany({where:tenantWhereAnd(req,{status:'ACTIVE'}),select:{id:true}});
-    outletRows=outlets.map(o=>({outletId:o.id,isAvailable:true,isRecommended:false,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}));
+    outletRows=outlets.map(o=>({outletId:o.id,productionPartnerId:null,isAvailable:true,isRecommended:false,status:'ACTIVE' as const,outletPrice:null,outletHpp:null}));
   }
   const channelRows=(d.channelPricing||[]).filter(x=>x.price!=null&&x.status==='ACTIVE');
   for(const row of channelRows)await assertTenantOutlet(req,row.outletId);
-  res.status(201).json(await prisma.product.create({data:{businessId:req.user!.businessId,sku:d.sku?.trim()||null,name:d.name,category:categorySelection.category,categoryId:categorySelection.categoryId,categoryAssignments:{create:categorySelection.categoryIds.map((categoryId,sortOrder)=>({categoryId,sortOrder}))},description:d.description,imageUrl:d.imageUrl||null,basePrice,baseHpp,status:d.status,variants:{create:d.variants?.length?d.variants:[{variantName:'Base',sellingPrice:basePrice,hpp:baseHpp}]},variantGroups:{create:d.variantGroupIds.map((variantGroupId,i)=>({variantGroupId,sortOrder:i}))},outlets:{create:outletRows.map(x=>({outletId:x.outletId,isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))},channelPrices:{create:channelRows.map(x=>({outletId:x.outletId,channel:x.channel,price:x.price!,status:x.status}))}},include:productInclude}));
+  res.status(201).json(await prisma.product.create({data:{businessId:req.user!.businessId,sku:d.sku?.trim()||null,name:d.name,category:categorySelection.category,categoryId:categorySelection.categoryId,categoryAssignments:{create:categorySelection.categoryIds.map((categoryId,sortOrder)=>({categoryId,sortOrder}))},description:d.description,imageUrl:d.imageUrl||null,basePrice,baseHpp,status:d.status,variants:{create:d.variants?.length?d.variants:[{variantName:'Base',sellingPrice:basePrice,hpp:baseHpp}]},variantGroups:{create:d.variantGroupIds.map((variantGroupId,i)=>({variantGroupId,sortOrder:i}))},outlets:{create:outletRows.map(x=>({outletId:x.outletId,productionPartnerId:x.productionPartnerId||null,isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice:x.outletPrice,outletHpp:x.outletHpp}))},channelPrices:{create:channelRows.map(x=>({outletId:x.outletId,channel:x.channel,price:x.price!,status:x.status}))}},include:productInclude}));
 }));
 api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const d=productInput.partial().parse(req.body);
@@ -1200,7 +1276,7 @@ api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
   const categorySelection=d.categoryIds||d.categoryId||d.category?await productCategorySelection(req,d.categoryIds,d.categoryId,d.category):undefined;
   if(d.variantGroupIds)for(const variantGroupId of d.variantGroupIds)await assertTenantVariantGroup(req,variantGroupId);
   if(d.outletIds)for(const outletId of d.outletIds)await assertTenantOutlet(req,outletId);
-  if(d.outletPricing)for(const row of d.outletPricing)await assertTenantOutlet(req,row.outletId);
+  if(d.outletPricing)for(const row of d.outletPricing){await assertTenantOutlet(req,row.outletId);if(row.productionPartnerId&&!await prisma.productionPartner.findFirst({where:{id:row.productionPartnerId,outletId:row.outletId,businessId:req.user!.businessId,status:'ACTIVE'}}))throw new ApiError(400,'Mitra Produksi tidak valid untuk outlet produk');}
   if(d.channelPricing)for(const row of d.channelPricing)await assertTenantOutlet(req,row.outletId);
   res.json(await prisma.$transaction(async tx=>{
     const current=await tx.product.findFirst({where:tenantWhereAnd(req,{id}),include:{outlets:true}});
@@ -1214,7 +1290,7 @@ api.put('/products/:id',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{
         const rawPrice=x.outletPrice??null,rawHpp=x.outletHpp??null;
         const outletPrice=rawPrice!==null&&d.basePrice!==undefined&&Number(rawPrice)===oldBasePrice?d.basePrice:rawPrice;
         const outletHpp=rawHpp!==null&&d.baseHpp!==undefined&&Number(rawHpp)===oldBaseHpp?d.baseHpp:rawHpp;
-        await tx.productOutlet.upsert({where:{productId_outletId:{productId:id,outletId:x.outletId}},update:{isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice,outletHpp},create:{productId:id,outletId:x.outletId,isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice,outletHpp}});
+        await tx.productOutlet.upsert({where:{productId_outletId:{productId:id,outletId:x.outletId}},update:{productionPartnerId:x.productionPartnerId||null,isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice,outletHpp},create:{productId:id,outletId:x.outletId,productionPartnerId:x.productionPartnerId||null,isAvailable:x.isAvailable,isRecommended:x.isRecommended,isActive:x.isAvailable,status:x.status,outletPrice,outletHpp}});
       }
     }else if(d.outletIds){await tx.productOutlet.deleteMany({where:{productId:id}});await tx.productOutlet.createMany({data:d.outletIds.map(outletId=>({productId:id,outletId,isAvailable:true,isActive:true,status:'ACTIVE'})),skipDuplicates:true});}
     if(d.channelPricing){
@@ -1538,9 +1614,9 @@ api.get('/inventory/categories',invView,asyncRoute(async(req,res)=>res.json(awai
 api.post('/inventory/categories',invItemManagement,asyncRoute(async(req,res)=>{const d=inventoryLookupBody.parse(req.body);if(await prisma.inventoryCategory.findFirst({where:tenantWhereAnd(req,{name:d.name})}))throw new ApiError(409,'Kategori inventory sudah ada.');res.status(201).json(await prisma.inventoryCategory.create({data:{...d,businessId:req.user!.businessId}}));}));
 api.get('/inventory/units',invView,asyncRoute(async(req,res)=>res.json(await prisma.inventoryUnit.findMany({where:tenantWhere(req),orderBy:[{sortOrder:'asc'},{name:'asc'}]}))));
 api.post('/inventory/units',invItemManagement,asyncRoute(async(req,res)=>{const d=inventoryLookupBody.parse(req.body);if(await prisma.inventoryUnit.findFirst({where:tenantWhereAnd(req,{name:d.name})}))throw new ApiError(409,'Satuan inventory sudah ada.');res.status(201).json(await prisma.inventoryUnit.create({data:{...d,businessId:req.user!.businessId}}));}));
-api.get('/inventory/items',invView,asyncRoute(async(req,res)=>{const where:any={};let warehouseId:string|undefined;if(req.query.q){const q=String(req.query.q);where.OR=[{name:{contains:q,mode:'insensitive'}},{code:{contains:q,mode:'insensitive'}},{sku:{contains:q,mode:'insensitive'}},{barcode:{contains:q,mode:'insensitive'}}];}if(req.query.category_id)where.categoryId=String(req.query.category_id);if(req.query.status)where.status=String(req.query.status);if(req.query.warehouseId){warehouseId=String(req.query.warehouseId);await assertWarehouseAccess(req,warehouseId);}res.json(await prisma.inventoryItem.findMany({where:tenantWhereAnd(req,where,warehouseId?{stocks:{some:{warehouseId}}}:{}),include:inventoryItemIncludeFor(req,warehouseId),orderBy:{name:'asc'}}));}));
-api.get('/inventory/search',invView,asyncRoute(async(req,res)=>{const q=String(req.query.q||req.query.sku||req.query.barcode||'').trim();if(!q)throw new ApiError(400,'Query wajib diisi.');const warehouseId=req.query.warehouseId?String(req.query.warehouseId):undefined;if(warehouseId)await assertWarehouseAccess(req,warehouseId);res.json(await prisma.inventoryItem.findMany({where:tenantWhereAnd(req,{OR:[{sku:{equals:q,mode:'insensitive'}},{barcode:{equals:q,mode:'insensitive'}},{code:{equals:q,mode:'insensitive'}},{sku:{contains:q,mode:'insensitive'}},{barcode:{contains:q,mode:'insensitive'}},{code:{contains:q,mode:'insensitive'}},{name:{contains:q,mode:'insensitive'}}]},warehouseId?{stocks:{some:{warehouseId}}}:{}),include:inventoryItemIncludeFor(req,warehouseId),orderBy:[{sku:'asc'},{name:'asc'}],take:20}));}));
-api.get('/inventory/items/by-sku/:sku',invView,asyncRoute(async(req,res)=>{const sku=String(req.params.sku).trim();const warehouseId=req.query.warehouseId?String(req.query.warehouseId):undefined;if(warehouseId)await assertWarehouseAccess(req,warehouseId);const item=await prisma.inventoryItem.findFirst({where:tenantWhereAnd(req,{OR:[{sku:{equals:sku,mode:'insensitive'}},{barcode:{equals:sku,mode:'insensitive'}}]},warehouseId?{stocks:{some:{warehouseId}}}:{}),include:inventoryItemIncludeFor(req,warehouseId)});if(!item)throw new ApiError(404,'Barang belum terdaftar.');res.json(item);}));
+api.get('/inventory/items',invView,asyncRoute(async(req,res)=>{const where:any={};let warehouseId:string|undefined;if(req.query.q){const q=String(req.query.q);where.OR=[{name:{contains:q,mode:'insensitive'}},{code:{contains:q,mode:'insensitive'}},{sku:{contains:q,mode:'insensitive'}},{barcode:{contains:q,mode:'insensitive'}}];}if(req.query.category_id)where.categoryId=String(req.query.category_id);const requestedStatus=String(req.query.status||'ACTIVE').toUpperCase();if(requestedStatus!=='ALL'){if(!['ACTIVE','INACTIVE'].includes(requestedStatus))throw new ApiError(400,'Status bahan baku tidak valid');where.status=requestedStatus;}if(req.query.warehouseId){warehouseId=String(req.query.warehouseId);await assertWarehouseAccess(req,warehouseId);}res.json(await prisma.inventoryItem.findMany({where:tenantWhereAnd(req,where,warehouseId?{stocks:{some:{warehouseId}}}:{}),include:inventoryItemIncludeFor(req,warehouseId),orderBy:{name:'asc'}}));}));
+api.get('/inventory/search',invView,asyncRoute(async(req,res)=>{const q=String(req.query.q||req.query.sku||req.query.barcode||'').trim();if(!q)throw new ApiError(400,'Query wajib diisi.');const warehouseId=req.query.warehouseId?String(req.query.warehouseId):undefined;if(warehouseId)await assertWarehouseAccess(req,warehouseId);res.json(await prisma.inventoryItem.findMany({where:tenantWhereAnd(req,{status:'ACTIVE',OR:[{sku:{equals:q,mode:'insensitive'}},{barcode:{equals:q,mode:'insensitive'}},{code:{equals:q,mode:'insensitive'}},{sku:{contains:q,mode:'insensitive'}},{barcode:{contains:q,mode:'insensitive'}},{code:{contains:q,mode:'insensitive'}},{name:{contains:q,mode:'insensitive'}}]},warehouseId?{stocks:{some:{warehouseId}}}:{}),include:inventoryItemIncludeFor(req,warehouseId),orderBy:[{sku:'asc'},{name:'asc'}],take:20}));}));
+api.get('/inventory/items/by-sku/:sku',invView,asyncRoute(async(req,res)=>{const sku=String(req.params.sku).trim();const warehouseId=req.query.warehouseId?String(req.query.warehouseId):undefined;if(warehouseId)await assertWarehouseAccess(req,warehouseId);const item=await prisma.inventoryItem.findFirst({where:tenantWhereAnd(req,{status:'ACTIVE',OR:[{sku:{equals:sku,mode:'insensitive'}},{barcode:{equals:sku,mode:'insensitive'}}]},warehouseId?{stocks:{some:{warehouseId}}}:{}),include:inventoryItemIncludeFor(req,warehouseId)});if(!item)throw new ApiError(404,'Bahan aktif tidak ditemukan.');res.json(item);}));
 api.post('/inventory/items',invItemManagement,asyncRoute(async(req,res)=>{const d=inventoryItemBody.parse(req.body);if(await prisma.inventoryItem.findFirst({where:tenantWhereAnd(req,{code:d.code})}))throw new ApiError(409,'Kode bahan baku sudah digunakan');if(d.sku&&await prisma.inventoryItem.findFirst({where:tenantWhereAnd(req,{sku:{equals:d.sku,mode:'insensitive'}})}))throw new ApiError(409,'SKU sudah digunakan.');if(d.barcode&&await prisma.inventoryItem.findFirst({where:tenantWhereAnd(req,{barcode:{equals:d.barcode,mode:'insensitive'}})}))throw new ApiError(409,'Barcode sudah digunakan.');const warehouseId=await warehouseIdForRequest(req,String(req.body.warehouseId||''));res.status(201).json(await prisma.$transaction(async tx=>{const item=await tx.inventoryItem.create({data:{...d,businessId:req.user!.businessId},include:inventoryItemInclude});if(Number(d.currentStock)>0){await ensureInventoryStock(tx,warehouseId,item.id);await changeInventoryStock(tx,{businessId:req.user!.businessId,warehouseId,itemId:item.id,qty:Number(d.currentStock),type:'STOCK_IN',userId:req.user!.id,unitCost:Number(d.averageCost),reference:'Initial Stock',referenceType:'INITIAL'});}await auditInventory(tx,req,'INVENTORY_ITEM_CREATED',warehouseId,{itemId:item.id,itemName:item.name,currentStock:d.currentStock});return tx.inventoryItem.findUnique({where:{id:item.id},include:inventoryItemInclude});}));}));
 api.put('/inventory/items/:id',invItemManagement,asyncRoute(async(req,res)=>{const d=inventoryItemBody.partial().parse(req.body);const id=String(req.params.id);const existing=await prisma.inventoryItem.findFirst({where:tenantWhereAnd(req,{id})});if(!existing)throw new ApiError(404,'Bahan baku tidak ditemukan');if(d.code&&d.code!==existing.code&&await prisma.inventoryItem.findFirst({where:tenantWhereAnd(req,{code:d.code,NOT:{id}})}))throw new ApiError(409,'Kode bahan baku sudah digunakan');if(d.sku&&d.sku!==existing.sku&&await prisma.inventoryItem.findFirst({where:tenantWhereAnd(req,{sku:{equals:d.sku,mode:'insensitive'},NOT:{id}})}))throw new ApiError(409,'SKU sudah digunakan.');if(d.barcode&&d.barcode!==existing.barcode&&await prisma.inventoryItem.findFirst({where:tenantWhereAnd(req,{barcode:{equals:d.barcode,mode:'insensitive'},NOT:{id}})}))throw new ApiError(409,'Barcode sudah digunakan.');res.json(await prisma.$transaction(async tx=>{const item=await tx.inventoryItem.update({where:{id},data:d,include:inventoryItemInclude});if(d.averageCost!==undefined&&Number(d.averageCost)!==Number(existing.averageCost)){await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'INVENTORY_ITEM',entityId:id,action:'INVENTORY_ITEM_COST_UPDATED',oldValue:{averageCost:Number(existing.averageCost)},newValue:{itemId:id,itemName:item.name,averageCost:d.averageCost,user:req.user!.id,role:req.user!.role},changedBy:req.user!.id}});}return item;}));}));
 api.post('/inventory/items/:id/assign-warehouses',invItemManagement,asyncRoute(async(req,res)=>{
@@ -1605,6 +1681,7 @@ api.put('/inventory/stocks/:id/average-cost',invItemManagement,asyncRoute(async(
   const existing=await prisma.inventoryStock.findUnique({where:{id},include:{item:true,warehouse:true}});
   if(!existing)throw new ApiError(404,'Stock warehouse tidak ditemukan');
   await assertWarehouseAccess(req,existing.warehouseId);
+  if(existing.item.businessId!==req.user!.businessId||existing.item.status!=='ACTIVE')throw new ApiError(409,'Bahan baku nonaktif tidak dapat diperbarui. Aktifkan kembali bahan terlebih dahulu.');
   res.json(await prisma.$transaction(async tx=>{
     const updated=await tx.inventoryStock.update({where:{id},data:{averageCost:money(d.averageCost)},include:{item:true,warehouse:true}});
     await refreshLegacyItemStock(tx,existing.inventoryItemId);
@@ -1676,7 +1753,7 @@ function openBillCustomerName(d:z.infer<typeof saleInput>){
 async function nextNumber(prefix:string,outletId:string,field:'orderNumber'|'transactionNumber'){
   return nextSaleNumber(prefix,outletId,field);
 }
-function saleItemCreate(l:any){return {outletId:l.outletId,productId:l.productId,productVariantId:l.variantId,productName:l.productName,productCategoryId:l.categoryId||null,productCategoryName:l.category||null,variantName:l.variantName,itemNote:l.itemNote,qty:l.qty,sellingPrice:l.unitPrice,hpp:l.hpp,subtotal:l.gross,totalHpp:money(l.hpp*l.qty),grossProfit:money(l.net-l.hpp*l.qty),priceBeforeDiscount:l.unitPrice,discountType:l.discountType,discountValue:l.discountValue,discountAmount:l.discountAmount,subtotalAfterDiscount:l.net,selectedVariantsJson:l.selectedVariants,basePrice:l.basePrice,outletPrice:l.outletPrice,channel:l.channel,dineInPriceSnapshot:l.dineInPriceSnapshot,channelPriceSnapshot:l.channelPriceSnapshot,priceSource:l.priceSource,baseMarginPercent:l.baseMarginPercent,actualMarginPercent:l.actualMarginPercent,variantPriceTotal:l.variantPriceTotal,finalUnitPrice:l.unitPrice,baseHpp:l.baseHpp,outletHpp:l.outletHpp,variantHppTotal:l.variantHppTotal,finalUnitHpp:l.hpp,addons:{create:l.addons.map((a:any)=>({addonId:a.id,addonName:a.name,price:a.price,hpp:a.hpp}))}};}
+function saleItemCreate(l:any){return {serviceDate:l.serviceDate,dailyMenuScheduleId:l.dailyMenuScheduleId,productionPartnerId:l.productionPartnerId||null,productionPartnerName:l.productionPartnerName||null,productionPartnerType:l.productionPartnerType||null,outletId:l.outletId,productId:l.productId,productVariantId:l.variantId,productName:l.productName,productCategoryId:l.categoryId||null,productCategoryName:l.category||null,variantName:l.variantName,itemNote:l.itemNote,qty:l.qty,sellingPrice:l.unitPrice,hpp:l.hpp,subtotal:l.gross,totalHpp:money(l.hpp*l.qty),grossProfit:money(l.net-l.hpp*l.qty),priceBeforeDiscount:l.unitPrice,discountType:l.discountType,discountValue:l.discountValue,discountAmount:l.discountAmount,subtotalAfterDiscount:l.net,selectedVariantsJson:l.selectedVariants,basePrice:l.basePrice,outletPrice:l.outletPrice,channel:l.channel,dineInPriceSnapshot:l.dineInPriceSnapshot,channelPriceSnapshot:l.channelPriceSnapshot,priceSource:l.priceSource,baseMarginPercent:l.baseMarginPercent,actualMarginPercent:l.actualMarginPercent,variantPriceTotal:l.variantPriceTotal,finalUnitPrice:l.unitPrice,baseHpp:l.baseHpp,outletHpp:l.outletHpp,variantHppTotal:l.variantHppTotal,finalUnitHpp:l.hpp,addons:{create:l.addons.map((a:any)=>({addonId:a.id,addonName:a.name,price:a.price,hpp:a.hpp}))}};}
 async function buildOrderTotals(req:any,d:z.infer<typeof saleInput>){
   const lines=await priceCart(d.items,d.outletId,d.orderType,req.user!.businessId);
   const gross=money(lines.reduce((s,l)=>s+l.gross,0)),productDiscount=money(lines.reduce((s,l)=>s+l.discountAmount,0)),afterProduct=money(gross-productDiscount),transactionDiscount=discountAmount(afterProduct,d.transactionDiscount),afterTransaction=money(afterProduct-transactionDiscount);
@@ -1899,12 +1976,13 @@ api.post('/orders/:id/accept',asyncRoute(async(req,res)=>{
   });
   res.json(updated);
 }));
-api.post('/orders/:id/reject',asyncRoute(async(req,res)=>{const reason=z.object({reason:z.string().trim().min(3).max(250)}).parse(req.body).reason;const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)}});if(!sale)throw new ApiError(404,'Order tidak ditemukan');await assertTenantOutlet(req,sale.outletId);if(sale.status!=='OPEN_ORDER')throw new ApiError(400,'Hanya open order yang bisa ditolak');res.json(await prisma.$transaction(async tx=>{const updated=await tx.sale.update({where:{id:sale.id},data:{status:'REJECTED',rejectedAt:new Date(),rejectedByUserId:req.user!.id,rejectionReason:reason}});await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'ORDER',entityId:sale.id,action:'ORDER_REJECTED',oldValue:{status:sale.status},newValue:{status:'REJECTED',reason},changedBy:req.user!.id}});return updated;}));}));
+api.post('/orders/:id/reject',asyncRoute(async(req,res)=>{const reason=z.object({reason:z.string().trim().min(3).max(250)}).parse(req.body).reason;const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)}});if(!sale)throw new ApiError(404,'Order tidak ditemukan');await assertTenantOutlet(req,sale.outletId);if(sale.status!=='OPEN_ORDER')throw new ApiError(400,'Hanya open order yang bisa ditolak');res.json(await prisma.$transaction(async tx=>{const claim=await tx.sale.updateMany({where:{id:sale.id,status:sale.status},data:{status:'REJECTED'}});if(!claim.count)throw new ApiError(409,'Order sudah diproses');await releaseDailyQuota(tx,sale.id);const usage=await tx.couponUsage.findUnique({where:{saleId:sale.id}});if(usage){await tx.coupon.update({where:{id:usage.couponId},data:{usedCount:{decrement:1}}});await tx.couponUsage.delete({where:{saleId:sale.id}});}const updated=await tx.sale.update({where:{id:sale.id},data:{status:'REJECTED',rejectedAt:new Date(),rejectedByUserId:req.user!.id,rejectionReason:reason}});await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'ORDER',entityId:sale.id,action:'ORDER_REJECTED',oldValue:{status:sale.status},newValue:{status:'REJECTED',reason},changedBy:req.user!.id}});return updated;}));}));
 api.get('/orders/:id',asyncRoute(async(req,res)=>{const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)},include:{outlet:true,cashier:{select:{name:true}},items:{include:{addons:true}},printerLogs:{include:{printer:true,user:{select:{name:true}},},orderBy:{printedAt:'desc'}}}});if(!sale)throw new ApiError(404,'Order tidak ditemukan');await assertTenantOutlet(req,sale.outletId);res.json(sale);}));
 async function updatePendingOrder(req:any,id:string,d:z.infer<typeof saleInput>){
   const existing=await prisma.sale.findUnique({where:{id},include:{items:{include:{addons:true}}}});
   if(!existing) throw new ApiError(404,'Order tidak ditemukan');
   await assertTenantOutlet(req,existing.outletId);
+  if(existing.items.some(item=>item.dailyMenuScheduleId))throw new ApiError(400,'Daily Pre-Order tidak dapat diedit melalui POS. Gunakan proses terima/bayar atau batalkan pesanan.');
   if(existing.status!=='PENDING_PAYMENT'&&existing.status!=='OPEN_ORDER') throw new ApiError(400,'Order sudah tidak bisa diedit karena status berubah.');
   if(d.outletId!==existing.outletId) throw new ApiError(400,'Outlet order tidak bisa diubah');
   const activeShift=await requireActiveShift(req,existing.outletId,d.cashSessionId);
@@ -1919,12 +1997,12 @@ async function updatePendingOrder(req:any,id:string,d:z.infer<typeof saleInput>)
   });
 }
 api.put('/orders/:id',asyncRoute(async(req,res)=>res.json(await updatePendingOrder(req,String(req.params.id),saleInput.parse(req.body)))));
-api.post('/orders/:id/pay',asyncRoute(async(req,res)=>{const body=z.object({paymentMethod:z.enum(['CASH','QRIS','TRANSFER','GOFOOD','GRABFOOD','SHOPEEFOOD','VOUCHER']),cashReceived:z.number().nonnegative().optional(),cashSessionId:z.string().optional(),order:z.any().optional()}).parse(req.body);let sale=await prisma.sale.findUnique({where:{id:String(req.params.id)}});if(!sale)throw new ApiError(404,'Order tidak ditemukan');await assertTenantOutlet(req,sale.outletId);if(sale.status!=='PENDING_PAYMENT'&&sale.status!=='OPEN_ORDER')throw new ApiError(400,'Hanya pending order yang bisa dibayar');const oldStatus=sale.status;const activeShift=await requireActiveShift(req,sale.outletId,body.cashSessionId);if(body.order){sale=await updatePendingOrder(req,sale.id,saleInput.parse({...body.order,outletId:sale.outletId,cashSessionId:activeShift.id}));}const grand=Number(sale.grandTotal);if(body.paymentMethod==='CASH'&&(body.cashReceived??0)<grand)throw new ApiError(400,'Uang diterima kurang');const transactionNumber=await nextNumber('FORU',sale.outletId,'transactionNumber');res.json(await prisma.$transaction(async tx=>{const updated=await tx.sale.update({where:{id:sale!.id},data:{transactionNumber,status:'PAID',paidAt:new Date(),cashSessionId:activeShift.id,paymentMethod:body.paymentMethod,cashReceived:body.cashReceived,changeAmount:body.paymentMethod==='CASH'?money((body.cashReceived||0)-grand):0,grossProfit:money(grand-Number(sale!.totalHpp))},include:{items:{include:{addons:true}},outlet:true,cashier:{select:{name:true}}}});await deductInventoryForPaidSale(tx,updated,req.user!.id);if(updated.couponCode){const coupon=await tx.coupon.findFirst({where:tenantWhereAnd(req,{couponCode:updated.couponCode})});if(coupon){await tx.coupon.update({where:{id:coupon.id},data:{usedCount:{increment:1}}});await tx.couponUsage.create({data:{couponId:coupon.id,saleId:updated.id,outletId:updated.outletId,cashierId:req.user!.id}});}}await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'ORDER',entityId:updated.id,action:'ORDER_PAID',oldValue:{status:oldStatus},newValue:{status:'PAID',transactionNumber},changedBy:req.user!.id}});return updated;}));}));
-api.post('/orders/:id/cancel',asyncRoute(async(req,res)=>{const reason=z.object({reason:z.string().min(3).optional()}).parse(req.body).reason;const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)}});if(!sale)throw new ApiError(404,'Order tidak ditemukan');await assertTenantOutlet(req,sale.outletId);if(sale.status!=='PENDING_PAYMENT'&&sale.status!=='DRAFT'&&sale.status!=='OPEN_ORDER')throw new ApiError(400,'Hanya pending order yang bisa dibatalkan');res.json(await prisma.$transaction(async tx=>{const updated=await tx.sale.update({where:{id:sale.id},data:{status:'CANCELLED',cancelledAt:new Date(),cancelReason:reason||'Cancelled by cashier'}});await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'ORDER',entityId:sale.id,action:'ORDER_CANCELLED',oldValue:{status:sale.status},newValue:{status:'CANCELLED',reason:updated.cancelReason},changedBy:req.user!.id}});return updated;}));}));
+api.post('/orders/:id/pay',asyncRoute(async(req,res)=>{const body=z.object({paymentMethod:z.enum(['CASH','QRIS','TRANSFER','GOFOOD','GRABFOOD','SHOPEEFOOD','VOUCHER']),cashReceived:z.number().nonnegative().optional(),cashSessionId:z.string().optional(),order:z.any().optional()}).parse(req.body);let sale=await prisma.sale.findUnique({where:{id:String(req.params.id)}});if(!sale)throw new ApiError(404,'Order tidak ditemukan');await assertTenantOutlet(req,sale.outletId);if(sale.status!=='PENDING_PAYMENT'&&sale.status!=='OPEN_ORDER')throw new ApiError(400,'Hanya pending order yang bisa dibayar');const oldStatus=sale.status;const activeShift=await requireActiveShift(req,sale.outletId,body.cashSessionId);if(body.order){sale=await updatePendingOrder(req,sale.id,saleInput.parse({...body.order,outletId:sale.outletId,cashSessionId:activeShift.id}));}const grand=Number(sale.grandTotal);if(body.paymentMethod==='CASH'&&(body.cashReceived??0)<grand)throw new ApiError(400,'Uang diterima kurang');const transactionNumber=await nextNumber('FORU',sale.outletId,'transactionNumber');res.json(await prisma.$transaction(async tx=>{const claim=await tx.sale.updateMany({where:{id:sale!.id,status:{in:['OPEN_ORDER','PENDING_PAYMENT']}},data:{status:'PAID'}});if(!claim.count)throw new ApiError(409,'Order sudah diproses');const updated=await tx.sale.update({where:{id:sale!.id},data:{transactionNumber,status:'PAID',paidAt:new Date(),cashSessionId:activeShift.id,paymentMethod:body.paymentMethod,cashReceived:body.cashReceived,changeAmount:body.paymentMethod==='CASH'?money((body.cashReceived||0)-grand):0,grossProfit:money(grand-Number(sale!.totalHpp))},include:{items:{include:{addons:true}},outlet:true,cashier:{select:{name:true}}}});await deductInventoryForPaidSale(tx,updated,req.user!.id);if(updated.couponCode&&!await tx.couponUsage.findUnique({where:{saleId:updated.id}})){const coupon=await tx.coupon.findFirst({where:tenantWhereAnd(req,{couponCode:updated.couponCode})});if(coupon){await tx.coupon.update({where:{id:coupon.id},data:{usedCount:{increment:1}}});await tx.couponUsage.create({data:{couponId:coupon.id,saleId:updated.id,outletId:updated.outletId,cashierId:req.user!.id}});}}await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'ORDER',entityId:updated.id,action:'ORDER_PAID',oldValue:{status:oldStatus},newValue:{status:'PAID',transactionNumber},changedBy:req.user!.id}});return updated;}));}));
+api.post('/orders/:id/cancel',asyncRoute(async(req,res)=>{const reason=z.object({reason:z.string().min(3).optional()}).parse(req.body).reason;const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)}});if(!sale)throw new ApiError(404,'Order tidak ditemukan');await assertTenantOutlet(req,sale.outletId);if(sale.status!=='PENDING_PAYMENT'&&sale.status!=='DRAFT'&&sale.status!=='OPEN_ORDER')throw new ApiError(400,'Hanya pending order yang bisa dibatalkan');res.json(await prisma.$transaction(async tx=>{const claim=await tx.sale.updateMany({where:{id:sale.id,status:sale.status},data:{status:'CANCELLED'}});if(!claim.count)throw new ApiError(409,'Order sudah diproses');await releaseDailyQuota(tx,sale.id);const usage=await tx.couponUsage.findUnique({where:{saleId:sale.id}});if(usage){await tx.coupon.update({where:{id:usage.couponId},data:{usedCount:{decrement:1}}});await tx.couponUsage.delete({where:{saleId:sale.id}});}const updated=await tx.sale.update({where:{id:sale.id},data:{status:'CANCELLED',cancelledAt:new Date(),cancelReason:reason||'Cancelled by cashier'}});await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'ORDER',entityId:sale.id,action:'ORDER_CANCELLED',oldValue:{status:sale.status},newValue:{status:'CANCELLED',reason:updated.cancelReason},changedBy:req.user!.id}});return updated;}));}));
 api.get('/sales',asyncRoute(async(req,res)=>{const where:any=tenantWhereAnd(req,{status:{in:['PAID','VOID']},outletId:await requiredOutletId(req)});if(req.query.date)where.createdAt=dayRange(String(req.query.date));if(req.query.payment_method)where.paymentMethod=req.query.payment_method;res.json(await prisma.sale.findMany({where,include:{outlet:true,cashier:{select:{name:true}}},orderBy:{createdAt:'desc'},take:200}));}));
 api.get('/sales/:id',asyncRoute(async(req,res)=>{const sale=await prisma.sale.findFirst({where:tenantWhereAnd(req,{id:String(req.params.id)}),include:{outlet:true,cashier:{select:{name:true}},items:{include:{addons:true}},printerLogs:{include:{printer:true,user:{select:{name:true}},},orderBy:{printedAt:'desc'}}}});if(!sale)throw new ApiError(404,'Transaksi tidak ditemukan');if(req.user!.role!=='OWNER')await assertTenantOutlet(req,sale.outletId);res.json(sale);}));
 api.put('/sales/:id/customer',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const customerName=z.object({customerName:z.string().trim().optional()}).parse(req.body).customerName?.trim()||'Walk In';const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)}});if(!sale)throw new ApiError(404,'Transaksi tidak ditemukan');await assertTenantOutlet(req,sale.outletId);res.json(await prisma.$transaction(async tx=>{const updated=await tx.sale.update({where:{id:sale.id},data:{customerName}});await tx.auditLog.create({data:{businessId:req.user!.businessId,entityType:'SALE',entityId:sale.id,action:'UPDATE_CUSTOMER_NAME',oldValue:{customerName:sale.customerName},newValue:{customerName},changedBy:req.user!.id}});return updated;}));}));
-api.post('/sales/:id/void',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const reason=z.object({reason:z.string().min(5)}).parse(req.body).reason;const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)},include:{couponUsage:true}});if(!sale)throw new ApiError(404,'Transaksi tidak ditemukan');await assertTenantOutlet(req,sale.outletId);if(sale.status!=='PAID')throw new ApiError(400,'Hanya transaksi paid yang bisa void');res.json(await prisma.$transaction(async tx=>{const claimed=await tx.sale.updateMany({where:{id:sale.id,businessId:req.user!.businessId,status:'PAID'},data:{status:'VOID',voidReason:reason,voidedAt:new Date()}});if(!claimed.count)throw new ApiError(409,'Transaksi sudah diproses oleh user lain');if(sale.couponUsage){await tx.coupon.update({where:{id:sale.couponUsage.couponId},data:{usedCount:{decrement:1}}});await tx.couponUsage.delete({where:{saleId:sale.id}});}await returnInventoryForVoidedSale(tx,sale,req.user!.id);return tx.sale.findUniqueOrThrow({where:{id:sale.id}});}));}));
+api.post('/sales/:id/void',allow('OWNER','SUPERVISOR'),asyncRoute(async(req,res)=>{const reason=z.object({reason:z.string().min(5)}).parse(req.body).reason;const sale=await prisma.sale.findUnique({where:{id:String(req.params.id)},include:{couponUsage:true}});if(!sale)throw new ApiError(404,'Transaksi tidak ditemukan');await assertTenantOutlet(req,sale.outletId);if(sale.status!=='PAID')throw new ApiError(400,'Hanya transaksi paid yang bisa void');res.json(await prisma.$transaction(async tx=>{const claimed=await tx.sale.updateMany({where:{id:sale.id,businessId:req.user!.businessId,status:'PAID'},data:{status:'VOID',voidReason:reason,voidedAt:new Date()}});if(!claimed.count)throw new ApiError(409,'Transaksi sudah diproses oleh user lain');await releaseDailyQuota(tx,sale.id);if(sale.couponUsage){await tx.coupon.update({where:{id:sale.couponUsage.couponId},data:{usedCount:{decrement:1}}});await tx.couponUsage.delete({where:{saleId:sale.id}});}await returnInventoryForVoidedSale(tx,sale,req.user!.id);return tx.sale.findUniqueOrThrow({where:{id:sale.id}});}));}));
 
 async function logPrintAttempt(saleId:string,userId:string,type:'CUSTOMER_RECEIPT'|'KITCHEN_TICKET'|'CUSTOMER_ITEM_LIST',forcedPrinterId?:string){
   const sale=await prisma.sale.findUnique({where:{id:saleId},include:{outlet:true}});

@@ -1,4 +1,4 @@
-import type { Coupon, CouponCategory, CouponOutlet, CouponProduct, PaymentMethod } from '@prisma/client';
+import type { Coupon, CouponCategory, CouponOutlet, CouponProduct, PaymentMethod, Prisma } from '@prisma/client';
 import { ApiError, money, prisma } from './lib.js';
 
 export type DiscountInput={type?:'NOMINAL'|'PERCENTAGE';value?:number};
@@ -24,22 +24,23 @@ export function legacyVariantPrice(masterBasePrice:number,effectiveBasePrice:num
   return money(Math.max(0,effectiveBasePrice+(masterVariantPrice-masterBasePrice)));
 }
 
-export async function priceCart(items:CartLine[],outletId:string,channel?:string|null,businessId?:string):Promise<PricedLine[]>{
+export async function priceCart(items:CartLine[],outletId:string,channel?:string|null,businessId?:string,context?:{db:Prisma.TransactionClient; dailyPrices:(number|null)[]}):Promise<PricedLine[]>{
+  const db=context?.db??prisma;
   if(!items.length) throw new ApiError(400,'Cart masih kosong');
   const productIds=[...new Set(items.map(item=>item.productId))];
-  const availability=await prisma.product.findMany({where:{AND:[businessId?{businessId}:{},{id:{in:productIds}}]},select:{id:true,name:true,status:true,outlets:{where:{outletId},select:{isAvailable:true,isActive:true,status:true,stockMode:true,stockQty:true}}}});
+  const availability=await db.product.findMany({where:{AND:[businessId?{businessId}:{},{id:{in:productIds}}]},select:{id:true,name:true,status:true,outlets:{where:{outletId},select:{isAvailable:true,isActive:true,status:true,stockMode:true,stockQty:true}}}});
   const byId=new Map(availability.map(product=>[product.id,product]));
   const requestedQty=new Map<string,number>();
   for(const item of items)requestedQty.set(item.productId,(requestedQty.get(item.productId)||0)+item.qty);
-  const unavailable=productIds.map(id=>byId.get(id)).filter(product=>!product||product.status!=='ACTIVE'||!product.outlets[0]?.isAvailable||!product.outlets[0]?.isActive||product.outlets[0]?.status!=='ACTIVE'||(product.outlets[0]?.stockMode==='MANUAL'&&product.outlets[0].stockQty<(requestedQty.get(product.id)||0))).map(product=>product?.name||'Produk tidak dikenal');
+  const unavailable=productIds.map(id=>byId.get(id)).filter(product=>!product||product.status!=='ACTIVE'||(!context&&!product.outlets[0]?.isAvailable)||!product.outlets[0]?.isActive||product.outlets[0]?.status!=='ACTIVE'||(!context&&product.outlets[0]?.stockMode==='MANUAL'&&product.outlets[0].stockQty<(requestedQty.get(product.id)||0))).map(product=>product?.name||'Produk tidak dikenal');
   if(unavailable.length)throw new ApiError(409,`Beberapa menu sudah tidak tersedia: ${unavailable.join(', ')}. Silakan perbarui pesanan.`);
   const onlineChannel=normalizedChannel(channel);
-  return Promise.all(items.map(async line=>{
+  return Promise.all(items.map(async (line,index)=>{
     if(!Number.isInteger(line.qty)||line.qty<1) throw new ApiError(400,'Qty produk tidak valid');
     const itemNote=line.itemNote?.trim();
     if(itemNote&&itemNote.length>255) throw new ApiError(400,'Catatan item maksimal 255 karakter');
-    const product=await prisma.product.findFirst({
-      where:{AND:[businessId?{businessId}:{}, {id:line.productId,status:'ACTIVE',outlets:{some:{outletId,isAvailable:true,isActive:true,status:'ACTIVE'}}}]},
+    const product=await db.product.findFirst({
+      where:{AND:[businessId?{businessId}:{}, {id:line.productId,status:'ACTIVE',outlets:{some:{outletId,...(!context?{isAvailable:true}:{}),isActive:true,status:'ACTIVE'}}}]},
       include:{
         categoryRef:true,
         categoryAssignments:{include:{category:true},orderBy:{sortOrder:'asc'}},
@@ -55,13 +56,14 @@ export async function priceCart(items:CartLine[],outletId:string,channel?:string
     });
     if(!product) throw new ApiError(400,'Produk tidak tersedia di outlet ini');
     const productOutlet=product.outlets[0];
-    if(productOutlet&&(!productOutlet.isAvailable||productOutlet.status!=='ACTIVE')) throw new ApiError(400,'Produk tidak aktif di outlet ini');
+    if(productOutlet&&((!context&&!productOutlet.isAvailable)||productOutlet.status!=='ACTIVE')) throw new ApiError(400,'Produk tidak aktif di outlet ini');
     const selectedAddons=product.addons.filter(a=>line.addonIds?.includes(a.id)&&a.status==='ACTIVE');
     if((line.addonIds?.length||0)!==selectedAddons.length) throw new ApiError(400,'Add-on tidak valid');
     const optionIds=[...new Set(line.selectedVariantOptionIds||[])];
     const selectedVariants:PricedLine['selectedVariants']=[];
     let basePrice=Number(product.basePrice), baseHpp=Number(product.baseHpp), outletPrice=productOutlet?.outletPrice===null||!productOutlet?undefined:Number(productOutlet.outletPrice), outletHpp=productOutlet?.outletHpp===null||!productOutlet?undefined:Number(productOutlet.outletHpp), variantName='Base', variantId=line.variantId, legacyVariantMasterPrice:number|undefined;
     if(product.variantGroups.length){
+      variantId=undefined;
       const seen=new Set<string>();
       for(const attached of product.variantGroups){
         const group=attached.group;
@@ -77,6 +79,7 @@ export async function priceCart(items:CartLine[],outletId:string,channel?:string
       if(optionIds.some(id=>!seen.has(id))) throw new ApiError(400,'Pilihan variant tidak valid untuk produk ini');
       variantName=selectedVariants.length?selectedVariants.map(v=>v.optionName).join(', '):'Base';
     } else {
+      if(line.variantId&&!product.variants.some(v=>v.id===line.variantId))throw new ApiError(400,'Variant tidak valid');
       const variant=line.variantId?product.variants.find(v=>v.id===line.variantId):product.variants[0];
       if(variant){variantId=variant.id; variantName=variant.variantName; legacyVariantMasterPrice=Number(variant.sellingPrice);}
       else {variantId=undefined; variantName='Base';}
@@ -86,7 +89,7 @@ export async function priceCart(items:CartLine[],outletId:string,channel?:string
     const dineInPrice=outletPrice??basePrice;
     const channelPrice=onlineChannel?Number((product as any).channelPrices?.[0]?.price??NaN):NaN;
     const hasChannelPrice=Number.isFinite(channelPrice);
-    const effectiveBasePrice=hasChannelPrice?channelPrice:dineInPrice, effectiveBaseHpp=outletHpp??baseHpp;
+    const effectiveBasePrice=context?.dailyPrices[index]??(hasChannelPrice?channelPrice:dineInPrice), effectiveBaseHpp=outletHpp??baseHpp;
     const legacyVariantPriceTotal=legacyVariantMasterPrice===undefined?0:legacyVariantPrice(basePrice,effectiveBasePrice,legacyVariantMasterPrice)-effectiveBasePrice;
     const combinedVariantPriceTotal=legacyVariantPriceTotal+variantPriceTotal;
     const priceSource=hasChannelPrice?'CHANNEL':(outletPrice!==undefined?'OUTLET':'BASE');
@@ -97,8 +100,8 @@ export async function priceCart(items:CartLine[],outletId:string,channel?:string
     return {outletId,productId:line.productId,variantId,productName:product.name,variantName,categoryId:product.categoryId,category:product.categoryRef?.name||product.category,categoryIds:assignedCategories.length?assignedCategories.map(c=>c.id):(product.categoryId?[product.categoryId]:[]),categories:assignedCategories.length?assignedCategories.map(c=>c.name):[product.categoryRef?.name||product.category],qty:line.qty,unitPrice:money(unit),hpp:money(hpp),gross,discountType:line.discount?.type,discountValue:line.discount?.value,discountAmount:disc,net:money(gross-disc),itemNote:itemNote||undefined,addons:selectedAddons.map(a=>({id:a.id,name:a.addonName,price:Number(a.price),hpp:Number(a.hpp)})),selectedVariants,basePrice:money(basePrice),outletPrice:outletPrice===undefined?undefined:money(outletPrice),channel:onlineChannel,dineInPriceSnapshot:money(dineInPrice+combinedVariantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)),channelPriceSnapshot:hasChannelPrice?money(channelPrice+combinedVariantPriceTotal+selectedAddons.reduce((s,a)=>s+Number(a.price),0)):undefined,priceSource,baseMarginPercent:percentMargin(dineInPrice+combinedVariantPriceTotal, hpp),actualMarginPercent:percentMargin(unit,hpp),variantPriceTotal:money(combinedVariantPriceTotal),baseHpp:money(baseHpp),outletHpp:outletHpp===undefined?undefined:money(outletHpp),variantHppTotal:money(variantHppTotal)};
   }));
 }
-export async function validateCoupon(code:string,outletId:string,lines:PricedLine[],customerKey?:string,businessId?:string){
-  const coupon=await prisma.coupon.findFirst({where:{AND:[businessId?{businessId}:{},{couponCode:code.trim().toUpperCase()}]},include:{outlets:true,products:true,categories:true}}) as LoadedCoupon|null;
+export async function validateCoupon(code:string,outletId:string,lines:PricedLine[],customerKey?:string,businessId?:string,db:Prisma.TransactionClient=prisma){
+  const coupon=await db.coupon.findFirst({where:{AND:[businessId?{businessId}:{},{couponCode:code.trim().toUpperCase()}]},include:{outlets:true,products:true,categories:true}}) as LoadedCoupon|null;
   if(!coupon) throw new ApiError(404,'Kode kupon tidak ditemukan');
   const now=new Date();
   if(coupon.status!=='ACTIVE') throw new ApiError(400,'Kupon tidak aktif');

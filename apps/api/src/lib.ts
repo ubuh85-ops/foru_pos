@@ -63,6 +63,13 @@ export const allow=(...roles:Role[]) => (req:Request,res:Response,next:NextFunct
 export const hasPermission=(req:Request,permission:string)=>req.user!.role==='OWNER'||req.user!.inventoryPermissions.includes(permission);
 export const requirePermission=(permission:string)=>(req:Request,res:Response,next:NextFunction)=>hasPermission(req,permission)?next():res.status(403).json({message:"You don't have permission."});
 export function assertOutlet(req:Request,outletId:string){ if(!req.user!.outletIds.includes(outletId)) throw new ApiError(403,'Outlet tidak diizinkan'); }
+export async function assertManagedOutlet(req:Request,outletId:string){
+  if(req.user?.role!=='OWNER')throw new ApiError(403,'Anda tidak memiliki akses');
+  // Owners must be able to edit and reactivate inactive outlets in their business.
+  const outlet=await prisma.outlet.findFirst({where:{id:outletId,...tenantScope(req)}});
+  if(!outlet)throw new ApiError(403,'Outlet tidak diizinkan');
+  return outlet;
+}
 export function tenantScope(req:Request){
   const businessId=req.user?.businessId;
   if(!businessId) throw new ApiError(403,'Business tidak valid');

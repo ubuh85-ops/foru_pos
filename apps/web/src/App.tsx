@@ -32,9 +32,11 @@ import UserManagementPage from './pages/UserManagementPage';
 import CustomerOrderPage from './pages/CustomerOrderPage';
 import CustomerOrderStatusPage from './pages/CustomerOrderStatusPage';
 import PreOrderRecapPage from './pages/PreOrderRecapPage';
+import DailyMenuPage from './pages/DailyMenuPage';
 import MenuAvailabilityPage from './pages/MenuAvailabilityPage';
 import CategoriesPage from './pages/CategoriesPage';
 import CustomersPage, { CustomerDetailPage } from './pages/CustomersPage';
+import ProductionPartnersPage from './pages/ProductionPartnersPage';
 import ProductSopPage from './pages/ProductSopPage';
 import { initSyncService, recordLocalAudit } from './sync';
 import { checkInventoryStockAlerts } from './inventoryAlerts';
@@ -60,6 +62,7 @@ const navGroups: NavGroup[] = [
       ['/inventory/items', 'Bahan Baku', Boxes],
       ['/inventory/warehouses', 'Warehouse', Warehouse],
       ['/outlets', 'Outlet', Store]
+      ,['/production-partners', 'Mitra Produksi', Store]
     ]
   },
   {
@@ -70,6 +73,8 @@ const navGroups: NavGroup[] = [
       ['/menu-availability', 'Ketersediaan Menu', PackageSearch],
       ['/orders', 'Order', ClipboardList],
       ['/orders/preorder-recap', 'Rekap Pre-Order', CalendarDays],
+      ['/preorder/schedules', 'Daily Menu Schedule', CalendarDays],
+      ['/preorder/recap', 'Rekap Daily Pre-Order', CalendarDays],
       ['/shift', 'Shift', Clock3],
       ['/checklists', 'Checklist Harian', ClipboardList],
       ['/inventory', 'Inventory', PackageSearch],
@@ -118,6 +123,8 @@ const knownRoutes = new Set([
   '/menu-availability',
   '/orders',
   '/orders/preorder-recap',
+  '/preorder/schedules',
+  '/preorder/recap',
   '/shift',
   '/expenses',
   '/sales',
@@ -477,6 +484,8 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
         <Route path="/select-outlet" element={<OutletSelect user={user} logout={logout} />} />
         <Route path="/orders" element={<Orders />} />
         <Route path="/orders/preorder-recap" element={<PreOrderRecapPage />} />
+        <Route path="/preorder/schedules" element={<DailyMenuPage />} />
+        <Route path="/preorder/recap" element={<DailyMenuPage recap />} />
         <Route path="/orders/:id" element={<OrderDetail />} />
         <Route path="/shift" element={<Shift />} />
         <Route path="/expenses" element={<ExpensesPage />} />
@@ -496,6 +505,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
         <Route path="/products" element={<ProductPage />} />
         <Route path="/product-sops" element={<ProductSopPage user={user} />} />
         <Route path="/outlets" element={user.role === 'OWNER' ? <OutletPage /> : <Navigate to="/pos" />} />
+        <Route path="/production-partners" element={user.role === 'OWNER' || user.role === 'SUPERVISOR' ? <ProductionPartnersPage /> : <Navigate to="/pos" />} />
         <Route path="/reports" element={user.role === 'OWNER' ? <ReportsPage /> : <Navigate to="/pos" />} />
         <Route path="/reports/web-analytics" element={user.role === 'OWNER' ? <WebAnalyticsPage /> : <Navigate to="/pos" />} />
         <Route path="/reports/daily" element={user.role === 'OWNER' ? <DailyReportPage /> : <Navigate to="/pos" />} />

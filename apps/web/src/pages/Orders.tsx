@@ -6,6 +6,7 @@ import { printWithBluetoothFallback } from '../printer';
 import { useOutlet } from '../OutletContext';
 import { appAlert, appPrompt } from '../components/ui/AppDialog';
 import { CancelOrderDialog } from '../components/ui/FormDialog';
+import DailyOrderActions from '../components/DailyOrderActions';
 
 const Page = ({ children }: { children: any }) => <div className="p-4 lg:p-8">{children}</div>;
 const Loading = () => <div className="p-10 text-center text-slate-400">Memuat data...</div>;
@@ -452,11 +453,11 @@ export function OrderDetail() {
     <div className="grid gap-5 xl:grid-cols-3">
       <div className="card p-5 xl:col-span-2">
         <div className="mb-5 grid gap-3 sm:grid-cols-2"><div><p className="text-sm text-slate-400">Customer</p><h3 className="text-2xl font-black">{order.customerName || 'Walk In'}</h3></div><div className="text-sm text-slate-500"><p>Transaction: <b>{order.transactionNumber || '-'}</b></p><p>Cashier: <b>{order.cashier?.name}</b></p>{order.paidAt && <p>Paid: <b>{dt(order.paidAt)}</b></p>}{order.paymentMethod && <p>Payment: <b>{order.paymentMethod}</b></p>}{order.couponCode && <p>Coupon: <b>{order.couponCode}</b></p>}</div></div>
-        {order.items.map((i: any) => <div className="border-t py-3 text-sm" key={i.id}><div className="flex justify-between gap-4"><div><b>{i.qty}x {i.productName}</b><p className="text-slate-400">{i.variantName}</p>{i.addons?.map((a: any) => <p className="text-slate-400" key={a.id}>+ {a.addonName}</p>)}{i.itemNote && <p className="mt-1 font-bold text-amber-700">NOTE: {i.itemNote}</p>}{Number(i.discountAmount) > 0 && <p className="text-xs text-brand-600">Diskon item: {rupiah(i.discountAmount)}</p>}</div><span>{rupiah(i.subtotalAfterDiscount)}</span></div></div>)}
+        {order.items.map((i: any) => <div className="border-t py-3 text-sm" key={i.id}><div className="flex justify-between gap-4"><div>{i.serviceDate&&<p className="font-bold text-violet-700">📅 {new Intl.DateTimeFormat('id-ID',{dateStyle:'full',timeZone:'UTC'}).format(new Date(i.serviceDate))} · {i.fulfillmentStatus}</p>}<b>{i.qty}x {i.productName}</b><p className="text-slate-400">{i.variantName}</p>{i.addons?.map((a: any) => <p className="text-slate-400" key={a.id}>+ {a.addonName}</p>)}{i.itemNote && <p className="mt-1 font-bold text-amber-700">NOTE: {i.itemNote}</p>}{Number(i.discountAmount) > 0 && <p className="text-xs text-brand-600">Diskon item: {rupiah(i.discountAmount)}</p>}</div><span>{rupiah(i.subtotalAfterDiscount)}</span></div></div>)}
         <div className="mt-5 space-y-1 border-t pt-4 text-right"><p>Product discount: {rupiah(order.productDiscountTotal)}</p><p>Transaction discount: {rupiah(order.transactionDiscountAmount)}</p><p>Coupon discount: {rupiah(order.couponDiscountAmount)}</p><p className="text-sm text-slate-400">Total</p><b className="text-2xl text-brand-700">{rupiah(order.grandTotal)}</b></div>
       </div>
       <div className="card p-5"><h3 className="section-title mb-4">Actions</h3>
-        {(order.status === 'PENDING_PAYMENT' || order.status === 'OPEN_ORDER') && <button onClick={() => navigate(`/pos?editOrderId=${order.id}`)} className="btn-primary mb-2 w-full">{order.status === 'OPEN_ORDER' ? 'Review di Kasir' : 'Edit Open Bill'}</button>}
+        {(order.status === 'PENDING_PAYMENT' || order.status === 'OPEN_ORDER') && (order.items.some((item:{dailyMenuScheduleId?:string})=>item.dailyMenuScheduleId)?<DailyOrderActions order={order} onChange={load}/>:<button onClick={() => navigate(`/pos?editOrderId=${order.id}`)} className="btn-primary mb-2 w-full">{order.status === 'OPEN_ORDER' ? 'Review di Kasir' : 'Edit Open Bill'}</button>)}
         {(order.status === 'PENDING_PAYMENT' || order.status === 'OPEN_ORDER') && <button onClick={() => print('customer-item-list')} className="btn-soft mb-2 w-full">Customer Item List</button>}
         <button onClick={() => print('kitchen-ticket')} className="btn-soft mb-2 w-full">Kitchen Ticket</button>
         {order.status === 'PAID' && <button onClick={() => print('customer-receipt')} className="btn-soft mb-2 w-full">Print Receipt</button>}
