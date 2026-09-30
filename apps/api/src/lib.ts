@@ -20,6 +20,7 @@ export const INVENTORY_PERMISSIONS = [
 ] as const;
 export const DEFAULT_USER_PERMISSIONS = [DASHBOARD_PERMISSION, ...INVENTORY_PERMISSIONS] as const;
 export const defaultInventoryPermissions=(role:Role)=>role==='OWNER'||role==='SUPERVISOR'?[...DEFAULT_USER_PERMISSIONS]:[];
+export const hasBusinessWideInventoryAccess=(req:Request)=>req.user!.role==='OWNER'||req.user!.role==='SUPERVISOR';
 export const FORU_BUSINESS_CODE = 'FORU';
 export async function defaultBusinessForUser(userId:string, preferredBusinessId?:string){
   const membership = await prisma.businessMembership.findFirst({
@@ -60,7 +61,7 @@ export async function auth(req:Request,res:Response,next:NextFunction){
   catch { res.status(401).json({message:'Sesi tidak valid atau telah berakhir'}); }
 }
 export const allow=(...roles:Role[]) => (req:Request,res:Response,next:NextFunction) => roles.includes(req.user!.role)?next():res.status(403).json({message:'Anda tidak memiliki akses'});
-export const hasPermission=(req:Request,permission:string)=>req.user!.role==='OWNER'||req.user!.inventoryPermissions.includes(permission);
+export const hasPermission=(req:Request,permission:string)=>hasBusinessWideInventoryAccess(req)||req.user!.inventoryPermissions.includes(permission);
 export const requirePermission=(permission:string)=>(req:Request,res:Response,next:NextFunction)=>hasPermission(req,permission)?next():res.status(403).json({message:"You don't have permission."});
 export function assertOutlet(req:Request,outletId:string){ if(!req.user!.outletIds.includes(outletId)) throw new ApiError(403,'Outlet tidak diizinkan'); }
 export async function assertManagedOutlet(req:Request,outletId:string){

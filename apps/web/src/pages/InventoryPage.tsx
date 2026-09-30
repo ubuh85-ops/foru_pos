@@ -46,7 +46,7 @@ const tabPermissions: Record<string, string> = {
   '/inventory/alerts': 'inventory.view'
 };
 function hasInv(user: User, permission: string) {
-  return user.role === 'OWNER' || (user.inventoryPermissions || []).includes(permission) || (permission === 'inventory.dashboard' && (user.inventoryPermissions || []).includes('inventory.report'));
+  return user.role === 'OWNER' || user.role === 'SUPERVISOR' || (user.inventoryPermissions || []).includes(permission) || (permission === 'inventory.dashboard' && (user.inventoryPermissions || []).includes('inventory.report'));
 }
 function canOpenInventoryPath(user: User, path: string) {
   if (!hasInv(user, 'inventory.view')) return false;

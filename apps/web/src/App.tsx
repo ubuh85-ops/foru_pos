@@ -168,7 +168,7 @@ const inventoryRoutePermissions: Record<string, string> = {
   '/inventory/alerts': 'inventory.view'
 };
 function hasInventoryPermission(user: User, permission: string) {
-  return user.role === 'OWNER' || (user.inventoryPermissions || []).includes(permission) || (permission === 'inventory.dashboard' && (user.inventoryPermissions || []).includes('inventory.report'));
+  return user.role === 'OWNER' || user.role === 'SUPERVISOR' || (user.inventoryPermissions || []).includes(permission) || (permission === 'inventory.dashboard' && (user.inventoryPermissions || []).includes('inventory.report'));
 }
 function hasUserPermission(user: User, permission: string) {
   return user.role === 'OWNER' || (user.inventoryPermissions || []).includes(permission);
