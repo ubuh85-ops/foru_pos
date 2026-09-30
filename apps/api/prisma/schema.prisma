@@ -82,6 +82,7 @@ model Business {
   inventoryCategories InventoryCategory[]
   inventoryUnits      InventoryUnit[]
   inventoryItems      InventoryItem[]
+  inventoryAlertLogs  InventoryAlertLog[]
   inventoryWarehouses InventoryWarehouse[]
   inventoryMovements  InventoryMovement[]
   stockTransfers      StockTransfer[]
@@ -324,6 +325,7 @@ model VariantOption {
   group           VariantGroup          @relation(fields: [variantGroupId], references: [id], onDelete: Cascade)
   outlets         VariantOptionOutlet[]
 
+  @@index([variantGroupId])
   @@map("variant_options")
 }
 
@@ -366,6 +368,7 @@ model ProductVariant {
   product      Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
   saleItems    SaleItem[]
 
+  @@index([productId])
   @@map("product_variants")
 }
 
@@ -379,6 +382,7 @@ model ProductAddon {
   product        Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
   saleItemAddons SaleItemAddon[]
 
+  @@index([productId])
   @@map("product_addons")
 }
 
@@ -538,6 +542,7 @@ model CashSession {
   business          Business      @relation(fields: [businessId], references: [id])
 
   @@index([businessId, outletId, openedAt])
+  @@index([businessId, outletId, status, openedAt])
   @@map("cash_sessions")
 }
 
@@ -791,6 +796,7 @@ model SaleItem {
   sale                  Sale                   @relation(fields: [saleId], references: [id], onDelete: Cascade)
   productionPartner     ProductionPartner?     @relation(fields: [productionPartnerId], references: [id], onDelete: SetNull)
 
+  @@index([saleId])
   @@index([outletId, serviceDate])
   @@index([productionPartnerId, serviceDate])
   @@map("sale_items")
@@ -872,6 +878,7 @@ model SaleItemAddon {
   addon      ProductAddon? @relation(fields: [addonId], references: [id], onDelete: SetNull)
   saleItem   SaleItem      @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
 
+  @@index([saleItemId])
   @@map("sale_item_addons")
 }
 
@@ -1063,7 +1070,10 @@ model InventoryStock {
 
 model InventoryAlertLog {
   id              String                  @id @default(cuid())
+  businessId      String                  @map("business_id")
   inventoryItemId String                  @map("inventory_item_id")
+  deviceId        String?                 @map("device_id")
+  dedupeKey       String?                 @unique @map("dedupe_key")
   alertType       InventoryStockAlertType @map("alert_type")
   currentStock    Decimal                 @map("current_stock") @db.Decimal(14, 3)
   threshold       Decimal?                @db.Decimal(14, 3)
@@ -1073,7 +1083,9 @@ model InventoryAlertLog {
   sentAt          DateTime                @default(now()) @map("sent_at")
   errorMessage    String?                 @map("error_message")
   item            InventoryItem           @relation(fields: [inventoryItemId], references: [id])
+  business        Business                @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
+  @@index([businessId, sentAt])
   @@index([inventoryItemId, sentAt])
   @@index([status, sentAt])
   @@map("inventory_alert_logs")
@@ -1149,6 +1161,7 @@ model StockTransferItem {
   transfer        StockTransfer @relation(fields: [stockTransferId], references: [id], onDelete: Cascade)
   item            InventoryItem @relation(fields: [inventoryItemId], references: [id])
 
+  @@index([stockTransferId])
   @@map("stock_transfer_items")
 }
 
@@ -1373,6 +1386,7 @@ enum InventoryStockAlertState {
 }
 
 enum InventoryAlertLogStatus {
+  PENDING
   SENT
   FAILED
 }

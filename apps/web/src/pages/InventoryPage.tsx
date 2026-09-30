@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { AlertTriangle, Bell, Boxes, Camera, History, PackagePlus, PackageX, Pencil, Plus, Search, SlidersHorizontal, Trash2, Warehouse } from 'lucide-react';
-import { api, dt, rupiah, type User } from '../api';
+import { API, api, dt, handleUnauthorizedSession, rupiah, type User } from '../api';
 import { checkInventoryStockAlerts, requestInventoryNotificationPermission } from '../inventoryAlerts';
 import { scanInventoryBarcode } from '../barcodeScanner';
 import { toast } from '../toast';
@@ -203,10 +203,22 @@ export default function InventoryPage({ user }: { user: User }) {
   }
   async function photo(file?: File) {
     if (!file || !edit) return;
-    if (!['image/jpeg', 'image/png'].includes(file.type)) return appAlert('Foto harus JPG atau PNG.', { title: 'Format foto tidak valid', tone: 'warning' });
-    if (file.size > 2 * 1024 * 1024) return appAlert('Maksimal ukuran foto 2MB.', { title: 'Ukuran foto terlalu besar', tone: 'warning' });
-    const data = await new Promise<string>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = reject; r.readAsDataURL(file); });
-    setEdit({ ...edit, photoUrl: data });
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return appAlert('Foto harus JPG, PNG, atau WEBP.', { title: 'Format foto tidak valid', tone: 'warning' });
+    if (file.size > 12 * 1024 * 1024) return appAlert('Maksimal ukuran foto 12MB.', { title: 'Ukuran foto terlalu besar', tone: 'warning' });
+    const body = new FormData();
+    body.append('image', file);
+    try {
+      const response = await fetch(`${API}/inventory/images`, { method: 'POST', headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` }, body });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 401) handleUnauthorizedSession(result.message);
+        throw new Error(result.message || 'Upload foto gagal.');
+      }
+      setEdit({ ...edit, photoUrl: result.imageUrl });
+      toast.success('Foto berhasil diupload dan dikompresi ke WEBP.');
+    } catch (e) {
+      toast.error((e as Error).message || 'Upload foto gagal.');
+    }
   }
   async function movement(endpoint: string, payload: any, form?: HTMLFormElement, successMessage = 'Data berhasil disimpan.') {
     try { await api(endpoint, { method: 'POST', body: JSON.stringify(payload) }); form?.reset(); reload(); checkInventoryStockAlerts().catch(() => {}); toast.success(successMessage); }

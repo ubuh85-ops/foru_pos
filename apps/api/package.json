@@ -15,7 +15,8 @@
     "recipe:template": "tsx prisma/create-product-recipe-template.ts",
     "recipe:import": "tsx prisma/import-product-recipes.ts",
     "recipe:category-template": "tsx prisma/create-product-recipe-category-template.ts",
-    "recipe:category-import": "tsx prisma/import-product-recipes-by-category.ts"
+    "recipe:category-import": "tsx prisma/import-product-recipes-by-category.ts",
+    "inventory:photos:migrate": "tsx prisma/migrate-inventory-photos-to-storage.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.10.1",

@@ -3,6 +3,7 @@ import { api } from './api';
 import { appAlert } from './components/ui/AppDialog';
 
 type InventoryAlertCandidate = {
+  alertLogId?: string;
   inventoryItemId: string;
   itemName: string;
   unit?: string;
@@ -13,11 +14,29 @@ type InventoryAlertCandidate = {
   message: string;
 };
 
-async function logAlert(alert: InventoryAlertCandidate, status: 'SENT' | 'FAILED', errorMessage?: string) {
+const inventoryAlertDeviceKey = 'foru:inventory_alert_device_id';
+
+function inventoryAlertDeviceId() {
+  const existing = localStorage.getItem(inventoryAlertDeviceKey);
+  if (existing) return existing;
+  const generated = globalThis.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  localStorage.setItem(inventoryAlertDeviceKey, generated);
+  return generated;
+}
+
+async function logAlert(alert: InventoryAlertCandidate, deviceId: string, status: 'SENT' | 'FAILED', errorMessage?: string) {
+  if (alert.alertLogId) {
+    await api(`/inventory/alert-logs/${alert.alertLogId}/result`, {
+      method: 'PATCH',
+      body: JSON.stringify({ deviceId, status, errorMessage: errorMessage || null })
+    });
+    return;
+  }
   await api('/inventory/alert-logs', {
     method: 'POST',
     body: JSON.stringify({
       inventoryItemId: alert.inventoryItemId,
+      deviceId,
       alertType: alert.alertType,
       currentStock: alert.currentStock,
       threshold: alert.threshold ?? null,
@@ -49,16 +68,19 @@ export async function requestInventoryNotificationPermission() {
 }
 
 export async function checkInventoryStockAlerts(showPermissionWarning = false) {
+  if (!Capacitor.isNativePlatform()) return { checked: true, sent: 0, failed: 0, skipped: 0 };
   const outletId = localStorage.getItem('outletId') || '';
-  const qs = outletId ? `?outletId=${encodeURIComponent(outletId)}` : '';
+  const deviceId = inventoryAlertDeviceId();
+  const params = new URLSearchParams({ deviceId });
+  if (outletId) params.set('outletId', outletId);
+  const qs = `?${params.toString()}`;
   const alerts = await api<InventoryAlertCandidate[]>(`/inventory/alerts/check${qs}`);
   if (!alerts.length) return { checked: true, sent: 0, failed: 0 };
-  if (!Capacitor.isNativePlatform()) return { checked: true, sent: 0, failed: 0, skipped: alerts.length };
 
   const { LocalNotifications } = await import('@capacitor/local-notifications');
   const permission = await requestInventoryNotificationPermission();
   if (!permission.granted) {
-    for (const alert of alerts) await logAlert(alert, 'FAILED', permission.reason);
+    for (const alert of alerts) await logAlert(alert, deviceId, 'FAILED', permission.reason);
     if (showPermissionWarning) await appAlert(permission.reason || 'Izin notifikasi belum aktif.', { title: 'Izin Notifikasi', tone: 'warning' });
     return { checked: true, sent: 0, failed: alerts.length };
   }
@@ -76,10 +98,10 @@ export async function checkInventoryStockAlerts(showPermissionWarning = false) {
           schedule: { at: new Date(Date.now() + 250) }
         }]
       });
-      await logAlert(stockAlert, 'SENT');
+      await logAlert(stockAlert, deviceId, 'SENT');
       sent += 1;
     } catch (e) {
-      await logAlert(stockAlert, 'FAILED', (e as Error).message);
+      await logAlert(stockAlert, deviceId, 'FAILED', (e as Error).message);
       failed += 1;
     }
   }
