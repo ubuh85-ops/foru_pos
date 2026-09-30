@@ -43,7 +43,7 @@ export default function ReportsPage() {
   const [error, setError] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const filteredProducts = useMemo(() => categoryId ? products.filter(p => p.categoryId === categoryId || (p.categoryAssignments || []).some((row: any) => row.categoryId === categoryId)) : products, [products, categoryId]);
+  const filteredProducts = useMemo(() => categoryId ? products.filter(p => p.categoryId === categoryId) : products, [products, categoryId]);
 
   useEffect(() => {
     api<any[]>('/categories').then(rows => setCategories(rows.filter(x => x.status !== 'INACTIVE'))).catch(() => {});

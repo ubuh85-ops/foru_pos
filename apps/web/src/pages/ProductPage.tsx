@@ -242,6 +242,9 @@ export default function ProductPage() {
   const [availability, setAvailability] = useState(
     urlParams.get("availability") || ""
   );
+  const [productionPartnerId, setProductionPartnerId] = useState(
+    urlParams.get("productionPartnerId") || ""
+  );
   const [refreshKey, setRefreshKey] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -261,6 +264,7 @@ export default function ProductPage() {
     if (categoryId) params.set("categoryId", categoryId);
     if (productStatus) params.set("status", productStatus);
     if (availability && outletId) params.set("availability", availability);
+    if (productionPartnerId && outletId) params.set("productionPartnerId", productionPartnerId);
     if (search.trim()) params.set("search", search.trim());
     return api<any[]>(`/products${params.size ? `?${params}` : ""}`).then(
       setData
@@ -289,6 +293,7 @@ export default function ProductPage() {
     if (categoryId) params.categoryId = categoryId;
     if (productStatus) params.status = productStatus;
     if (availability && outletId) params.availability = availability;
+    if (productionPartnerId && outletId) params.productionPartnerId = productionPartnerId;
     if (search.trim()) params.search = search.trim();
     setUrlParams(params, { replace: true });
     const timer = window.setTimeout(
@@ -296,7 +301,7 @@ export default function ProductPage() {
       200
     );
     return () => window.clearTimeout(timer);
-  }, [outletId, categoryId, productStatus, availability, search, refreshKey]);
+  }, [outletId, categoryId, productStatus, availability, productionPartnerId, search, refreshKey]);
 
   const filtered = data;
   const activeOutlets = useMemo(
@@ -536,7 +541,6 @@ export default function ProductPage() {
             name: f.get("name"),
             sku: f.get("sku"),
             categoryId: f.get("categoryId"),
-            categoryIds: Array.from(new Set([String(f.get("categoryId") || ""), ...f.getAll("categoryIds").map(String)])).filter(Boolean),
             description: f.get("description"),
             imageUrl: f.get("imageUrl"),
             basePrice: Number(f.get("basePrice") || 0),
@@ -681,7 +685,7 @@ export default function ProductPage() {
         </div>
       </div>
       <Err v={error} />
-      <div className="mb-4 grid gap-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5 md:grid-cols-2 xl:grid-cols-5">
+      <div className="mb-4 grid gap-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5 md:grid-cols-2 xl:grid-cols-6">
         <div className="relative">
           <Search
             className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
@@ -699,6 +703,7 @@ export default function ProductPage() {
           value={outletId}
           onChange={(e) => {
             setOutletId(e.target.value);
+            setProductionPartnerId("");
             if (!e.target.value) setAvailability("");
           }}
         >
@@ -706,6 +711,20 @@ export default function ProductPage() {
           {activeOutlets.map((outlet) => (
             <option key={outlet.id} value={outlet.id}>
               {outlet.name}
+            </option>
+          ))}
+        </select>
+        <select
+          className="input"
+          disabled={!outletId}
+          value={productionPartnerId}
+          onChange={(e) => setProductionPartnerId(e.target.value)}
+        >
+          <option value="">Semua mitra produksi</option>
+          <option value="UNASSIGNED">Belum ditentukan</option>
+          {(productionPartners[outletId] || []).map((partner) => (
+            <option value={partner.id} key={partner.id}>
+              {partner.name}{partner.status === "INACTIVE" ? " (Inactive)" : ""}
             </option>
           ))}
         </select>
@@ -846,7 +865,7 @@ export default function ProductPage() {
                       </p>
                     </td>
                     <td>{p.sku || "-"}</td>
-                    <td>{(p.categoryAssignments || []).map((row: any) => row.category?.name).filter(Boolean).join(", ") || p.categoryRef?.name || p.category}</td>
+                    <td>{p.categoryRef?.name || p.category}</td>
                     <td>
                       {selectedOutlet ? (
                         <div>
@@ -959,13 +978,7 @@ export default function ProductPage() {
                 </option>
               ))}
             </select>
-            <p className="-mt-1 mb-3 text-xs text-slate-400">Kategori utama dipakai untuk laporan penjualan agar nilai tidak dihitung ganda.</p>
-            <CheckList
-              title="Kategori tampilan (bisa pilih lebih dari satu)"
-              name="categoryIds"
-              rows={categories.filter((c) => c.status !== "INACTIVE").map((c) => [c.id, c.name])}
-              checked={(edit.categoryAssignments || []).map((row: any) => row.categoryId).concat(edit.categoryId ? [edit.categoryId] : [])}
-            />
+            <p className="-mt-1 mb-3 text-xs text-slate-400">Kategori ini digunakan untuk tampilan menu dan laporan penjualan.</p>
             <label className="label">Status produk master</label>
             <select
               className="input mb-3"
@@ -1413,7 +1426,7 @@ function ProductCard({
               </span>
             )}
             <p className="text-sm text-slate-400">
-              {p.sku || "Tanpa SKU"} · {(p.categoryAssignments || []).map((row: any) => row.category?.name).filter(Boolean).join(", ") || p.categoryRef?.name || p.category}
+              {p.sku || "Tanpa SKU"} · {p.categoryRef?.name || p.category}
             </p>
           </div>
         </div>

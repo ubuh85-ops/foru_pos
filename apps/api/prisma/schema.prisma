@@ -223,35 +223,34 @@ model PushDevice {
 }
 
 model Product {
-  dailyMenuSchedules  DailyMenuSchedule[]
-  webAnalyticsEvents  WebAnalyticsEvent[]
-  id                  String                @id @default(cuid())
-  businessId          String                @map("business_id")
-  sku                 String?
-  name                String
-  category            String
-  categoryId          String?               @map("category_id")
-  basePrice           Decimal               @default(0) @map("base_price") @db.Decimal(14, 2)
-  baseHpp             Decimal               @default(0) @map("base_hpp") @db.Decimal(14, 2)
-  description         String?
-  imageUrl            String?               @map("image_url")
-  status              Status                @default(ACTIVE)
-  createdAt           DateTime              @default(now()) @map("created_at")
-  updatedAt           DateTime              @updatedAt @map("updated_at")
-  categoryRef         Category?             @relation("PrimaryProductCategory", fields: [categoryId], references: [id])
-  categoryAssignments ProductCategory[]
-  couponProducts      CouponProduct[]
-  addons              ProductAddon[]
-  outlets             ProductOutlet[]
-  channelPrices       ProductChannelPrice[]
-  variantGroups       ProductVariantGroup[]
-  variants            ProductVariant[]
-  saleItems           SaleItem[]
-  recipes             ProductRecipe[]       @relation("ProductRecipeOwner")
-  recipeUsages        ProductRecipe[]       @relation("ProductRecipeComponent")
-  inventoryMovements  InventoryMovement[]
-  business            Business              @relation(fields: [businessId], references: [id])
-  sop                 ProductSop?
+  dailyMenuSchedules DailyMenuSchedule[]
+  webAnalyticsEvents WebAnalyticsEvent[]
+  id                 String                @id @default(cuid())
+  businessId         String                @map("business_id")
+  sku                String?
+  name               String
+  category           String
+  categoryId         String?               @map("category_id")
+  basePrice          Decimal               @default(0) @map("base_price") @db.Decimal(14, 2)
+  baseHpp            Decimal               @default(0) @map("base_hpp") @db.Decimal(14, 2)
+  description        String?
+  imageUrl           String?               @map("image_url")
+  status             Status                @default(ACTIVE)
+  createdAt          DateTime              @default(now()) @map("created_at")
+  updatedAt          DateTime              @updatedAt @map("updated_at")
+  categoryRef        Category?             @relation("PrimaryProductCategory", fields: [categoryId], references: [id])
+  couponProducts     CouponProduct[]
+  addons             ProductAddon[]
+  outlets            ProductOutlet[]
+  channelPrices      ProductChannelPrice[]
+  variantGroups      ProductVariantGroup[]
+  variants           ProductVariant[]
+  saleItems          SaleItem[]
+  recipes            ProductRecipe[]       @relation("ProductRecipeOwner")
+  recipeUsages       ProductRecipe[]       @relation("ProductRecipeComponent")
+  inventoryMovements InventoryMovement[]
+  business           Business              @relation(fields: [businessId], references: [id])
+  sop                ProductSop?
 
   @@unique([businessId, sku])
   @@index([businessId])
@@ -259,37 +258,22 @@ model Product {
 }
 
 model Category {
-  id                 String            @id @default(cuid())
-  businessId         String            @map("business_id")
-  name               String
-  description        String?
-  sortOrder          Int               @default(0) @map("sort_order")
-  status             Status            @default(ACTIVE)
-  createdAt          DateTime          @default(now()) @map("created_at")
-  updatedAt          DateTime          @updatedAt @map("updated_at")
-  primaryProducts    Product[]         @relation("PrimaryProductCategory")
-  productAssignments ProductCategory[]
-  outletOrders       OutletCategory[]
-  business           Business          @relation(fields: [businessId], references: [id])
+  id              String           @id @default(cuid())
+  businessId      String           @map("business_id")
+  name            String
+  description     String?
+  sortOrder       Int              @default(0) @map("sort_order")
+  status          Status           @default(ACTIVE)
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  primaryProducts Product[]        @relation("PrimaryProductCategory")
+  outletOrders    OutletCategory[]
+  business        Business         @relation(fields: [businessId], references: [id])
 
   @@unique([businessId, name])
   @@index([businessId])
   @@index([businessId, sortOrder])
   @@map("categories")
-}
-
-model ProductCategory {
-  productId  String   @map("product_id")
-  categoryId String   @map("category_id")
-  sortOrder  Int      @default(0) @map("sort_order")
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-
-  @@id([productId, categoryId])
-  @@index([categoryId, sortOrder])
-  @@map("product_categories")
 }
 
 model OutletCategory {

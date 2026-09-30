@@ -140,6 +140,7 @@ const knownRoutes = new Set([
   '/products',
   '/product-sops',
   '/outlets',
+  '/production-partners',
   '/reports',
   '/inventory',
   '/inventory/warehouses',

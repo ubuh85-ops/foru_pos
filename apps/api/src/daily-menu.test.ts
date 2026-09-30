@@ -56,7 +56,7 @@ describe('daily menu rules',()=>{
 
 function fixture(){
   const po={isActive:true,isAvailable:false,status:'ACTIVE',stockMode:'MANUAL',stockQty:0,outletPrice:7000,outletHpp:2000};
-  const product={id:'tea',name:'Tea',status:'ACTIVE',basePrice:8000,baseHpp:3000,category:'Drink',categoryId:null,categoryRef:null,categoryAssignments:[],outlets:[po],channelPrices:[],variants:[{id:'large',variantName:'Large',sellingPrice:9000,status:'ACTIVE'}],variantGroups:[],addons:[{id:'addon',addonName:'Extra',price:2000,hpp:300,status:'ACTIVE'}]};
+  const product={id:'tea',name:'Tea',status:'ACTIVE',basePrice:8000,baseHpp:3000,category:'Drink',categoryId:null,categoryRef:null,outlets:[po],channelPrices:[],variants:[{id:'large',variantName:'Large',sellingPrice:9000,status:'ACTIVE'}],variantGroups:[],addons:[{id:'addon',addonName:'Extra',price:2000,hpp:300,status:'ACTIVE'}]};
   const tx={product:{findMany:vi.fn().mockResolvedValue([product]),findFirst:vi.fn().mockResolvedValue(product)},dailyMenuSchedule:{findMany:vi.fn().mockResolvedValue([{...row,priceOverride:5000,soldQty:0,product:{name:'Tea'}},{...row,id:'b',scheduleDate:new Date('2026-10-07'),soldQty:0,product:{name:'Tea'}}])},$queryRaw:vi.fn().mockResolvedValue([]),$executeRaw:vi.fn().mockResolvedValue(1)};
   return {tx,db:tx as unknown as Prisma.TransactionClient,product};
 }
