@@ -1864,7 +1864,7 @@ async function deductManualProductStock(tx:any,sale:any,userId:string,stockRows:
   }
 }
 async function deductInventoryForPaidSale(tx:any,sale:any,userId:string){
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`sale-stock:${sale.outletId}`}))`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`sale-stock:${sale.outletId}`}))`;
   await assertBundleComponentsForPayment(tx,sale.businessId,sale.outletId,sale.items||[]);
   sale={...sale,items:stockItemsFromSnapshots(sale.items||[])};
   const outlet=await tx.outlet.findUnique({where:{id:sale.outletId},include:{defaultInventoryWarehouse:true}});
@@ -1910,7 +1910,7 @@ async function deductInventoryForPaidSale(tx:any,sale:any,userId:string){
   }
 }
 async function returnInventoryForVoidedSale(tx:any,sale:any,userId:string){
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`sale-stock:${sale.outletId}`}))`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`sale-stock:${sale.outletId}`}))`;
   const productMovements=await tx.productStockMovement.findMany({where:{saleId:sale.id,movementType:'SALE_DEDUCTION'}});
   for(const movement of productMovements){
     const qty=Math.abs(Number(movement.qty));
@@ -1935,7 +1935,7 @@ async function createOrder(req:any,d:z.infer<typeof saleInput>,paid:boolean){
   const transactionNumber=paid?await nextNumber('FORU',d.outletId,'transactionNumber'):null;
   return prisma.$transaction(async tx=>{
     if(d.idempotencyKey){
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`order-key:${d.idempotencyKey}`}))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order-key:${d.idempotencyKey}`}))`;
       const key=await tx.idempotencyKey.findUnique({where:{key:d.idempotencyKey}});
       if(key){const existing=await tx.sale.findFirst({where:{id:key.entityId,businessId:req.user!.businessId,outletId:d.outletId},include:{items:{include:{addons:true}},outlet:true,cashier:{select:{name:true}}}});if(!existing)throw new ApiError(409,'Idempotency key tidak diizinkan');return existing;}
     }
