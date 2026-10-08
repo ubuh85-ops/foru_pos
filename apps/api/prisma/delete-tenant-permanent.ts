@@ -223,6 +223,8 @@ async function main() {
           ]
         }
       });
+      // Delete combo configurations before their referenced product/category masters.
+      await tx.productBundle.deleteMany({ where: { businessId: business.id } });
       await tx.productAddon.deleteMany({ where: { product: { businessId: business.id } } });
       await tx.productVariant.deleteMany({ where: { product: { businessId: business.id } } });
       await tx.product.deleteMany({ where: { businessId: business.id } });

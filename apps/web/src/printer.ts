@@ -128,7 +128,12 @@ function buildItemLine(item: any, width: number, showAmount: boolean) {
   } else {
     lines.push(title);
   }
-  if (item.variantName || item.variant) lines.push(`  ${item.variantName || item.variant}`);
+  if(item.itemType==='BUNDLE'&&Array.isArray(item.bundleSelectionsJson)){
+    for(const component of item.bundleSelectionsJson){
+      const units=value(component.qty)*(showAmount?1:qty);
+      wrap(`  ${units}x ${component.productName} (${component.variantName||'Base'})`,width).forEach(line=>lines.push(line));
+    }
+  }else if (item.variantName || item.variant) lines.push(`  ${item.variantName || item.variant}`);
   if (Array.isArray(item.addons)) item.addons.forEach((a: any) => lines.push(`  Addon ${a.addonName || a.name}`));
   const selected = item.selectedVariantsJson;
   if (Array.isArray(selected)) selected.forEach((v: any) => v?.optionName && lines.push(`  Varian ${v.optionName}`));
@@ -251,7 +256,7 @@ function shiftCloseReportText(doc: any, width: number) {
   return `${lines.filter(Boolean).join('\n')}\n\n\n`;
 }
 
-function buildPrintText(doc: any, type: PrintDocType, paperSize = 'MM58') {
+export function buildPrintText(doc: any, type: PrintDocType, paperSize = 'MM58') {
   const width = paperSize === 'MM80' ? 48 : 32;
   const text =
     type === 'shift-close-report' ? shiftCloseReportText(doc, width) :

@@ -24,8 +24,8 @@ export function legacyVariantPrice(masterBasePrice:number,effectiveBasePrice:num
   return money(Math.max(0,effectiveBasePrice+(masterVariantPrice-masterBasePrice)));
 }
 
-export async function priceCart(items:CartLine[],outletId:string,channel?:string|null,businessId?:string,context?:{db:Prisma.TransactionClient; dailyPrices:(number|null)[]}):Promise<PricedLine[]>{
-  const db=context?.db??prisma;
+export async function priceCart(items:CartLine[],outletId:string,channel?:string|null,businessId?:string,context?:{db:Prisma.TransactionClient; dailyPrices:(number|null)[]},database:Prisma.TransactionClient=prisma):Promise<PricedLine[]>{
+  const db=context?.db??database;
   if(!items.length) throw new ApiError(400,'Cart masih kosong');
   const productIds=[...new Set(items.map(item=>item.productId))];
   const availability=await db.product.findMany({where:{AND:[businessId?{businessId}:{},{id:{in:productIds}}]},select:{id:true,name:true,status:true,outlets:{where:{outletId},select:{isAvailable:true,isActive:true,status:true,stockMode:true,stockQty:true}}}});

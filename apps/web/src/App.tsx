@@ -37,6 +37,8 @@ import MenuAvailabilityPage from './pages/MenuAvailabilityPage';
 import CategoriesPage from './pages/CategoriesPage';
 import CustomersPage, { CustomerDetailPage } from './pages/CustomersPage';
 import ProductionPartnersPage from './pages/ProductionPartnersPage';
+import BundlesPage from './pages/BundlesPage';
+import BundleKitchenPrintPage from './pages/BundleKitchenPrintPage';
 import ProductSopPage from './pages/ProductSopPage';
 import { initSyncService, recordLocalAudit } from './sync';
 import { checkInventoryStockAlerts } from './inventoryAlerts';
@@ -54,6 +56,7 @@ const navGroups: NavGroup[] = [
     label: 'MASTER DATA',
     items: [
       ['/products', 'Produk', Package],
+      ['/bundles', 'Bundle / Combo', Layers],
       ['/product-sops', 'SOP Produk', BookOpen],
       ['/categories', 'Kategori', Tags],
       ['/coupons', 'Kupon & Promo', Tags],
@@ -117,6 +120,7 @@ function businessIdOf(user: Partial<User> | null | undefined) {
 }
 
 const knownRoutes = new Set([
+  '/bundles',
   '/checklists',
   '/settings/checklist',
   '/pos',
@@ -180,6 +184,7 @@ function canSeeInventoryPath(user: User, path: string) {
 }
 
 function canSeePath(user: User, path: string) {
+  if (path === '/bundles') return user.role === 'OWNER' || user.role === 'SUPERVISOR';
   if (path === '/settings/checklist') return user.role === 'OWNER';
   if (path === '/customers') return user.role === 'OWNER' || user.role === 'SUPERVISOR';
   if (path === '/reports/daily') return user.role === 'OWNER';
@@ -229,6 +234,7 @@ function clearActiveSearch() {
 }
 
 const rootPages = new Set([
+  '/bundles',
   '/pos',
   '/orders',
   '/shift',
@@ -504,6 +510,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/users" element={user.role === 'OWNER' ? <UserManagementPage /> : <Navigate to="/pos" />} />
         <Route path="/products" element={<ProductPage />} />
+        <Route path="/bundles" element={user.role === 'OWNER' || user.role === 'SUPERVISOR' ? <BundlesPage /> : <Navigate to="/pos" />} />
         <Route path="/product-sops" element={<ProductSopPage user={user} />} />
         <Route path="/outlets" element={user.role === 'OWNER' ? <OutletPage /> : <Navigate to="/pos" />} />
         <Route path="/production-partners" element={user.role === 'OWNER' || user.role === 'SUPERVISOR' ? <ProductionPartnersPage /> : <Navigate to="/pos" />} />
@@ -512,7 +519,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
         <Route path="/reports/daily" element={user.role === 'OWNER' ? <DailyReportPage /> : <Navigate to="/pos" />} />
         <Route path="/inventory/*" element={hasInventoryPermission(user, 'inventory.view') ? <InventoryPage user={user} /> : <Navigate to="/pos" />} />
         <Route path="/receipt/:saleId" element={<ReceiptPrint />} />
-        <Route path="/kitchen-ticket/:saleId" element={<KitchenTicketPrint />} />
+        <Route path="/kitchen-ticket/:saleId" element={<BundleKitchenPrintPage />} />
         <Route path="/customer-item-list/:saleId" element={<CustomerItemListPrint />} />
         <Route path="*" element={<Navigate to="/select-outlet" replace />} />
       </Routes>

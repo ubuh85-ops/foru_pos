@@ -9,12 +9,14 @@ import foruLogo from '/images/foru.png';
 import { useOutlet } from '../OutletContext';
 import { ConfirmDialog, DiscountDialog, TextInputDialog, type DiscountKind, type ForuDialogTone } from '../components/ForuDialog';
 import { isValidWhatsAppNumber, openWhatsAppInvoice } from '../whatsappInvoice';
+import PosBundleSelector from '../components/PosBundleSelector';
+import { bundleSelectionsKey, bundleSelectionSurcharge, selectionsFromSnapshot, type PosBundleCatalog, type PosBundleSelection } from '../posBundle';
 
 type Option = { id: string; name: string; additionalPrice: number; hpp: number };
 type Group = { id: string; name: string; minSelect: number; maxSelect: number; required: boolean; options: Option[] };
 type Variant = { id: string; variantName: string; sellingPrice: number };
-type Product = { id: string; name: string; category: string; categoryRef?: { name: string }; categories?: { id: string; name: string; sortOrder?: number }[]; basePrice: number; masterBasePrice?: number; baseHpp: number; imageUrl?: string; isAvailable?: boolean; stockMode?: 'UNLIMITED'|'MANUAL'|'RECIPE'; stockQty?: number|null; lowStockThreshold?: number; stockStatus?: string; variants: Variant[]; variantGroups: { group: Group }[] };
-type Line = { key: string; productId: string; variantId?: string; selectedVariantOptionIds?: string[]; name: string; variant: string; price: number; qty: number; stockMode?: 'UNLIMITED'|'MANUAL'|'RECIPE'; stockQty?: number|null; itemNote?: string; discount?: { type: 'NOMINAL' | 'PERCENTAGE'; value: number } };
+type Product = { id: string; bundle?: PosBundleCatalog; name: string; category: string; categoryRef?: { name: string }; categories?: { id: string; name: string; sortOrder?: number }[]; basePrice: number; masterBasePrice?: number; baseHpp: number; imageUrl?: string; isAvailable?: boolean; stockMode?: 'UNLIMITED'|'MANUAL'|'RECIPE'; stockQty?: number|null; lowStockThreshold?: number; stockStatus?: string; variants: Variant[]; variantGroups: { group: Group }[] };
+type Line = { key: string; bundleId?: string; bundleSelections?: PosBundleSelection[]; productId: string; variantId?: string; selectedVariantOptionIds?: string[]; name: string; variant: string; price: number; qty: number; stockMode?: 'UNLIMITED'|'MANUAL'|'RECIPE'; stockQty?: number|null; itemNote?: string; discount?: { type: 'NOMINAL' | 'PERCENTAGE'; value: number } };
 type CartQtySnapshot = Record<string, number>;
 type PosDialog =
   | { kind: 'confirm'; tone?: ForuDialogTone; title: string; description?: string; detail?: string; cancelText?: string; confirmText?: string; resolve: (value: boolean) => void }
@@ -29,7 +31,7 @@ const API_ORIGIN = API.replace(/\/api\/?$/, '');
 const productImageSrc = (url?: string | null) => !url ? foruLogo : url.startsWith('/storage/') ? `${API_ORIGIN}${url}` : url;
 const orderChannels = ['DINE_IN', 'TAKE_AWAY', 'GOFOOD', 'GRABFOOD', 'SHOPEEFOOD'];
 const normalizeOrderType = (value: string | null | undefined) => orderChannels.includes(String(value || '').toUpperCase()) ? String(value).toUpperCase() : 'DINE_IN';
-const normalizedLineKey = (x: Pick<Line, 'productId' | 'variantId' | 'selectedVariantOptionIds'>) => `${x.productId}:${x.variantId || 'base'}:${[...(x.selectedVariantOptionIds || [])].sort().join('|')}`;
+const normalizedLineKey = (x: Pick<Line, 'productId' | 'variantId' | 'selectedVariantOptionIds' | 'bundleId' | 'bundleSelections'>) => x.bundleId ? bundleSelectionsKey(x.bundleId,x.bundleSelections) : `${x.productId}:${x.variantId || 'base'}:${[...(x.selectedVariantOptionIds || [])].sort().join('|')}`;
 const cartQtySnapshot = (lines: Line[]) => lines.reduce<CartQtySnapshot>((acc, line) => {
   const key = normalizedLineKey(line);
   acc[key] = (acc[key] || 0) + line.qty;
@@ -37,6 +39,7 @@ const cartQtySnapshot = (lines: Line[]) => lines.reduce<CartQtySnapshot>((acc, l
 }, {});
 
 function effectiveLinePrice(line: Line, product: Product) {
+  if(line.bundleId&&product.bundle)return Number(product.basePrice)+bundleSelectionSurcharge(product.bundle,line.bundleSelections||[]);
   const effectiveBasePrice = Number(product.basePrice || 0);
   if (product.variantGroups?.length) {
     const selectedIds = new Set(line.selectedVariantOptionIds || []);
@@ -111,7 +114,9 @@ export default function POS() {
   async function loadProductsForOutlet(outletId = outlet) {
     if (!outletId) return;
     try {
-      const next = await api<Product[]>(`/pos/products?outlet_id=${outletId}&channel=${encodeURIComponent(orderType)}&_=${Date.now()}`);
+      const query=`outlet_id=${encodeURIComponent(outletId)}&channel=${encodeURIComponent(orderType)}&_=${Date.now()}`;
+      const [normal,bundles] = await Promise.all([api<Product[]>(`/pos/products?${query}`),api<Product[]>(`/pos/bundles?${query}`)]);
+      const next=[...normal,...bundles];
       setProducts(next);
       const productsById = new Map(next.map(product => [product.id, product]));
       setCart(current => current.map(line => {
@@ -217,6 +222,7 @@ export default function POS() {
         return {
           key: `${i.productId}:${i.productVariantId || selectedVariants.map((x: any) => x.optionId).join('|')}:${i.id}`,
           productId: i.productId,
+          ...(i.itemType==='BUNDLE'?{productId:i.bundleId,bundleId:i.bundleId,bundleSelections:selectionsFromSnapshot(i.bundleSelectionsJson||[])}:{}),
           variantId: i.productVariantId || undefined,
           selectedVariantOptionIds: selectedVariants.map((x: any) => x.optionId),
           name: i.productName,
@@ -273,7 +279,7 @@ export default function POS() {
     const grand = Math.max(0, afterProduct - transactionDiscount - couponDiscount);
     return { subtotal, productDiscount, transactionDiscount, grand };
   }, [cart, trxDisc, couponDiscount]);
-  const itemPayload = (x: Line) => ({ productId: x.productId, variantId: x.variantId, selectedVariantOptionIds: x.selectedVariantOptionIds, qty: x.qty, itemNote: x.itemNote, discount: x.discount });
+  const itemPayload = (x: Line) => x.bundleId ? ({productId:x.bundleId,bundleId:x.bundleId,bundleSelections:x.bundleSelections||[],qty:x.qty,itemNote:x.itemNote,discount:x.discount}) : ({ productId: x.productId, variantId: x.variantId, selectedVariantOptionIds: x.selectedVariantOptionIds, qty: x.qty, itemNote: x.itemNote, discount: x.discount });
 
   async function printOrderDoc(doc: any, type: 'customer-receipt' | 'kitchen-ticket' | 'customer-item-list') {
     if (!doc?.id) return;
@@ -306,7 +312,9 @@ export default function POS() {
     const items = cart.flatMap(line => {
       const addedQty = line.qty - (editingOrderSnapshot[normalizedLineKey(line)] || 0);
       if (addedQty <= 0) return [];
+      const savedBundle=line.bundleId?(order.items||[]).find((item:any)=>item.bundleId===line.bundleId&&bundleSelectionsKey(item.bundleId,selectionsFromSnapshot(item.bundleSelectionsJson||[]))===normalizedLineKey(line)):null;
       return [{
+        ...(savedBundle?{itemType:'BUNDLE',bundleId:savedBundle.bundleId,bundleSelectionsJson:savedBundle.bundleSelectionsJson}:{}),
         productId: line.productId,
         productName: line.name,
         variantName: line.variant,
@@ -323,8 +331,8 @@ export default function POS() {
 
   function changeMenuView(view: 'grid' | 'list') { setMenuView(view); localStorage.setItem('foru:pos_menu_view', view); }
   function changePageSize(size: number) { setPageSize(size); setPage(1); localStorage.setItem('foru:pos_page_size', String(size)); }
-  function addLine(line: Line) { if (!shiftOpen) { toast.error('Shift belum dibuka. Silakan buka kasir terlebih dahulu.'); return; } setCart(c => { const currentQty=c.filter(x=>x.productId===line.productId).reduce((sum,x)=>sum+x.qty,0);if(line.stockMode==='MANUAL'&&currentQty>=Number(line.stockQty||0)){toast.error(`Stok ${line.name} tidak mencukupi.`);return c;}const i = c.findIndex(x => x.key === line.key && !x.discount && !x.itemNote); return i < 0 ? [...c, line] : c.map((x, j) => j === i ? { ...x, qty: x.qty + 1 } : x); }); setCouponDiscount(0); }
-  function quickAdd(p: Product) { if (!shiftOpen) return; if (p.isAvailable===false){toast.error(`${p.name} sedang habis.`);return;} if (p.variantGroups?.length) return setConfig(p); const v = p.variants[0]; const price = v && v.variantName !== 'Base' ? Number(v.sellingPrice) : Number(p.basePrice || v?.sellingPrice || 0); addLine({ key: v ? `${p.id}:${v.id}` : `${p.id}:base`, productId: p.id, variantId: v?.id, name: p.name, variant: v?.variantName || 'Base', price, qty: 1,stockMode:p.stockMode,stockQty:p.stockQty }); }
+  function addLine(line: Line) { if (!shiftOpen) { toast.error('Shift belum dibuka. Silakan buka kasir terlebih dahulu.'); return; } setCart(c => { const currentQty=c.filter(x=>x.productId===line.productId).reduce((sum,x)=>sum+x.qty,0);if(line.stockMode==='MANUAL'&&currentQty>=Number(line.stockQty||0)){toast.error(`Stok ${line.name} tidak mencukupi.`);return c;}if(line.bundleId&&currentQty>=50){toast.error('Maksimal 50 paket.');return c;}const i = c.findIndex(x => x.key === line.key && !line.itemNote && !line.discount && !x.discount && !x.itemNote); return i < 0 ? [...c, line.itemNote?{...line,key:`${line.key}:note:${crypto.randomUUID()}`}:line] : c.map((x, j) => j === i ? { ...x, qty: x.qty + 1 } : x); }); setCouponDiscount(0); }
+  function quickAdd(p: Product) { if (!shiftOpen) return; if (p.isAvailable===false){toast.error(`${p.name} sedang habis.`);return;} if (p.bundle || p.variantGroups?.length) return setConfig(p); const v = p.variants[0]; const price = v && v.variantName !== 'Base' ? Number(v.sellingPrice) : Number(p.basePrice || v?.sellingPrice || 0); addLine({ key: v ? `${p.id}:${v.id}` : `${p.id}:base`, productId: p.id, variantId: v?.id, name: p.name, variant: v?.variantName || 'Base', price, qty: 1,stockMode:p.stockMode,stockQty:p.stockQty }); }
   async function qty(i: number, n: number) {
     if (n < 1) {
       const item = cart[i];
@@ -341,6 +349,7 @@ export default function POS() {
       return;
     }
     const item=cart[i];
+    if(item.bundleId&&n>50){toast.error('Maksimal 50 paket per baris.');return;}
     const otherQty=cart.reduce((sum,line,index)=>sum+(index!==i&&line.productId===item.productId?line.qty:0),0);
     if(item.stockMode==='MANUAL'&&otherQty+n>Number(item.stockQty||0)){toast.error(`Stok ${item.name} tidak mencukupi.`);return;}
     setCart(c => c.map((x, j) => j === i ? { ...x, qty: n } : x));
@@ -613,7 +622,7 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
                     <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-brand-600 text-[11px] font-black text-white">{i + 1}</span>
                     <h3 className="min-w-0 text-sm font-semibold leading-tight text-ink break-words">{x.name}</h3>
                   </div>
-                  <p className="mt-1 truncate text-xs font-semibold text-slate-500">{x.variant || 'Base'}</p>
+                  <p className={`mt-1 text-xs font-semibold text-slate-500 ${x.bundleId?'break-words':'truncate'}`}>{x.variant || 'Base'}</p>
                   {x.itemNote && <button onClick={() => editItemNote(i, x.itemNote || '')} className="mt-2 max-w-full truncate rounded-lg bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800">{x.itemNote}</button>}
                 </div>
                 <b className="money shrink-1 text-right text-sm font-black text-ink">{rupiah(total)}</b>
@@ -740,7 +749,7 @@ ${cartCollapsed ? 'md:grid-cols-[minmax(0,1fr)_76px]' : 'md:grid-cols-[minmax(0,
       onReject={rejectOpenOrder}
       accepting={acceptingOrderId === reviewOpenOrder.id}
     />}
-    {config && <ConfigProduct product={config} close={() => setConfig(null)} add={addLine} />}
+    {config && (config.bundle ? <PosBundleSelector key={`${config.id}:${outlet}:${orderType}`} product={{...config,bundle:config.bundle}} outletId={outlet} channel={orderType} close={()=>setConfig(null)} add={(quote,selections,note)=>addLine({key:bundleSelectionsKey(config.id,selections),productId:config.id,bundleId:config.id,bundleSelections:selections,name:config.name,variant:quote.selections.map(item=>`${item.qty}x ${item.productName} (${item.variantName})`).join(', '),price:quote.unitPrice,qty:1,itemNote:note})}/> : <ConfigProduct product={config} close={() => setConfig(null)} add={addLine} />)}
     {payOpen && <Payment total={summary.grand} initialCustomerName={customerName} initialCustomerPhone={customerPhone} onClose={() => setPayOpen(false)} onPay={async (method, cash, paidCustomerName, paidCustomerPhone) => { try { const active = await refreshActiveShift(); setCustomerName(paidCustomerName); setCustomerPhone(paidCustomerPhone); const payload = { ...orderPayload(active), customerName: paidCustomerName, customerPhone: paidCustomerPhone.trim() || undefined }; const wasEditing = !!editingOrder; const result = editingOrder ? await api(`/orders/${editingOrder.id}/pay`, { method: 'POST', body: JSON.stringify({ paymentMethod: method, cashReceived: cash, cashSessionId: active?.id, order: payload }) }) : await api('/sales', { method: 'POST', body: JSON.stringify({ ...payload, paymentMethod: method, cashReceived: cash }) }); setReceipt(result); resetCart(); setPayOpen(false); await loadProductsForOutlet(); if (wasEditing) { setEditingOrder(null); setEditingOrderSnapshot({}); navigate('/pos', { replace: true }); } toast.success('Data berhasil disimpan.'); await runAutoPrint(result, 'paid-sale'); } catch (e) { const msg = (e as Error).message; toast.error(msg); throw e; } }} />}
     {receipt && <Receipt sale={receipt} close={() => setReceipt(null)} />}
   </div>;
